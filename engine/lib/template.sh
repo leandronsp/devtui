@@ -1,12 +1,15 @@
 #!/bin/bash
 # Template resolution and variable substitution
 
-# Resolve a file: blog override > engine default
-# Usage: resolve_file "article.html" "/path/to/blog/templates" "/path/to/engine/templates"
+# Resolve a file with fallback chain:
+#   blog override > theme > engine default
+# Usage: resolve_file "style.css" "/blog/dir" "/engine/themes/newspaper" "/engine"
 resolve_file() {
-  local file="$1" blog_dir="$2" engine_dir="$3"
+  local file="$1" blog_dir="$2" theme_dir="$3" engine_dir="$4"
   if [ -f "$blog_dir/$file" ]; then
     echo "$blog_dir/$file"
+  elif [ -n "$theme_dir" ] && [ -f "$theme_dir/$file" ]; then
+    echo "$theme_dir/$file"
   else
     echo "$engine_dir/$file"
   fi

@@ -17,6 +17,14 @@ AUTHOR="$(cfg author "$CONFIG")"
 DATE_FIELD="$(cfg date_field "$CONFIG")"
 LANG="$(cfg lang "$CONFIG")"
 ARTICLES_PATH="$(cfg articles_path "$CONFIG")"
+THEME="$(cfg theme "$CONFIG")"
+
+# Theme directory (empty if no theme set)
+if [ -n "$THEME" ]; then
+  THEME_DIR="$ENGINE_DIR/themes/$THEME"
+else
+  THEME_DIR=""
+fi
 
 mkdir -p "$DIST_DIR"
 
@@ -31,7 +39,7 @@ fi
 mkdir -p "$ARTICLES_DIR"
 
 # Build articles
-ARTICLE_TPL="$(resolve_file article.html "$BLOG_DIR/templates" "$ENGINE_DIR/templates")"
+ARTICLE_TPL="$(resolve_file article.html "$BLOG_DIR/templates" "$THEME_DIR/templates" "$ENGINE_DIR/templates")"
 SITEMAP_ENTRIES=""
 
 for md in "$POSTS_DIR"/*.md; do
@@ -61,7 +69,7 @@ for md in "$POSTS_DIR"/*.md; do
 done
 
 # Copy style
-cp "$(resolve_file style.css "$BLOG_DIR" "$ENGINE_DIR")" "$DIST_DIR/style.css"
+cp "$(resolve_file style.css "$BLOG_DIR" "$THEME_DIR" "$ENGINE_DIR")" "$DIST_DIR/style.css"
 
 # Copy static assets (uploads, images, etc.)
 for dir in uploads images assets; do
@@ -73,7 +81,7 @@ done
 
 # Build index
 # Build index from template with variable substitution
-INDEX_TPL="$(resolve_file index_header.html "$BLOG_DIR/templates" "$ENGINE_DIR/templates")"
+INDEX_TPL="$(resolve_file index_header.html "$BLOG_DIR/templates" "$THEME_DIR/templates" "$ENGINE_DIR/templates")"
 template_sub "$INDEX_TPL" \
   title "$TITLE" \
   subtitle "$SUBTITLE" \

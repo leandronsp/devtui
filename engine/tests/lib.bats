@@ -97,16 +97,23 @@ teardown() {
 # --- resolve_file ---
 
 @test "resolve_file: uses blog override when it exists" {
-  mkdir -p "$FIXTURES/blog-templates"
+  mkdir -p "$FIXTURES/blog-templates" "$FIXTURES/theme-templates" "$FIXTURES/engine-templates"
   touch "$FIXTURES/blog-templates/article.html"
-  result="$(resolve_file article.html "$FIXTURES/blog-templates" "$FIXTURES/engine-templates")"
+  result="$(resolve_file article.html "$FIXTURES/blog-templates" "$FIXTURES/theme-templates" "$FIXTURES/engine-templates")"
   [[ "$result" == "$FIXTURES/blog-templates/article.html" ]]
 }
 
-@test "resolve_file: falls back to engine default" {
+@test "resolve_file: falls back to theme when no blog override" {
+  mkdir -p "$FIXTURES/theme-templates" "$FIXTURES/engine-templates"
+  touch "$FIXTURES/theme-templates/style.css"
+  result="$(resolve_file style.css "$FIXTURES/nonexistent" "$FIXTURES/theme-templates" "$FIXTURES/engine-templates")"
+  [[ "$result" == "$FIXTURES/theme-templates/style.css" ]]
+}
+
+@test "resolve_file: falls back to engine when no blog or theme" {
   mkdir -p "$FIXTURES/engine-templates"
   touch "$FIXTURES/engine-templates/article.html"
-  result="$(resolve_file article.html "$FIXTURES/nonexistent" "$FIXTURES/engine-templates")"
+  result="$(resolve_file article.html "$FIXTURES/nonexistent" "" "$FIXTURES/engine-templates")"
   [[ "$result" == "$FIXTURES/engine-templates/article.html" ]]
 }
 
