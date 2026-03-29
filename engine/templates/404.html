@@ -1,0 +1,24 @@
+<!DOCTYPE html>
+<html lang="$lang$">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>404 - $title$</title>
+<link rel="icon" type="image/svg+xml" href="images/favicon.svg">
+<link rel="stylesheet" href="style.css">
+</head>
+<body>
+<script>document.documentElement.dataset.theme=localStorage.getItem('theme')||'dark'</script>
+<header>
+<nav><a href="index.html">$title$</a></nav>
+<button class="theme-toggle" onclick="let t=document.documentElement.dataset.theme==='dark'?'light':'dark';document.documentElement.dataset.theme=t;localStorage.setItem('theme',t);this.textContent=t==='dark'?'light':'dark'">
+<script>document.write((localStorage.getItem('theme')||'dark')==='dark'?'light':'dark')</script>
+</button>
+</header>
+<main>
+<h1 class="site-title">404</h1>
+<p class="site-subtitle">page not found</p>
+<p><a href="index.html">&larr; back to home</a></p>
+</main>
+</body>
+</html>

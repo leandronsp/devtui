@@ -58,7 +58,7 @@ for md in "$POSTS_DIR"/*.md; do
     SKIPPED=$((SKIPPED + 1))
   else
     # Pipe body only (skip frontmatter) to avoid pandoc parsing --- as YAML
-    post_body "$md" | pandoc --from markdown-yaml_metadata_block-tex_math_dollars-simple_tables-multiline_tables+autolink_bare_uris -o "$html_out" \
+    post_body "$md" | pandoc --from markdown-yaml_metadata_block-tex_math_dollars-simple_tables-multiline_tables+autolink_bare_uris+emoji -o "$html_out" \
       --template="$ARTICLE_TPL" \
       --highlight-style=breezedark \
       --metadata "title=$post_title" \
@@ -181,12 +181,14 @@ while IFS=$'\t' read -r post_date md; do
   echo "<li data-lang=\"$post_lang\" data-tags=\"$post_tags\"><time datetime=\"$post_date\">$post_date</time><a href=\"${ARTICLES_PREFIX}$slug.html\">$post_title</a><p class=\"post-desc\">$snippet</p></li>"
 done <<< "$(echo "$SORTED_POSTS" | sort -r)" >> "$DIST_DIR/index.html"
 
-FOOTER_HTML=""
+FOOTER_PARTS=""
 if [ -n "$LICENSE" ] && [ -n "$LICENSE_URL" ];then
-  FOOTER_HTML="<a href=\"$LICENSE_URL\" target=\"_blank\" rel=\"noopener\">$LICENSE</a>"
+  FOOTER_PARTS="<a href=\"$LICENSE_URL\" target=\"_blank\" rel=\"noopener\">$LICENSE</a>"
 elif [ -n "$LICENSE" ]; then
-  FOOTER_HTML="$LICENSE"
+  FOOTER_PARTS="$LICENSE"
 fi
+FOOTER_PARTS="$FOOTER_PARTS · <a href=\"feed.xml\">rss</a>"
+FOOTER_HTML="$FOOTER_PARTS"
 
 GA_SCRIPT=""
 if [ -n "$ANALYTICS_ID" ]; then
@@ -247,7 +249,7 @@ done
 echo "$RSS_ITEMS" | sort -rn | head -20 | while IFS='	' read -r post_date md; do
   [ -z "$md" ] && continue
   post_title="$(frontmatter title "$md")"
-  post_desc="$(post_body "$md" | pandoc --from markdown-yaml_metadata_block-tex_math_dollars-simple_tables-multiline_tables+autolink_bare_uris --highlight-style=breezedark 2>/dev/null)"
+  post_desc="$(post_body "$md" | pandoc --from markdown-yaml_metadata_block-tex_math_dollars-simple_tables-multiline_tables+autolink_bare_uris+emoji --highlight-style=breezedark 2>/dev/null)"
   slug="$(basename "$md" .md)"
   rss_item "$post_title" "$SITE_URL/${ARTICLES_PREFIX}$slug.html" "$post_desc" "$post_date"
 done >> "$DIST_DIR/feed.xml"
@@ -276,6 +278,15 @@ with open(sys.argv[1], 'w') as f: f.write(html)
 " "$html" "$GA_SCRIPT"
   done
 fi
+
+# Build 404 page
+ERROR_TPL="$(resolve_file 404.html "$BLOG_DIR/templates" "$THEME_DIR/templates" "$ENGINE_DIR/templates")"
+template_sub "$ERROR_TPL" \
+  title "$TITLE" \
+  lang "$LANG" \
+  > "$DIST_DIR/404.html"
+PROCESS_FILES="$PROCESS_FILES $DIST_DIR/404.html"
+echo "  built 404.html"
 
 # Minify: inline CSS + compress HTML (only rebuilt files)
 MINIFIED_CSS="$DIST_DIR/.min.css"

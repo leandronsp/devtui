@@ -1,0 +1,128 @@
+/* Terminal theme: dark CRT monitor aesthetic */
+:root {
+  --bg: #0a0e14;
+  --bg-surface: #0f1419;
+  --text: #b3b1ad;
+  --text-bright: #e6e1cf;
+  --text-dim: #5c6773;
+  --accent: #39bae6;
+  --accent-hover: #59c2ff;
+  --border: #1e242c;
+  --green: #7fd962;
+  --prompt: #7fd962;
+  --mono: 'SF Mono', 'Monaco', 'Menlo', 'Ubuntu Mono', 'Courier New', monospace;
+}
+
+[data-theme="light"] {
+  --bg: #f0f0f0;
+  --bg-surface: #e0e0e0;
+  --text: #333;
+  --text-bright: #111;
+  --text-dim: #777;
+  --accent: #0070c0;
+  --accent-hover: #005a9e;
+  --border: #ccc;
+  --green: #2a7e19;
+  --prompt: #2a7e19;
+}
+
+* { margin: 0; padding: 0; box-sizing: border-box; }
+html { scroll-behavior: smooth; overflow-x: hidden; }
+
+body {
+  font-family: var(--mono);
+  background: var(--bg);
+  color: var(--text);
+  line-height: 1.7;
+  font-size: 14px;
+  -webkit-font-smoothing: antialiased;
+}
+
+/* Subtle scanline overlay */
+body::after {
+  content: "";
+  position: fixed;
+  top: 0; left: 0;
+  width: 100%; height: 100%;
+  background: repeating-linear-gradient(
+    0deg,
+    transparent,
+    transparent 2px,
+    rgba(0,0,0,0.03) 2px,
+    rgba(0,0,0,0.03) 4px
+  );
+  pointer-events: none;
+  z-index: 9999;
+}
+
+::selection {
+  background: rgba(57, 186, 230, 0.25);
+  color: inherit;
+}
+
+header {
+  display: flex;
+  justify-content: space-between;
+  align-items: center;
+  padding: 1rem 1.25rem 0;
+  max-width: 860px;
+  margin: 0 auto;
+}
+
+header nav {
+  display: flex;
+  align-items: center;
+  gap: 0.5rem;
+  flex-wrap: wrap;
+}
+
+header nav a {
+  font-size: 0.85rem;
+  color: var(--text-dim);
+  text-decoration: none;
+}
+
+header nav a:hover { color: var(--green); }
+
+main {
+  max-width: 860px;
+  margin: 0 auto;
+  padding: 1rem 1.25rem;
+  overflow-wrap: break-word;
+  word-break: break-word;
+}
+
+footer {
+  max-width: 860px;
+  margin: 0 auto;
+  padding: 2rem 1.25rem 4rem;
+  text-align: center;
+}
+
+footer a {
+  font-size: 0.8rem;
+  color: var(--text-dim);
+  text-decoration: none;
+}
+
+footer a:hover { color: var(--green); }
+
+/* Theme toggle styled as command */
+.theme-toggle {
+  background: none;
+  border: 1px solid var(--border);
+  color: var(--text-dim);
+  font-family: var(--mono);
+  font-size: 0.75rem;
+  padding: 0.2em 0.5em;
+  border-radius: 2px;
+  cursor: pointer;
+}
+
+.theme-toggle:hover { color: var(--green); border-color: var(--green); }
+
+/* Blinking cursor */
+@keyframes cursor-blink {
+  0%, 49% { opacity: 1; }
+  50%, 100% { opacity: 0; }
+}

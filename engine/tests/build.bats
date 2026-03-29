@@ -305,3 +305,50 @@ teardown() {
   [ "$status" -eq 0 ]
   [[ "$output" == *"built index.html"* ]]
 }
+
+# --- 404 page ---
+
+@test "build: generates 404.html" {
+  [ -f "$DIST/404.html" ]
+}
+
+@test "build: 404 has site title" {
+  grep -q 'Test Blog' "$DIST/404.html"
+}
+
+@test "build: 404 has back to home link" {
+  grep -q 'index.html' "$DIST/404.html"
+}
+
+@test "build: 404 has inlined CSS" {
+  grep -q '<style>' "$DIST/404.html"
+}
+
+# --- footer RSS link ---
+
+@test "build: index footer has rss link" {
+  grep -q 'feed.xml.*rss' "$DIST/index.html"
+}
+
+@test "build: article footer has rss link" {
+  grep -q 'feed.xml' "$DIST/2026-01-01-hello.html"
+}
+
+# --- emoji shortcodes ---
+
+@test "build: converts emoji shortcodes to unicode" {
+  cat > "$BLOG/posts/2026-01-06-emoji.md" << 'EOF'
+---
+title: Emoji Test
+date: 2026-01-06
+description: Testing emojis
+---
+
+Hello :wave: world :bulb:
+EOF
+
+  run "$ENGINE/build.sh" "$BLOG" "$DIST"
+  [ "$status" -eq 0 ]
+  grep -q 'data-emoji="wave"' "$DIST/2026-01-06-emoji.html"
+  grep -q 'data-emoji="bulb"' "$DIST/2026-01-06-emoji.html"
+}

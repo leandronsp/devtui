@@ -1,0 +1,139 @@
+/* Terminal article page */
+
+.article-header {
+  margin-bottom: 2rem;
+}
+
+.article-header h1 {
+  font-size: 1.15rem;
+  color: var(--text-bright);
+  font-weight: 600;
+  line-height: 1.4;
+  margin-bottom: 0.4rem;
+}
+
+.article-header time {
+  font-size: 0.8rem;
+  color: var(--text-dim);
+}
+
+.article-header time::before { content: "["; }
+.article-header time::after { content: "]"; }
+
+article { font-size: 0.9rem; }
+article p { margin-bottom: 1rem; }
+
+article h2 {
+  font-size: 1rem;
+  color: var(--green);
+  margin: 2rem 0 0.75rem;
+  font-weight: 600;
+}
+
+/* Prefix h2 with ## like markdown */
+article h2::before {
+  content: "## ";
+  color: var(--text-dim);
+}
+
+article h3 {
+  font-size: 0.95rem;
+  color: var(--text-bright);
+  margin: 1.5rem 0 0.5rem;
+  font-weight: 600;
+}
+
+article h3::before {
+  content: "### ";
+  color: var(--text-dim);
+}
+
+article a {
+  color: var(--accent);
+  text-decoration: none;
+  overflow-wrap: break-word;
+  word-break: break-word;
+}
+
+article .uri {
+  display: block;
+  font-size: 0.8rem;
+  line-height: 1.8;
+}
+
+article a:hover { text-decoration: underline; }
+
+article img {
+  max-width: 100%;
+  height: auto;
+  margin: 0.75rem 0;
+  border: 1px solid var(--border);
+}
+
+article strong { color: var(--text-bright); }
+article em { font-style: italic; }
+article del { color: var(--text-dim); }
+
+article ul, article ol { margin: 0 0 1rem 1.5rem; }
+article li { margin-bottom: 0.25rem; }
+article li p { margin-bottom: 0.25rem; }
+article li p:last-child { margin-bottom: 0; }
+article li ul, article li ol { margin: 0.25rem 0 0 1.5rem; }
+
+article blockquote {
+  border-left: 2px solid var(--green);
+  padding: 0.4rem 0.75rem;
+  margin: 0.75rem 0;
+  color: var(--text-dim);
+  background: var(--bg-surface);
+}
+
+article blockquote p { margin-bottom: 0.4rem; }
+article blockquote p:last-child { margin-bottom: 0; }
+
+/* ASCII-style horizontal rule */
+article hr {
+  border: none;
+  color: var(--border);
+  text-align: center;
+  margin: 1.5rem 0;
+}
+
+article hr::before {
+  content: "────────────────────────────────────────";
+  color: var(--border);
+  letter-spacing: -1px;
+}
+
+/* Inline code */
+article code {
+  font-family: var(--mono);
+  font-size: 0.88em;
+  background: var(--bg-surface);
+  padding: 0.1em 0.35em;
+  border-radius: 2px;
+  color: var(--accent);
+}
+
+/* Code blocks with terminal look */
+article pre {
+  background: var(--bg-surface);
+  border: 1px solid var(--border);
+  border-radius: 2px;
+  padding: 1rem;
+  margin: 0.75rem 0;
+  overflow-x: auto;
+  line-height: 1.5;
+}
+
+article pre code {
+  background: none;
+  padding: 0;
+  border-radius: 0;
+  color: var(--text);
+  font-size: 0.85rem;
+}
+
+pre > code.sourceCode { white-space: pre; position: relative; }
+div.sourceCode { overflow-x: auto; max-width: 100%; }
+a.sourceLine { display: inline-block; }
