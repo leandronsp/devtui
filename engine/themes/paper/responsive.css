@@ -1,4 +1,4 @@
-/* Mobile overrides (must be last) */
+/* Mobile overrides */
 @media (max-width: 600px) {
   header .guides { display: none; }
   .tag-filter { display: none; }
@@ -6,9 +6,9 @@
   .mobile-menu.open { display: block; }
   .filter-bar { justify-content: flex-end; }
   .lang-filter { display: none; }
-  .post-list a { font-size: 0.95rem; }
-  .post-list .post-desc { -webkit-line-clamp: 3; }
-  body { font-size: 15px; }
-  .article-header h1 { font-size: 1.05rem; }
-  article h2 { font-size: 1rem; }
+  .post-list a { font-size: 1rem; }
+  .post-list .post-desc { -webkit-line-clamp: 2; }
+  body { font-size: 16px; }
+  .article-header h1 { font-size: 1.3rem; }
+  article h2 { font-size: 1.15rem; }
 }

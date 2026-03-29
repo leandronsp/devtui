@@ -63,9 +63,16 @@ h1.site-title::after {
 }
 
 /* Search as shell prompt */
+.search-bar {
+  display: flex;
+  gap: 0.4rem;
+  align-items: center;
+  margin-bottom: 0.4rem;
+}
+
 .search-wrap {
   position: relative;
-  margin-bottom: 0.4rem;
+  flex: 1;
 }
 
 .search-wrap::before {
@@ -175,14 +182,14 @@ h1.site-title::after {
 /* Hamburger toggle (mobile only) */
 .menu-toggle {
   display: none;
-  background: none;
+  background: var(--bg-surface);
   border: 1px solid var(--border);
   color: var(--text-dim);
   font-size: 1rem;
-  padding: 0.2em 0.4em;
+  padding: 0 0.6em;
   border-radius: 2px;
   cursor: pointer;
-  line-height: 1;
+  align-self: stretch;
 }
 
 .menu-toggle:hover { color: var(--green); border-color: var(--green); }
