@@ -2,8 +2,7 @@
 
 setup() {
   source "$BATS_TEST_DIRNAME/../lib.sh"
-  FIXTURES="$BATS_TEST_DIRNAME/fixtures"
-  mkdir -p "$FIXTURES"
+  FIXTURES="$(mktemp -d)"
 
   # Create a test blog.toml
   cat > "$FIXTURES/blog.toml" << 'EOF'
@@ -385,38 +384,53 @@ EOF
 
 # --- render_links ---
 
-@test "render_links: generates nav with links" {
-  printf 'github|https://github.com/test\nlinkedin|https://linkedin.com/in/test\n' > "$FIXTURES/links.txt"
-  result="$(render_links "$FIXTURES/links.txt")"
+@test "render_links: generates nav with links from toml" {
+  cat > "$FIXTURES/blog-links.toml" << 'EOF'
+title = "Test"
+[[links]]
+label = "github"
+url = "https://github.com/test"
+[[links]]
+label = "linkedin"
+url = "https://linkedin.com/in/test"
+EOF
+  result="$(render_links "$FIXTURES/blog-links.toml")"
   [[ "$result" == *'<nav class="social-links">'* ]]
   [[ "$result" == *'github'* ]]
   [[ "$result" == *'linkedin'* ]]
   [[ "$result" == *' · '* ]]
 }
 
-@test "render_links: returns nothing for missing file" {
-  result="$(render_links "$FIXTURES/nonexistent.txt")"
+@test "render_links: returns nothing when no links in toml" {
+  cat > "$FIXTURES/blog-nolinks.toml" << 'EOF'
+title = "Test"
+EOF
+  result="$(render_links "$FIXTURES/blog-nolinks.toml")"
   [[ -z "$result" ]]
-}
-
-@test "render_links: skips comments and blank lines" {
-  printf '# comment\n\ngithub|https://github.com\n' > "$FIXTURES/links.txt"
-  result="$(render_links "$FIXTURES/links.txt")"
-  [[ "$result" != *"comment"* ]]
-  [[ "$result" == *"github"* ]]
 }
 
 # --- render_guides ---
 
-@test "render_guides: generates badge list" {
-  printf 'Web 101|https://web101.example.com/\nAWS 101|https://aws101.example.com/\n' > "$FIXTURES/guides.txt"
-  result="$(render_guides "$FIXTURES/guides.txt")"
+@test "render_guides: generates badge list from toml" {
+  cat > "$FIXTURES/blog-guides.toml" << 'EOF'
+title = "Test"
+[[guides]]
+title = "Web 101"
+url = "https://web101.example.com/"
+[[guides]]
+title = "AWS 101"
+url = "https://aws101.example.com/"
+EOF
+  result="$(render_guides "$FIXTURES/blog-guides.toml")"
   [[ "$result" == *'class="guide-badge"'* ]]
   [[ "$result" == *'Web 101'* ]]
   [[ "$result" == *'AWS 101'* ]]
 }
 
-@test "render_guides: returns nothing for missing file" {
-  result="$(render_guides "$FIXTURES/nonexistent.txt")"
+@test "render_guides: returns nothing when no guides in toml" {
+  cat > "$FIXTURES/blog-noguides.toml" << 'EOF'
+title = "Test"
+EOF
+  result="$(render_guides "$FIXTURES/blog-noguides.toml")"
   [[ -z "$result" ]]
 }

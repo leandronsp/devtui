@@ -1,8 +1,8 @@
 #!/usr/bin/env bats
 
 setup() {
-  FIXTURES="$BATS_TEST_DIRNAME/fixtures"
-  DIST="$BATS_TEST_DIRNAME/fixtures/dist"
+  FIXTURES="$(mktemp -d)"
+  DIST="$FIXTURES/dist"
   ENGINE="$BATS_TEST_DIRNAME/.."
   BLOG="$FIXTURES/test-blog"
 

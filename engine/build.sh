@@ -91,8 +91,8 @@ template_sub "$INDEX_TPL" \
   > "$DIST_DIR/index.html"
 
 # Inject social links into header nav, guides before post list
-if [ -f "$BLOG_DIR/links.txt" ]; then
-  LINKS_HTML="$(render_links "$BLOG_DIR/links.txt")"
+LINKS_HTML="$(render_links "$CONFIG")"
+if [ -n "$LINKS_HTML" ]; then
   python3 -c "
 import sys
 html = open(sys.argv[1]).read()
@@ -101,8 +101,8 @@ with open(sys.argv[1], 'w') as f: f.write(html)
 " "$DIST_DIR/index.html" "$LINKS_HTML"
 fi
 
-if [ -f "$BLOG_DIR/guides.txt" ]; then
-  GUIDES_HTML="$(render_guides "$BLOG_DIR/guides.txt")"
+GUIDES_HTML="$(render_guides "$CONFIG")"
+if [ -n "$GUIDES_HTML" ]; then
   python3 -c "
 import sys
 html = open(sys.argv[1]).read()

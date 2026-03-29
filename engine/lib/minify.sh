@@ -6,7 +6,7 @@
 minify_css() {
   python3 -c "
 import sys, re
-css = open(sys.argv[1]).read()
+css = open(sys.argv[1], encoding='utf-8', errors='replace').read()
 css = re.sub(r'/\*.*?\*/', '', css, flags=re.S)
 css = re.sub(r'\s+', ' ', css)
 css = re.sub(r'\s*([{}:;,>~+])\s*', r'\1', css)
@@ -20,10 +20,10 @@ print(css.strip())
 inline_css() {
   python3 -c "
 import re, sys
-html = open(sys.argv[1]).read()
-css = open(sys.argv[2]).read()
+html = open(sys.argv[1], encoding='utf-8', errors='replace').read()
+css = open(sys.argv[2], encoding='utf-8', errors='replace').read()
 html = re.sub(r'<link[^>]*stylesheet[^>]*/?\s*>', '<style>' + css + '</style>', html)
-with open(sys.argv[1], 'w') as f:
+with open(sys.argv[1], 'w', encoding='utf-8') as f:
     f.write(html)
 " "$1" "$2"
 }
@@ -34,7 +34,7 @@ minify_html() {
   python3 -c "
 import re, sys
 
-with open(sys.argv[1]) as f:
+with open(sys.argv[1], encoding='utf-8', errors='replace') as f:
     html = f.read()
 
 preserved = []
@@ -52,7 +52,7 @@ html = re.sub(r'\s+', ' ', html)
 for i, block in enumerate(preserved):
     html = html.replace(f'__PRESERVE_{i}__', block)
 
-with open(sys.argv[1], 'w') as f:
+with open(sys.argv[1], 'w', encoding='utf-8') as f:
     f.write(html)
 " "$1"
 }
