@@ -32,10 +32,10 @@ h1.site-title {
 }
 
 .guides::before {
-  content: "//";
+  content: "|";
   color: var(--text-dim);
   font-family: var(--mono);
-  font-size: 0.75rem;
+  font-size: 0.8rem;
   margin-right: 0.15rem;
 }
 
