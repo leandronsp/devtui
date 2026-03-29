@@ -198,8 +198,10 @@ article a {
   word-break: break-word;
 }
 
-article a:only-child {
-  font-size: 0.85rem;
+/* Bare URL links (autolinked references) */
+article .uri {
+  font-size: 0.8rem;
+  font-family: var(--mono);
 }
 
 article a:hover { text-decoration: underline; }
