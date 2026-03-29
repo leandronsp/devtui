@@ -8,6 +8,35 @@ DevTUI is three things:
 2. **Engine** — Multi-site static blog generator. Converts markdown to SEO-optimized HTML via pandoc. Shell-based, tested with bats.
 3. **CLI** — The glue. Makefile orchestrates builds across multiple blogs.
 
+## Dependencies
+
+### Editor
+
+- **Rust toolchain** (cargo, rustc)
+- **vim** — embedded via PTY as child process
+- Crates: ratatui, crossterm, pulldown-cmark, tui-term, vt100, portable-pty
+
+### Engine
+
+- **pandoc** — markdown to HTML conversion
+- **dasel** — TOML config parsing (blog.toml)
+- **jq** — JSON processing (links, tags, guides)
+- **python3** — HTML/CSS minification, UTF-8 truncation
+- **xmllint** — feed.xml validation during build
+- Standard Unix: sed, awk, grep, rsync, tr, cut, head
+
+### Testing
+
+- **bats** — bash test framework for engine tests
+- **cargo test** — Rust tests for editor/preview
+
+### Install (macOS)
+
+```bash
+brew install vim pandoc dasel jq bats-core
+# xmllint and python3 are pre-installed on macOS
+```
+
 ## Architecture
 
 ### Editor (src/)
@@ -25,15 +54,31 @@ Crates: portable-pty, vt100, tui-term, pulldown-cmark, ratatui, crossterm.
 - **`engine/lib/template.sh`** — `resolve_file()`, `template_sub()`. Template resolution with blog override > engine default fallback.
 - **`engine/lib/seo.sh`** — `sitemap_entry()`, `robots_txt()`, `rss_header()`, `rss_item()`. SEO artifact generation.
 - **`engine/templates/`** — Default HTML templates (pandoc format).
-- **`engine/style.css`** — Default CSS with dark/light themes.
-- **`engine/tests/`** — 50 bats tests (24 unit + 26 integration).
+- **`engine/themes/<name>/`** — Theme CSS, split into modular files.
+- **`engine/tests/`** — bats tests (unit + integration).
+
+### Themes (engine/themes/)
+
+Themes provide modular CSS split into files concatenated in order:
+
+```
+engine/themes/<name>/
+  base.css        # variables, reset, body defaults (line-height, font-size)
+  index.css       # index page styles
+  article.css     # article page styles
+  syntax.css      # code syntax highlighting
+  responsive.css  # mobile breakpoints
+```
+
+Blog selects theme via `theme = "paper"` in `blog.toml`. Default theme is `paper`. The build concatenates the CSS files, minifies, and inlines into each HTML.
+
+**To change CSS, edit the theme files under `engine/themes/<name>/`. There is no fallback CSS file.**
 
 ### Blog Content (blogs/, gitignored)
 
-- **`blogs/<name>/blog.toml`** — Site config (title, subtitle, url, author, date_field, lang).
+- **`blogs/<name>/blog.toml`** — Site config (title, subtitle, url, author, date_field, lang, theme).
 - **`blogs/<name>/posts/`** — Markdown posts with YAML frontmatter.
 - **`blogs/<name>/templates/`** — Optional template overrides.
-- **`blogs/<name>/style.css`** — Optional CSS override.
 
 Blogs can be local directories or symlinks to external repos.
 
@@ -58,6 +103,9 @@ make blog.build                # build all blogs
 make blog.build.<name>         # build one blog
 make blog.serve.<name>         # build and serve on localhost:8000
 make blog.clean                # remove dist/
+
+# Deploy
+make deploy.git.<name>         # build, copy to repo and commit
 ```
 
 ## How the Editor Works
@@ -108,6 +156,49 @@ Every page gets: `<title>`, `<meta description>`, `<link rel="canonical">`, Open
 ### Template Override
 
 `resolve_file()` checks `blogs/<name>/templates/` first, falls back to `engine/templates/`. Same for `style.css`. Blogs inherit defaults unless they explicitly override.
+
+### Blog-to-Repo Symlink Pattern
+
+External blogs use symlinks to connect devtui to their git repos. Example for `leandronsp.com`:
+
+```
+blogs/leandronsp.com/
+  blog.toml              # config (title, url, etc.)
+  posts -> ../../../leandronsp.com/articles   # symlink to repo
+  images -> ../../../leandronsp.com/images    # symlink to repo
+  uploads -> ../../../leandronsp.com/uploads  # symlink to repo
+```
+
+The symlinks mean the engine reads directly from the repo without copying source files into devtui.
+
+### Build and Deploy Flow
+
+`make deploy.git.<name>` builds and prepares a commit in the blog's repo. Push is manual.
+
+```
+repo/articles/*.md ─── symlink ──> engine reads markdown
+repo/images/*      ─── symlink ──> engine copies to dist (round-trip)
+repo/uploads/*     ─── symlink ──> engine copies to dist (round-trip)
+                                        │
+                                   dist/<name>/
+                                   ├── articles/*.html  (generated)
+                                   ├── index.html       (generated)
+                                   ├── feed.xml         (generated)
+                                   ├── sitemap.xml      (generated)
+                                   ├── robots.txt       (generated)
+                                   ├── images/*         (copied from repo)
+                                   └── uploads/*        (copied from repo)
+                                        │
+                               rsync ───┘
+                                        │
+                                   repo/ (committed)
+                                        │
+                                   git push (manual) -> auto-deploy
+```
+
+Static assets (images, uploads) do a round-trip: they live in the repo, get copied to dist via symlink during build, and get copied back to the repo during deploy. This is redundant but harmless. It ensures new assets added to `blogs/<name>/images/` also reach the repo.
+
+The repo path is resolved automatically by following the `posts` symlink (`REPO_DIR` in Makefile). The `rsync -a` uses trailing slashes on both source and destination to copy contents without creating nested directories.
 
 ## Key Gotchas
 

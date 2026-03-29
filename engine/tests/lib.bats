@@ -310,6 +310,72 @@ EOF
   [[ "$result" == *"<pubDate>2026-03-29</pubDate>"* ]]
 }
 
+@test "rss_item: escapes ampersand in title" {
+  result="$(rss_item "AI & Ruby" "https://test.com/post.html" "desc" "2026-03-29")"
+  [[ "$result" == *"<title>AI &amp; Ruby</title>"* ]]
+}
+
+@test "rss_item: escapes special chars in description" {
+  result="$(rss_item "Post" "https://test.com/post.html" "A <b>bold</b> & \"quoted\"" "2026-03-29")"
+  [[ "$result" == *"<description>A &lt;b&gt;bold&lt;/b&gt; &amp; &quot;quoted&quot;</description>"* ]]
+}
+
+# --- excerpt ---
+
+@test "post_snippet: custom limit truncates at given length" {
+  cat > "$FIXTURES/post-long.md" << 'EOF'
+---
+title: "Long Post"
+---
+
+This is a paragraph that goes on and on and on and on and on and on and on and on forever and ever and keeps going.
+EOF
+  result="$(post_snippet description "$FIXTURES/post-long.md" 50)"
+  [[ ${#result} -le 50 ]]
+}
+
+@test "post_snippet: preserves UTF-8 accented chars" {
+  cat > "$FIXTURES/post-utf8.md" << 'EOF'
+---
+title: "Test"
+---
+
+Sentado no sofá e assistindo Frozen, então bora lá!
+EOF
+  result="$(post_snippet description "$FIXTURES/post-utf8.md" 500)"
+  [[ "$result" == *"sofá"* ]]
+  [[ "$result" == *"então"* ]]
+  [[ "$result" == *"lá"* ]]
+}
+
+@test "post_snippet: does not break multi-byte chars at boundary" {
+  cat > "$FIXTURES/post-boundary.md" << 'EOF'
+---
+title: "Test"
+---
+
+Sentado no sofá e assistindo Frozen, tive a ideia de escrever sobre minha retrospectiva deste ano. Nunca fiz isso antes, então bora lá! E mais texto aqui para passar do limite de caracteres que definimos.
+EOF
+  result="$(post_snippet description "$FIXTURES/post-boundary.md" 160)"
+  echo "$result" | python3 -c "import sys; sys.stdin.buffer.read().decode('utf-8')"
+  [[ ${#result} -le 160 ]]
+}
+
+@test "post_snippet: xml_escape works with accented snippet" {
+  cat > "$FIXTURES/post-special.md" << 'EOF'
+---
+title: "Test"
+---
+
+Café & résumé are "common" words.
+EOF
+  result="$(post_snippet description "$FIXTURES/post-special.md" 500)"
+  escaped="$(xml_escape "$result")"
+  [[ "$escaped" == *"&amp;"* ]]
+  [[ "$escaped" == *"Café"* ]]
+  [[ "$escaped" == *"résumé"* ]]
+}
+
 # --- template_sub ---
 
 @test "template_sub: replaces single variable" {

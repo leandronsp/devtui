@@ -35,8 +35,8 @@ article h3 {
   font-weight: 600;
 }
 
-article { font-size: 0.95rem; }
-article p { margin-bottom: 1.25rem; }
+article { font-size: 0.95rem; line-height: 1.45; }
+article p { margin-bottom: 0.75rem; }
 
 article a {
   color: var(--accent);
@@ -58,7 +58,7 @@ article img {
   max-width: 100%;
   height: auto;
   border-radius: 6px;
-  margin: 1rem 0;
+  margin: 0.5rem 0;
   background: var(--bg-surface);
   padding: 0.5rem;
   border: 1px solid var(--border);
@@ -70,12 +70,14 @@ article del { color: var(--text-dim); }
 
 article ul, article ol { margin: 0 0 1.25rem 1.5rem; }
 article li { margin-bottom: 0.35rem; }
+article li p { margin-bottom: 0.25rem; }
+article li p:last-child { margin-bottom: 0; }
 article li ul, article li ol { margin: 0.35rem 0 0 1.5rem; }
 
 article blockquote {
   border-left: 3px solid var(--border);
   padding: 0.5rem 1rem;
-  margin: 1.25rem 0;
+  margin: 0.75rem 0;
   color: var(--text-dim);
   font-style: italic;
 }
@@ -105,7 +107,7 @@ article pre {
   border: 1px solid var(--border);
   border-radius: 6px;
   padding: 1.25rem;
-  margin: 1.25rem 0;
+  margin: 0.75rem 0;
   overflow-x: auto;
   line-height: 1.5;
 }

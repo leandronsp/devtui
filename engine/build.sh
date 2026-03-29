@@ -22,12 +22,9 @@ ANALYTICS_ID="$(cfg analytics_id "$CONFIG")"
 LICENSE="$(cfg license "$CONFIG")"
 LICENSE_URL="$(cfg license_url "$CONFIG")"
 
-# Theme directory (empty if no theme set)
-if [ -n "$THEME" ]; then
-  THEME_DIR="$ENGINE_DIR/themes/$THEME"
-else
-  THEME_DIR=""
-fi
+# Theme directory (defaults to paper)
+THEME="${THEME:-paper}"
+THEME_DIR="$ENGINE_DIR/themes/$THEME"
 
 mkdir -p "$DIST_DIR"
 
@@ -53,7 +50,7 @@ for md in "$POSTS_DIR"/*.md; do
   slug="$(basename "$md" .md)"
   post_title="$(frontmatter title "$md")"
   post_date="$(frontmatter_date "$DATE_FIELD" "$md")"
-  post_desc="$(frontmatter description "$md")"
+  post_desc="$(post_snippet description "$md" 160)"
 
   # Incremental: skip if html exists and is newer than both md and template
   html_out="$ARTICLES_DIR/$slug.html"
@@ -82,26 +79,21 @@ for md in "$POSTS_DIR"/*.md; do
 done
 [ "$SKIPPED" -gt 0 ] && echo "  skipped $SKIPPED unchanged articles"
 
-# Build style: concatenate modular CSS files or use single style.css
+# Build style: concatenate modular CSS from theme (blog override > theme)
 STYLE_DIR=""
-for dir in "$BLOG_DIR" "$THEME_DIR" "$ENGINE_DIR"; do
-  [ -n "$dir" ] && [ -f "$dir/base.css" ] && STYLE_DIR="$dir" && break
+for dir in "$BLOG_DIR" "$THEME_DIR"; do
+  [ -f "$dir/base.css" ] && STYLE_DIR="$dir" && break
 done
 
-if [ -n "$STYLE_DIR" ]; then
-  # Concatenate in order: base, index, article, syntax, responsive (last)
-  > "$DIST_DIR/style.css"
-  for part in base index article syntax responsive; do
-    [ -f "$STYLE_DIR/$part.css" ] && cat "$STYLE_DIR/$part.css" >> "$DIST_DIR/style.css"
-  done
-else
-  cp "$(resolve_file style.css "$BLOG_DIR" "$THEME_DIR" "$ENGINE_DIR")" "$DIST_DIR/style.css"
-fi
+> "$DIST_DIR/style.css"
+for part in base index article syntax responsive; do
+  [ -f "$STYLE_DIR/$part.css" ] && cat "$STYLE_DIR/$part.css" >> "$DIST_DIR/style.css"
+done
 
 # Copy static assets (uploads, images, etc.)
 for dir in uploads images assets; do
   if [ -d "$BLOG_DIR/$dir" ]; then
-    cp -r "$BLOG_DIR/$dir" "$DIST_DIR/$dir"
+    rsync -a "$BLOG_DIR/$dir/" "$DIST_DIR/$dir/"
     echo "  copied $dir/"
   fi
 done
@@ -243,16 +235,24 @@ $SITEMAP_ENTRIES</urlset>
 SITEMAP
 echo "  built sitemap.xml"
 
-# Generate feed.xml (RSS)
+# Generate feed.xml (RSS), sorted by date descending
 rss_header "$TITLE" "$SITE_URL" "$SUBTITLE" > "$DIST_DIR/feed.xml"
-for md in $(ls -r "$POSTS_DIR"/*.md 2>/dev/null); do
-  post_title="$(frontmatter title "$md")"
+RSS_ITEMS=""
+for md in "$POSTS_DIR"/*.md; do
+  [ -f "$md" ] || continue
   post_date="$(frontmatter_date "$DATE_FIELD" "$md")"
-  post_desc="$(frontmatter description "$md")"
-  slug="$(basename "$md" .md)"
-  rss_item "$post_title" "$SITE_URL/${ARTICLES_PREFIX}$slug.html" "$post_desc" "$post_date" >> "$DIST_DIR/feed.xml"
+  RSS_ITEMS="$RSS_ITEMS$post_date	$md
+"
 done
+echo "$RSS_ITEMS" | sort -rn | head -10 | while IFS='	' read -r post_date md; do
+  [ -z "$md" ] && continue
+  post_title="$(frontmatter title "$md")"
+  post_desc="$(post_body "$md" | pandoc --from markdown-yaml_metadata_block-tex_math_dollars-simple_tables-multiline_tables+autolink_bare_uris --highlight-style=breezedark 2>/dev/null)"
+  slug="$(basename "$md" .md)"
+  rss_item "$post_title" "$SITE_URL/${ARTICLES_PREFIX}$slug.html" "$post_desc" "$post_date"
+done >> "$DIST_DIR/feed.xml"
 echo '</channel></rss>' >> "$DIST_DIR/feed.xml"
+xmllint --noout "$DIST_DIR/feed.xml" 2>/dev/null || { echo "  ERROR: feed.xml is not valid XML"; exit 1; }
 echo "  built feed.xml"
 
 # Generate robots.txt

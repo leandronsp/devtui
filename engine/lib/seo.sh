@@ -1,6 +1,10 @@
 #!/bin/bash
 # SEO artifact generation: sitemap, robots, RSS
 
+xml_escape() {
+  echo "$1" | sed 's/&/\&amp;/g; s/</\&lt;/g; s/>/\&gt;/g; s/"/\&quot;/g'
+}
+
 # Generate a sitemap entry
 # Usage: sitemap_entry "https://example.com/post.html" "2026-03-29"
 sitemap_entry() {
@@ -33,13 +37,16 @@ RSS
 # Generate RSS item entry
 # Usage: rss_item "Post Title" "https://example.com/post.html" "Description" "2026-03-29"
 rss_item() {
-  local title="$1" link="$2" desc="$3" date="$4"
+  local title link date
+  title="$(xml_escape "$1")"
+  link="$2"
+  date="$4"
   cat << RSS
 <item>
 <title>$title</title>
 <link>$link</link>
 <guid>$link</guid>
-<description>$desc</description>
+<description><![CDATA[$3]]></description>
 <pubDate>$date</pubDate>
 </item>
 RSS

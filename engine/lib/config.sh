@@ -35,7 +35,7 @@ post_body() {
 # Extract a text snippet from the post body (first ~300 chars, no markdown)
 # Falls back to frontmatter description if available
 post_snippet() {
-  local desc_field="$1" file="$2"
+  local desc_field="$1" file="$2" limit="${3:-300}"
   local desc
   desc="$(frontmatter "$desc_field" "$file")"
   if [ -n "$desc" ]; then
@@ -48,5 +48,5 @@ post_snippet() {
     | sed 's/---*//g;s/~~//g;s/^#.*//g' \
     | tr '\n' ' ' \
     | sed 's/  */ /g;s/^ //' \
-    | LC_ALL=en_US.UTF-8 awk '{print substr($0, 1, 300)}'
+    | python3 -c "import sys; s=sys.stdin.read().strip(); l=$limit; print(s[:l].rsplit(' ',1)[0] if len(s)>l else s)"
 }
