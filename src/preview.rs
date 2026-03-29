@@ -6,7 +6,7 @@ use ratatui::{
 
 /// Returns (rendered_lines, source_to_rendered_offset).
 /// source_to_rendered_offset[i] = how many rendered lines exist before source line i.
-pub fn render_with_offsets(content: &str) -> (Vec<Line<'_>>, Vec<u16>) {
+pub fn render_with_offsets(content: &str) -> (Vec<Line<'static>>, Vec<u16>) {
     let source_line_count = content.lines().count().max(1);
     let mut source_to_rendered: Vec<u16> = vec![0; source_line_count + 1];
 
@@ -14,21 +14,23 @@ pub fn render_with_offsets(content: &str) -> (Vec<Line<'_>>, Vec<u16>) {
         Options::ENABLE_STRIKETHROUGH | Options::ENABLE_TABLES | Options::ENABLE_FOOTNOTES;
 
     let parser = Parser::new_ext(content, options).into_offset_iter();
-    let mut lines: Vec<Line> = Vec::new();
-    let mut spans: Vec<Span> = Vec::new();
+    let mut lines: Vec<Line<'static>> = Vec::new();
+    let mut spans: Vec<Span<'static>> = Vec::new();
     let mut style_stack: Vec<Style> = vec![Style::default()];
     let mut current_source_line: usize = 0;
     let mut list_depth: usize = 0;
     let mut in_blockquote = false;
+    let mut in_code_block = false;
 
     for (event, range) in parser {
         // Track which source line this event comes from
         let byte_offset = range.start;
         let src_line = content[..byte_offset].matches('\n').count();
-        if src_line != current_source_line {
+        if src_line != current_source_line && src_line > current_source_line {
             // Record rendered line count at each source line boundary
-            for sl in (current_source_line + 1)..=src_line.min(source_line_count) {
-                source_to_rendered[sl] = lines.len() as u16;
+            let rendered = lines.len() as u16;
+            for entry in &mut source_to_rendered[(current_source_line + 1)..=src_line.min(source_line_count)] {
+                *entry = rendered;
             }
             current_source_line = src_line;
         }
@@ -36,12 +38,19 @@ pub fn render_with_offsets(content: &str) -> (Vec<Line<'_>>, Vec<u16>) {
         match event {
             Event::Start(ref tag) => {
                 if matches!(tag, Tag::List(_)) && !spans.is_empty() {
-                    lines.push(Line::from(spans.drain(..).collect::<Vec<_>>()));
+                    lines.push(Line::from(std::mem::take(&mut spans)));
                 }
                 if matches!(tag, Tag::BlockQuote(_)) {
                     in_blockquote = true;
                 }
-                let style = style_for_tag(tag, &mut spans, &mut list_depth);
+                if matches!(tag, Tag::CodeBlock(_)) {
+                    in_code_block = true;
+                }
+                let style = if in_blockquote && matches!(tag, Tag::Paragraph) {
+                    *style_stack.last().unwrap_or(&Style::default())
+                } else {
+                    style_for_tag(tag, &mut spans, &mut list_depth)
+                };
                 style_stack.push(style);
             }
             Event::End(tag_end) => {
@@ -49,11 +58,26 @@ pub fn render_with_offsets(content: &str) -> (Vec<Line<'_>>, Vec<u16>) {
                 if matches!(tag_end, TagEnd::BlockQuote(_)) {
                     in_blockquote = false;
                 }
+                if matches!(tag_end, TagEnd::CodeBlock) {
+                    in_code_block = false;
+                }
                 handle_tag_end(tag_end, &mut spans, &mut lines, &mut list_depth);
             }
             Event::Text(text) => {
                 let style = *style_stack.last().unwrap_or(&Style::default());
-                spans.push(Span::styled(text.to_string(), style));
+                if in_code_block {
+                    let parts: Vec<&str> = text.split('\n').collect();
+                    for (i, part) in parts.iter().enumerate() {
+                        if !part.is_empty() {
+                            spans.push(Span::styled(part.to_string(), style));
+                        }
+                        if i < parts.len() - 1 {
+                            lines.push(Line::from(std::mem::take(&mut spans)));
+                        }
+                    }
+                } else {
+                    spans.push(Span::styled(text.to_string(), style));
+                }
             }
             Event::Code(code) => {
                 spans.push(Span::styled(
@@ -62,7 +86,7 @@ pub fn render_with_offsets(content: &str) -> (Vec<Line<'_>>, Vec<u16>) {
                 ));
             }
             Event::SoftBreak | Event::HardBreak => {
-                lines.push(Line::from(spans.drain(..).collect::<Vec<_>>()));
+                lines.push(Line::from(std::mem::take(&mut spans)));
                 if in_blockquote {
                     spans.push(Span::styled(
                         "  > ",
@@ -71,12 +95,14 @@ pub fn render_with_offsets(content: &str) -> (Vec<Line<'_>>, Vec<u16>) {
                 }
             }
             Event::Rule => {
-                lines.push(Line::from(spans.drain(..).collect::<Vec<_>>()));
+                if !spans.is_empty() {
+                    lines.push(Line::from(std::mem::take(&mut spans)));
+                }
                 lines.push(Line::from(Span::styled(
                     "────────────────────────────────",
                     Style::default().fg(Color::DarkGray),
                 )));
-                lines.push(Line::from(""));
+                push_blank_line(&mut lines);
             }
             _ => {}
         }
@@ -87,8 +113,9 @@ pub fn render_with_offsets(content: &str) -> (Vec<Line<'_>>, Vec<u16>) {
     }
 
     // Fill remaining source lines
-    for sl in (current_source_line + 1)..=source_line_count {
-        source_to_rendered[sl] = lines.len() as u16;
+    let rendered = lines.len() as u16;
+    for entry in &mut source_to_rendered[(current_source_line + 1)..=source_line_count] {
+        *entry = rendered;
     }
 
     if lines.is_empty() {
@@ -102,7 +129,7 @@ pub fn render_with_offsets(content: &str) -> (Vec<Line<'_>>, Vec<u16>) {
 }
 
 
-fn style_for_tag<'a>(tag: &Tag<'a>, spans: &mut Vec<Span<'a>>, list_depth: &mut usize) -> Style {
+fn style_for_tag(tag: &Tag<'_>, spans: &mut Vec<Span<'static>>, list_depth: &mut usize) -> Style {
     match tag {
         Tag::Heading { level, .. } => {
             let prefix = match level {
@@ -156,24 +183,32 @@ fn style_for_tag<'a>(tag: &Tag<'a>, spans: &mut Vec<Span<'a>>, list_depth: &mut 
     }
 }
 
-fn handle_tag_end<'a>(tag_end: TagEnd, spans: &mut Vec<Span<'a>>, lines: &mut Vec<Line<'a>>, list_depth: &mut usize) {
+fn push_blank_line(lines: &mut Vec<Line<'_>>) {
+    if lines.last().is_none_or(|l| !l.spans.is_empty()) {
+        lines.push(Line::from(""));
+    }
+}
+
+fn handle_tag_end(tag_end: TagEnd, spans: &mut Vec<Span<'static>>, lines: &mut Vec<Line<'static>>, list_depth: &mut usize) {
     match tag_end {
         TagEnd::Heading(_) | TagEnd::Paragraph | TagEnd::BlockQuote(_) => {
-            lines.push(Line::from(spans.drain(..).collect::<Vec<_>>()));
-            lines.push(Line::from(""));
+            lines.push(Line::from(std::mem::take(spans)));
+            push_blank_line(lines);
         }
         TagEnd::List(_) => {
             *list_depth = list_depth.saturating_sub(1);
             if *list_depth == 0 {
-                lines.push(Line::from(""));
+                push_blank_line(lines);
             }
         }
         TagEnd::Item => {
-            lines.push(Line::from(spans.drain(..).collect::<Vec<_>>()));
+            if !spans.is_empty() {
+                lines.push(Line::from(std::mem::take(spans)));
+            }
         }
         TagEnd::CodeBlock => {
-            lines.push(Line::from(spans.drain(..).collect::<Vec<_>>()));
-            lines.push(Line::from(""));
+            lines.push(Line::from(std::mem::take(spans)));
+            push_blank_line(lines);
         }
         TagEnd::Link => {
             spans.push(Span::styled("]", Style::default().fg(Color::Blue)));
@@ -326,6 +361,18 @@ mod tests {
         }
     }
 
+    #[test]
+    fn nested_list_no_consecutive_blanks() {
+        let md = "- Parent\n  - Child A\n  - Child B\n- Another\n  - Sub";
+        let (lines, _) = render_with_offsets(md);
+        let texts = all_text(&lines);
+        for i in 1..texts.len() {
+            if texts[i].is_empty() && texts[i - 1].is_empty() {
+                panic!("consecutive blank lines at index {}", i);
+            }
+        }
+    }
+
     // Blockquotes
 
     #[test]
@@ -342,6 +389,12 @@ mod tests {
         let texts = all_text(&lines);
         assert!(texts[0].contains(">") && texts[0].contains("Line one"));
         assert!(texts[1].contains(">") && texts[1].contains("Line two"));
+        // Text spans should carry blockquote style (DarkGray + Italic)
+        let expected_style = Style::default()
+            .fg(Color::DarkGray)
+            .add_modifier(Modifier::ITALIC);
+        let text_span = lines[0].spans.iter().find(|s| s.content.contains("Line one"));
+        assert_eq!(text_span.unwrap().style, expected_style, "blockquote text style");
     }
 
     // Code blocks
@@ -350,9 +403,10 @@ mod tests {
     fn fenced_code_block() {
         let md = "```\nlet x = 1;\nlet y = 2;\n```";
         let (lines, _) = render_with_offsets(md);
-        let combined: String = all_text(&lines).join("\n");
-        assert!(combined.contains("let x = 1;"));
-        assert!(combined.contains("let y = 2;"));
+        let texts = all_text(&lines);
+        // Each code line must be on its own rendered line
+        assert!(texts.iter().any(|t| t == "let x = 1;"), "x on own line");
+        assert!(texts.iter().any(|t| t == "let y = 2;"), "y on own line");
     }
 
     #[test]
