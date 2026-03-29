@@ -137,6 +137,16 @@ teardown() {
   [[ "$result" == "2024-01-15 03:32:44Z" ]]
 }
 
+@test "frontmatter_date: strips time from published_at" {
+  result="$(frontmatter_date published_at "$FIXTURES/post-alt.md")"
+  [[ "$result" == "2024-01-15" ]]
+}
+
+@test "frontmatter_date: keeps date-only values unchanged" {
+  result="$(frontmatter_date date "$FIXTURES/post.md")"
+  [[ "$result" == "2026-03-29" ]]
+}
+
 @test "frontmatter: extracts quoted description" {
   result="$(frontmatter description "$FIXTURES/post-alt.md")"
   [[ "$result" == "Alt description" ]]

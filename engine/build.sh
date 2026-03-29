@@ -27,7 +27,7 @@ for md in "$POSTS_DIR"/*.md; do
   [ -f "$md" ] || continue
   slug="$(basename "$md" .md)"
   post_title="$(frontmatter title "$md")"
-  post_date="$(frontmatter "$DATE_FIELD" "$md")"
+  post_date="$(frontmatter_date "$DATE_FIELD" "$md")"
   post_desc="$(frontmatter description "$md")"
 
   # Pipe body only (skip frontmatter) to avoid pandoc parsing --- as YAML
@@ -74,7 +74,7 @@ template_sub "$INDEX_TPL" \
 SORTED_POSTS=""
 for md in "$POSTS_DIR"/*.md; do
   [ -f "$md" ] || continue
-  post_date="$(frontmatter "$DATE_FIELD" "$md")"
+  post_date="$(frontmatter_date "$DATE_FIELD" "$md")"
   SORTED_POSTS="$SORTED_POSTS$post_date	$md
 "
 done
@@ -103,7 +103,7 @@ echo "  built sitemap.xml"
 rss_header "$TITLE" "$SITE_URL" "$SUBTITLE" > "$DIST_DIR/feed.xml"
 for md in $(ls -r "$POSTS_DIR"/*.md 2>/dev/null); do
   post_title="$(frontmatter title "$md")"
-  post_date="$(frontmatter "$DATE_FIELD" "$md")"
+  post_date="$(frontmatter_date "$DATE_FIELD" "$md")"
   post_desc="$(frontmatter description "$md")"
   slug="$(basename "$md" .md)"
   rss_item "$post_title" "$SITE_URL/$slug.html" "$post_desc" "$post_date" >> "$DIST_DIR/feed.xml"

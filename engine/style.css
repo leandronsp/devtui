@@ -88,9 +88,10 @@ h1.site-title {
 }
 
 .site-subtitle {
+  font-family: var(--mono);
   color: var(--text-dim);
-  font-size: 0.95rem;
-  margin-bottom: 3rem;
+  font-size: 0.8rem;
+  margin-bottom: 2.5rem;
 }
 
 .search-input {
