@@ -31,6 +31,9 @@ fn main() -> io::Result<()> {
         std::fs::write(&file_path, "")?;
     }
 
+    // Canonicalize to absolute path so vim finds the file regardless of cwd
+    let file_path = std::fs::canonicalize(&file_path)?;
+
     let initial_content = std::fs::read_to_string(&file_path).unwrap_or_default();
 
     let mut terminal = ratatui::init();
@@ -52,12 +55,11 @@ fn main() -> io::Result<()> {
     let file_str = file_path.to_str().unwrap_or(DRAFT_PATH);
 
     let content_autocmd = format!(
-        "autocmd TextChanged,TextChangedI * call writefile(getline(1,'$'),'{}')",
+        "autocmd TextChanged,TextChangedI,BufWritePost * call writefile(getline(1,'$'),'{}')",
         CONTENT_TMP
     );
-    // CursorHold fires after pause. TextChanged* fires on content edits (also updates scroll).
     let pos_autocmd = format!(
-        "autocmd CursorHold,CursorHoldI,TextChanged,TextChangedI * call writefile([line('w0')],'{}')",
+        "autocmd CursorHold,CursorHoldI,TextChanged,TextChangedI,BufWritePost * call writefile([line('w0')],'{}')",
         POS_TMP
     );
     let initial_write = format!("call writefile(getline(1,'$'),'{}')", CONTENT_TMP);
@@ -66,7 +68,7 @@ fn main() -> io::Result<()> {
     cmd.args([
         "-u", "NONE",
         "-N",
-        "-c", "set noswapfile noruler laststatus=0 updatetime=100",
+        "-c", "set noswapfile noruler laststatus=0 updatetime=100 tabstop=2 shiftwidth=2 expandtab",
         "-c", &content_autocmd,
         "-c", &pos_autocmd,
         "-c", &initial_write,
@@ -131,7 +133,10 @@ fn main() -> io::Result<()> {
         }
     });
 
-    let file_display = file_path.display().to_string();
+    let file_display = file_path
+        .file_name()
+        .map(|n| n.to_string_lossy().to_string())
+        .unwrap_or_else(|| file_path.display().to_string());
 
     let result = run_loop(
         &mut terminal,
@@ -268,19 +273,17 @@ fn run_loop(
                 .title(" PREVIEW ");
 
             if let Ok(content) = preview_content.read() {
-                let (lines, offsets) = preview::render_with_offsets(&content);
                 let source_line = viewport_line.load(std::sync::atomic::Ordering::Relaxed) as usize;
-                let scroll = if source_line < offsets.len() {
-                    offsets[source_line]
-                } else if !offsets.is_empty() {
-                    *offsets.last().unwrap()
-                } else {
-                    0
-                };
+                // Render only from the visible source line forward
+                let visible: String = content
+                    .lines()
+                    .skip(source_line)
+                    .collect::<Vec<_>>()
+                    .join("\n");
+                let (lines, _) = preview::render_with_offsets(&visible);
                 let preview = Paragraph::new(lines)
                     .block(preview_block)
-                    .wrap(Wrap { trim: false })
-                    .scroll((scroll, 0));
+                    .wrap(Wrap { trim: false });
                 frame.render_widget(preview, panes[1]);
             }
 
