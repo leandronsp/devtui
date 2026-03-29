@@ -26,11 +26,17 @@ SITEMAP_ENTRIES=""
 for md in "$POSTS_DIR"/*.md; do
   [ -f "$md" ] || continue
   slug="$(basename "$md" .md)"
+  post_title="$(frontmatter title "$md")"
   post_date="$(frontmatter "$DATE_FIELD" "$md")"
+  post_desc="$(frontmatter description "$md")"
 
-  pandoc "$md" -o "$DIST_DIR/$slug.html" \
+  # Pipe body only (skip frontmatter) to avoid pandoc parsing --- as YAML
+  post_body "$md" | pandoc --from markdown-yaml_metadata_block -o "$DIST_DIR/$slug.html" \
     --template="$ARTICLE_TPL" \
     --highlight-style=breezedark \
+    --metadata "title=$post_title" \
+    --metadata "date=$post_date" \
+    --metadata "description=$post_desc" \
     --variable "site-title=$TITLE" \
     --variable "site-author=$AUTHOR" \
     --variable "site-url=$SITE_URL" \

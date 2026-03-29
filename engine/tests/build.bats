@@ -37,6 +37,24 @@ description: Another post
 Content here.
 EOF
 
+  # Post without description and with horizontal rules (regression test)
+  cat > "$BLOG/posts/2026-01-03-no-desc.md" << 'EOF'
+---
+title: No Description Post
+date: 2026-01-03
+---
+
+Some intro text.
+
+---
+
+More text after horizontal rule.
+
+---
+
+Final section.
+EOF
+
   run "$ENGINE/build.sh" "$BLOG" "$DIST"
   [ "$status" -eq 0 ]
 }
@@ -162,6 +180,25 @@ teardown() {
 
 @test "build: feed.xml items have correct links" {
   grep -q '<link>https://test-blog.com/2026-01-01-hello.html</link>' "$DIST/feed.xml"
+}
+
+# --- regression: posts without description ---
+
+@test "build: handles post without description field" {
+  [ -f "$DIST/2026-01-03-no-desc.html" ]
+}
+
+@test "build: post without description has empty meta description" {
+  grep -q 'name="description"' "$DIST/2026-01-03-no-desc.html"
+}
+
+@test "build: post with horizontal rules renders body correctly" {
+  grep -q 'Some intro text' "$DIST/2026-01-03-no-desc.html"
+  grep -q 'Final section' "$DIST/2026-01-03-no-desc.html"
+}
+
+@test "build: index includes post without description" {
+  grep -q 'No Description Post' "$DIST/index.html"
 }
 
 # --- style ---

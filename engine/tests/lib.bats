@@ -37,6 +37,30 @@ description: "Alt description"
 
 Content.
 EOF
+
+  # Post without description (like leandronsp.com articles)
+  cat > "$FIXTURES/post-no-desc.md" << 'EOF'
+---
+title: "No Desc Post"
+published_at: "2024-01-15"
+---
+
+Content without description.
+EOF
+
+  # Post with horizontal rules in body
+  cat > "$FIXTURES/post-with-hr.md" << 'EOF'
+---
+title: "HR Post"
+date: 2026-01-01
+---
+
+Before rule
+
+---
+
+After rule
+EOF
 }
 
 teardown() {
@@ -116,6 +140,30 @@ teardown() {
 @test "frontmatter: extracts quoted description" {
   result="$(frontmatter description "$FIXTURES/post-alt.md")"
   [[ "$result" == "Alt description" ]]
+}
+
+@test "frontmatter: returns empty for missing field" {
+  result="$(frontmatter description "$FIXTURES/post-no-desc.md")"
+  [[ "$result" == "" ]]
+}
+
+# --- post_body ---
+
+@test "post_body: extracts content after frontmatter" {
+  result="$(post_body "$FIXTURES/post.md")"
+  [[ "$result" == *"Some content here."* ]]
+}
+
+@test "post_body: does not include frontmatter" {
+  result="$(post_body "$FIXTURES/post.md")"
+  [[ "$result" != *"title:"* ]]
+}
+
+@test "post_body: handles horizontal rules in content" {
+  result="$(post_body "$FIXTURES/post-with-hr.md")"
+  [[ "$result" == *"Before rule"* ]]
+  [[ "$result" == *"---"* ]]
+  [[ "$result" == *"After rule"* ]]
 }
 
 # --- sitemap_entry ---
