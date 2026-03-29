@@ -45,6 +45,9 @@ mkdir -p "$ARTICLES_DIR"
 ARTICLE_TPL="$(resolve_file article.html "$BLOG_DIR/templates" "$THEME_DIR/templates" "$ENGINE_DIR/templates")"
 SITEMAP_ENTRIES=""
 
+REBUILT_ARTICLES=""
+SKIPPED=0
+
 for md in "$POSTS_DIR"/*.md; do
   [ -f "$md" ] || continue
   slug="$(basename "$md" .md)"
@@ -52,24 +55,32 @@ for md in "$POSTS_DIR"/*.md; do
   post_date="$(frontmatter_date "$DATE_FIELD" "$md")"
   post_desc="$(frontmatter description "$md")"
 
-  # Pipe body only (skip frontmatter) to avoid pandoc parsing --- as YAML
-  post_body "$md" | pandoc --from markdown-yaml_metadata_block-tex_math_dollars-simple_tables-multiline_tables+autolink_bare_uris -o "$ARTICLES_DIR/$slug.html" \
-    --template="$ARTICLE_TPL" \
-    --highlight-style=breezedark \
-    --metadata "title=$post_title" \
-    --metadata "date=$post_date" \
-    --metadata "description=$post_desc" \
-    --variable "site-title=$TITLE" \
-    --variable "site-author=$AUTHOR" \
-    --variable "site-url=$SITE_URL" \
-    --variable "slug=${ARTICLES_PREFIX}$slug" \
-    --variable "lang=$LANG" \
-    --variable "base-path=$([ -n "$ARTICLES_PATH" ] && echo "../" || echo "")"
+  # Incremental: skip if html exists and is newer than both md and template
+  html_out="$ARTICLES_DIR/$slug.html"
+  if [ -f "$html_out" ] && [ "$html_out" -nt "$md" ] && [ "$html_out" -nt "$ARTICLE_TPL" ]; then
+    SKIPPED=$((SKIPPED + 1))
+  else
+    # Pipe body only (skip frontmatter) to avoid pandoc parsing --- as YAML
+    post_body "$md" | pandoc --from markdown-yaml_metadata_block-tex_math_dollars-simple_tables-multiline_tables+autolink_bare_uris -o "$html_out" \
+      --template="$ARTICLE_TPL" \
+      --highlight-style=breezedark \
+      --metadata "title=$post_title" \
+      --metadata "date=$post_date" \
+      --metadata "description=$post_desc" \
+      --variable "site-title=$TITLE" \
+      --variable "site-author=$AUTHOR" \
+      --variable "site-url=$SITE_URL" \
+      --variable "slug=${ARTICLES_PREFIX}$slug" \
+      --variable "lang=$LANG" \
+      --variable "base-path=$([ -n "$ARTICLES_PATH" ] && echo "../" || echo "")"
+    REBUILT_ARTICLES="$REBUILT_ARTICLES $html_out"
+    echo "  built $slug.html"
+  fi
 
   SITEMAP_ENTRIES="$SITEMAP_ENTRIES$(sitemap_entry "$SITE_URL/${ARTICLES_PREFIX}$slug.html" "$post_date")
 "
-  echo "  built $slug.html"
 done
+[ "$SKIPPED" -gt 0 ] && echo "  skipped $SKIPPED unchanged articles"
 
 # Build style: concatenate modular CSS files or use single style.css
 STYLE_DIR=""
@@ -248,10 +259,15 @@ echo "  built feed.xml"
 robots_txt "$SITE_URL" > "$DIST_DIR/robots.txt"
 echo "  built robots.txt"
 
-# Inject Google Analytics into article pages
+# Collect files that need post-processing (GA + minification)
+PROCESS_FILES="$DIST_DIR/index.html"
+for html in $REBUILT_ARTICLES; do
+  PROCESS_FILES="$PROCESS_FILES $html"
+done
+
+# Inject Google Analytics into rebuilt article pages
 if [ -n "$ANALYTICS_ID" ]; then
-  for html in "$ARTICLES_DIR"/*.html; do
-    [ -f "$html" ] || continue
+  for html in $REBUILT_ARTICLES; do
     python3 -c "
 import sys
 html = open(sys.argv[1]).read()
@@ -261,15 +277,17 @@ with open(sys.argv[1], 'w') as f: f.write(html)
   done
 fi
 
-# Minify: inline CSS + compress HTML
+# Minify: inline CSS + compress HTML (only rebuilt files)
 MINIFIED_CSS="$DIST_DIR/.min.css"
 minify_css "$DIST_DIR/style.css" > "$MINIFIED_CSS"
 
-for html in "$DIST_DIR"/*.html "$ARTICLES_DIR"/*.html; do
+MINIFIED=0
+for html in $PROCESS_FILES; do
   [ -f "$html" ] || continue
   inline_css "$html" "$MINIFIED_CSS"
   minify_html "$html"
+  MINIFIED=$((MINIFIED + 1))
 done
 
 rm -f "$MINIFIED_CSS" "$DIST_DIR/style.css"
-echo "  minified $(find "$DIST_DIR" -name '*.html' | wc -l | tr -d ' ') files"
+echo "  minified $MINIFIED files"

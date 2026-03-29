@@ -268,3 +268,40 @@ teardown() {
 @test "build: articles have inlined CSS" {
   grep -q '<style>' "$DIST/2026-01-01-hello.html"
 }
+
+# --- incremental builds ---
+
+@test "build: skips unchanged articles on second build" {
+  run "$ENGINE/build.sh" "$BLOG" "$DIST"
+  [ "$status" -eq 0 ]
+  [[ "$output" == *"skipped"* ]]
+  # Should not say "built 2026-01-01-hello.html" on second run
+  [[ "$output" != *"built 2026-01-01-hello.html"* ]]
+}
+
+@test "build: rebuilds article when source changes" {
+  sleep 1
+  touch "$BLOG/posts/2026-01-01-hello.md"
+
+  run "$ENGINE/build.sh" "$BLOG" "$DIST"
+  [ "$status" -eq 0 ]
+  [[ "$output" == *"built 2026-01-01-hello.html"* ]]
+}
+
+@test "build: only rebuilds changed article, not others" {
+  sleep 1
+  touch "$BLOG/posts/2026-01-01-hello.md"
+
+  run "$ENGINE/build.sh" "$BLOG" "$DIST"
+  [ "$status" -eq 0 ]
+  # Hello was rebuilt
+  [[ "$output" == *"built 2026-01-01-hello.html"* ]]
+  # Second was not rebuilt
+  [[ "$output" != *"built 2026-01-02-second.html"* ]]
+}
+
+@test "build: always rebuilds index on incremental" {
+  run "$ENGINE/build.sh" "$BLOG" "$DIST"
+  [ "$status" -eq 0 ]
+  [[ "$output" == *"built index.html"* ]]
+}
