@@ -190,58 +190,276 @@ mod tests {
         line.spans.iter().map(|s| s.content.as_ref()).collect()
     }
 
+    fn all_text(lines: &[Line]) -> Vec<String> {
+        lines.iter().map(|l| line_text(l)).collect()
+    }
+
+    // Empty / minimal
+
     #[test]
-    fn test_nested_lists() {
-        let md = "- First item\n- Second item\n  - Nested A\n  - Nested B\n    - Deep nested\n- Third item";
-        let (lines, _) = render_with_offsets(md);
-        for (i, line) in lines.iter().enumerate() {
-            println!("{:2}: |{}|", i, line_text(line));
-        }
-        // Each item should be on its own line
-        assert!(lines.len() >= 6, "Expected at least 6 lines, got {}", lines.len());
+    fn empty_content_shows_placeholder() {
+        let (lines, _) = render_with_offsets("");
+        assert_eq!(line_text(&lines[0]), "Start typing...");
     }
 
     #[test]
-    fn test_formatting() {
-        let md = "This has **bold**, *italic*, and ~~struck~~ text.";
-        let (lines, _) = render_with_offsets(md);
+    fn plain_text_renders_as_paragraph() {
+        let (lines, _) = render_with_offsets("Hello world");
+        assert_eq!(line_text(&lines[0]), "Hello world");
+    }
+
+    // Headings
+
+    #[test]
+    fn heading_h1() {
+        let (lines, _) = render_with_offsets("# Title");
         let text = line_text(&lines[0]);
-        assert!(text.contains("bold"), "Missing bold text");
-        assert!(text.contains("italic"), "Missing italic text");
-        assert!(text.contains("struck"), "Missing strikethrough text");
+        assert!(text.contains("# "), "H1 prefix");
+        assert!(text.contains("Title"));
+        assert_eq!(line_text(&lines[1]), "", "blank line after heading");
     }
 
     #[test]
-    fn test_code_block() {
+    fn heading_h2() {
+        let (lines, _) = render_with_offsets("## Subtitle");
+        assert!(line_text(&lines[0]).contains("## "));
+    }
+
+    #[test]
+    fn heading_h3() {
+        let (lines, _) = render_with_offsets("### Section");
+        assert!(line_text(&lines[0]).contains("### "));
+    }
+
+    #[test]
+    fn heading_h4() {
+        let (lines, _) = render_with_offsets("#### Deep");
+        assert!(line_text(&lines[0]).contains("#### "));
+    }
+
+    // Inline formatting
+
+    #[test]
+    fn bold_text() {
+        let (lines, _) = render_with_offsets("Some **bold** here");
+        let text = line_text(&lines[0]);
+        assert!(text.contains("bold"));
+    }
+
+    #[test]
+    fn italic_text() {
+        let (lines, _) = render_with_offsets("Some *italic* here");
+        let text = line_text(&lines[0]);
+        assert!(text.contains("italic"));
+    }
+
+    #[test]
+    fn strikethrough_text() {
+        let (lines, _) = render_with_offsets("Some ~~deleted~~ here");
+        let text = line_text(&lines[0]);
+        assert!(text.contains("deleted"));
+    }
+
+    #[test]
+    fn inline_code() {
+        let (lines, _) = render_with_offsets("Use `mix test` to run");
+        let text = line_text(&lines[0]);
+        assert!(text.contains("`mix test`"));
+    }
+
+    #[test]
+    fn mixed_formatting() {
+        let (lines, _) = render_with_offsets("**bold** and *italic* and `code`");
+        let text = line_text(&lines[0]);
+        assert!(text.contains("bold"));
+        assert!(text.contains("italic"));
+        assert!(text.contains("`code`"));
+    }
+
+    // Lists
+
+    #[test]
+    fn simple_list() {
+        let (lines, _) = render_with_offsets("- One\n- Two\n- Three");
+        let texts = all_text(&lines);
+        assert!(texts[0].contains("- ") && texts[0].contains("One"));
+        assert!(texts[1].contains("- ") && texts[1].contains("Two"));
+        assert!(texts[2].contains("- ") && texts[2].contains("Three"));
+    }
+
+    #[test]
+    fn nested_list_two_levels() {
+        let (lines, _) = render_with_offsets("- Parent\n  - Child A\n  - Child B");
+        let texts = all_text(&lines);
+        assert!(texts[0].contains("Parent"), "parent item");
+        assert!(texts[1].contains("Child A"), "first child");
+        assert!(texts[2].contains("Child B"), "second child");
+        // Child should have more indentation than parent
+        let parent_indent = texts[0].find('-').unwrap();
+        let child_indent = texts[1].find('-').unwrap();
+        assert!(child_indent > parent_indent, "child should be more indented");
+    }
+
+    #[test]
+    fn nested_list_three_levels() {
+        let md = "- L1\n  - L2\n    - L3";
+        let (lines, _) = render_with_offsets(md);
+        let texts = all_text(&lines);
+        assert!(texts[0].contains("L1"));
+        assert!(texts[1].contains("L2"));
+        assert!(texts[2].contains("L3"));
+        let i1 = texts[0].find('-').unwrap();
+        let i2 = texts[1].find('-').unwrap();
+        let i3 = texts[2].find('-').unwrap();
+        assert!(i3 > i2 && i2 > i1, "progressive indentation");
+    }
+
+    #[test]
+    fn list_items_each_on_own_line() {
+        let md = "- Alpha\n- Beta\n  - Gamma\n  - Delta\n- Epsilon";
+        let (lines, _) = render_with_offsets(md);
+        let texts = all_text(&lines);
+        // No line should contain two item markers
+        for text in &texts {
+            let dash_count = text.matches("- ").count();
+            assert!(dash_count <= 1, "Line has multiple items: |{}|", text);
+        }
+    }
+
+    // Blockquotes
+
+    #[test]
+    fn blockquote_single_line() {
+        let (lines, _) = render_with_offsets("> Hello");
+        let text = line_text(&lines[0]);
+        assert!(text.contains(">"), "quote marker");
+        assert!(text.contains("Hello"));
+    }
+
+    #[test]
+    fn blockquote_multiline() {
+        let (lines, _) = render_with_offsets("> Line one\n> Line two");
+        let texts = all_text(&lines);
+        assert!(texts[0].contains(">") && texts[0].contains("Line one"));
+        assert!(texts[1].contains(">") && texts[1].contains("Line two"));
+    }
+
+    // Code blocks
+
+    #[test]
+    fn fenced_code_block() {
+        let md = "```\nlet x = 1;\nlet y = 2;\n```";
+        let (lines, _) = render_with_offsets(md);
+        let combined: String = all_text(&lines).join("\n");
+        assert!(combined.contains("let x = 1;"));
+        assert!(combined.contains("let y = 2;"));
+    }
+
+    #[test]
+    fn code_block_with_language() {
         let md = "```rust\nfn main() {}\n```";
         let (lines, _) = render_with_offsets(md);
-        for (i, line) in lines.iter().enumerate() {
-            println!("{:2}: |{}|", i, line_text(line));
-        }
-        let all_text: String = lines.iter().map(|l| line_text(l)).collect::<Vec<_>>().join("\n");
-        assert!(all_text.contains("fn main()"), "Code block content missing");
+        let combined: String = all_text(&lines).join("\n");
+        assert!(combined.contains("fn main()"));
     }
 
+    // Horizontal rule
+
     #[test]
-    fn test_blockquote() {
-        let md = "> This is quoted\n> Second line";
+    fn horizontal_rule() {
+        let md = "Above\n\n---\n\nBelow";
         let (lines, _) = render_with_offsets(md);
-        for (i, line) in lines.iter().enumerate() {
-            println!("{:2}: |{}|", i, line_text(line));
-        }
+        let combined: String = all_text(&lines).join("\n");
+        assert!(combined.contains("────"), "rule line");
+        assert!(combined.contains("Above"));
+        assert!(combined.contains("Below"));
+    }
+
+    // Links
+
+    #[test]
+    fn inline_link() {
+        let md = "Visit [my site](https://example.com) today";
+        let (lines, _) = render_with_offsets(md);
         let text = line_text(&lines[0]);
-        assert!(text.contains(">"), "Missing blockquote marker");
-        assert!(text.contains("quoted"), "Missing quote text");
+        assert!(text.contains("["), "link opening bracket");
+        assert!(text.contains("my site"));
+        assert!(text.contains("]"), "link closing bracket");
+    }
+
+    // Paragraphs
+
+    #[test]
+    fn paragraphs_separated_by_blank_line() {
+        let md = "First paragraph.\n\nSecond paragraph.";
+        let (lines, _) = render_with_offsets(md);
+        let texts = all_text(&lines);
+        assert!(texts[0].contains("First"));
+        assert_eq!(texts[1], "", "blank separator");
+        assert!(texts[2].contains("Second"));
+    }
+
+    // Source-to-rendered offset mapping
+
+    #[test]
+    fn offset_mapping_plain_lines() {
+        let md = "line one\nline two\nline three";
+        let (_, offsets) = render_with_offsets(md);
+        // Source line 0 -> rendered line 0
+        assert_eq!(offsets[0], 0);
     }
 
     #[test]
-    fn test_full_article() {
+    fn offset_mapping_with_heading() {
+        let md = "# Title\n\nParagraph here";
+        let (lines, offsets) = render_with_offsets(md);
+        // Title renders to line 0, blank line at 1, paragraph at 2
+        // Source line 2 ("Paragraph here") should map to rendered line 2
+        assert!(offsets[2] >= 2, "paragraph offset after heading: {}", offsets[2]);
+        let texts = all_text(&lines);
+        assert!(texts[0].contains("Title"));
+    }
+
+    // Full article integration
+
+    #[test]
+    fn full_article_renders_all_sections() {
         let md = std::fs::read_to_string("test-article.md").unwrap();
-        let (lines, _) = render_with_offsets(&md);
-        println!("\n=== Full article render ({} lines) ===", lines.len());
-        for (i, line) in lines.iter().enumerate() {
-            println!("{:2}: |{}|", i, line_text(line));
+        let (lines, offsets) = render_with_offsets(&md);
+        let combined: String = all_text(&lines).join("\n");
+
+        // All headings present
+        assert!(combined.contains("# The Art of Writing Clean Code"));
+        assert!(combined.contains("## Principles That Matter"));
+        assert!(combined.contains("## Code Examples"));
+        assert!(combined.contains("## Formatting"));
+        assert!(combined.contains("## Lists Galore"));
+        assert!(combined.contains("## Final Thoughts"));
+
+        // Formatting preserved
+        assert!(combined.contains("communication"));
+        assert!(combined.contains("bold italic"));
+        assert!(combined.contains("strikethrough"));
+
+        // Lists rendered
+        assert!(combined.contains("Keep functions small"));
+        assert!(combined.contains("Elixir"));
+        assert!(combined.contains("Level 4"));
+
+        // Code block
+        assert!(combined.contains("defmodule Blog"));
+
+        // Blockquote
+        assert!(combined.contains(">"));
+
+        // Rule
+        assert!(combined.contains("────"));
+
+        // Offsets are monotonically increasing
+        for i in 1..offsets.len() {
+            assert!(offsets[i] >= offsets[i - 1], "offsets not monotonic at {}", i);
         }
-        assert!(lines.len() > 30, "Article should render to many lines");
+
+        assert!(lines.len() > 50, "full article should have many rendered lines");
     }
 }
