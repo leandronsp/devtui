@@ -70,6 +70,27 @@ Some text.
 Content in section.
 EOF
 
+  # Duplicate posts (same title, different filenames)
+  cat > "$BLOG/posts/2026-01-05-my-post.md" << 'EOF'
+---
+title: Duplicate Post
+date: 2026-01-05
+description: First version
+---
+
+Content A.
+EOF
+
+  cat > "$BLOG/posts/2026-01-05-my-post-abc.md" << 'EOF'
+---
+title: Duplicate Post
+date: 2026-01-05
+description: Second version
+---
+
+Content B.
+EOF
+
   run "$ENGINE/build.sh" "$BLOG" "$DIST"
   [ "$status" -eq 0 ]
 }
@@ -224,6 +245,13 @@ teardown() {
 
 @test "build: heading after hr is not inside a table" {
   ! grep -q '<th.*>.*Section After Rule' "$DIST/2026-01-04-hr-heading.html"
+}
+
+# --- regression: deduplication ---
+
+@test "build: deduplicates posts with same title in index" {
+  count=$(grep -c 'Duplicate Post' "$DIST/index.html")
+  [ "$count" -eq 1 ]
 }
 
 # --- style ---

@@ -176,6 +176,83 @@ teardown() {
   [[ "$result" == *"After rule"* ]]
 }
 
+# --- post_snippet ---
+
+@test "post_snippet: uses description when available" {
+  result="$(post_snippet description "$FIXTURES/post.md")"
+  [[ "$result" == "A test description" ]]
+}
+
+@test "post_snippet: falls back to body when no description" {
+  result="$(post_snippet description "$FIXTURES/post-no-desc.md")"
+  [[ "$result" == *"Content without description"* ]]
+}
+
+@test "post_snippet: strips markdown formatting from body" {
+  cat > "$FIXTURES/post-bold.md" << 'EOF'
+---
+title: Bold Post
+date: 2026-01-01
+---
+
+This has **bold** and *italic* and `code` text.
+EOF
+  result="$(post_snippet description "$FIXTURES/post-bold.md")"
+  [[ "$result" != *"**"* ]]
+  [[ "$result" != *'`'* ]]
+  [[ "$result" == *"bold"* ]]
+}
+
+@test "post_snippet: strips markdown links from body" {
+  cat > "$FIXTURES/post-link.md" << 'EOF'
+---
+title: Link Post
+date: 2026-01-01
+---
+
+Check [my site](https://example.com) for _more_ info.
+EOF
+  result="$(post_snippet description "$FIXTURES/post-link.md")"
+  [[ "$result" != *"](http"* ]]
+  [[ "$result" != *"_more_"* ]]
+  [[ "$result" == *"my site"* ]]
+  [[ "$result" == *"more"* ]]
+}
+
+@test "post_snippet: strips horizontal rules from body" {
+  cat > "$FIXTURES/post-hr.md" << 'EOF'
+---
+title: HR Post
+date: 2026-01-01
+---
+
+Intro text.
+
+---
+
+More text after rule.
+EOF
+  result="$(post_snippet description "$FIXTURES/post-hr.md")"
+  [[ "$result" != *"---"* ]]
+  [[ "$result" == *"Intro text"* ]]
+  [[ "$result" == *"More text"* ]]
+}
+
+@test "post_snippet: strips strikethrough markers from body" {
+  cat > "$FIXTURES/post-strike.md" << 'EOF'
+---
+title: Strike Post
+date: 2026-01-01
+---
+
+I created ~~shame~~ courage and decided to write.
+EOF
+  result="$(post_snippet description "$FIXTURES/post-strike.md")"
+  [[ "$result" != *"~~"* ]]
+  [[ "$result" == *"shame"* ]]
+  [[ "$result" == *"courage"* ]]
+}
+
 # --- sitemap_entry ---
 
 @test "sitemap_entry: generates valid xml" {
