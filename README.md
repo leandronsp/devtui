@@ -184,9 +184,14 @@ make blog.build.leandronsp.com
 # preview
 make blog.serve.leandronsp.com    # localhost:8000
 
-# deploy to Cloudflare Pages
+# deploy: copies built files to blog repo
 make deploy.git.leandronsp.com
-cd ../leandronsp.com && git push  # triggers auto-deploy
+
+# review, commit and push manually
+cd ../leandronsp.com
+git diff --stat
+git add -A && git commit -m "deploy: update site"
+git push                          # triggers Cloudflare Pages auto-deploy
 ```
 
 ## Development
