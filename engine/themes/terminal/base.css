@@ -1,0 +1,101 @@
+/* Variables and reset */
+:root {
+  --bg: #0d1117;
+  --bg-surface: #161b22;
+  --text: #c9d1d9;
+  --text-bright: #e6edf3;
+  --text-dim: #7d8590;
+  --accent: #2f81f7;
+  --accent-hover: #58a6ff;
+  --border: #30363d;
+  --green: #3fb950;
+  --mono: 'JetBrains Mono', 'Fira Code', 'SF Mono', 'Cascadia Code', monospace;
+}
+
+[data-theme="light"] {
+  --bg: #fdf6e3;
+  --bg-surface: #eee8d5;
+  --text: #586e75;
+  --text-bright: #073642;
+  --text-dim: #93a1a1;
+  --accent: #268bd2;
+  --accent-hover: #1a6aa5;
+  --border: #d3cbb7;
+  --green: #859900;
+}
+
+* { margin: 0; padding: 0; box-sizing: border-box; }
+html { scroll-behavior: smooth; overflow-x: hidden; }
+
+body {
+  font-family: system-ui, -apple-system, sans-serif;
+  background: var(--bg);
+  color: var(--text);
+  line-height: 1.7;
+  font-size: 16px;
+  -webkit-font-smoothing: antialiased;
+}
+
+header {
+  display: flex;
+  justify-content: space-between;
+  align-items: center;
+  padding: 1.5rem 1.25rem 0;
+  max-width: 860px;
+  margin: 0 auto;
+}
+
+header nav {
+  display: flex;
+  align-items: center;
+  gap: 0.5rem;
+  flex-wrap: wrap;
+}
+
+header nav a {
+  font-family: var(--mono);
+  font-size: 0.85rem;
+  color: var(--green);
+  text-decoration: none;
+  letter-spacing: 0.5px;
+}
+
+header nav a:hover { color: var(--accent); }
+
+main {
+  max-width: 860px;
+  margin: 0 auto;
+  padding: 1.5rem 1.25rem;
+  overflow-wrap: break-word;
+  word-break: break-word;
+}
+
+footer {
+  max-width: 860px;
+  margin: 0 auto;
+  padding: 2rem 1.25rem 4rem;
+  text-align: center;
+}
+
+footer a {
+  font-family: var(--mono);
+  font-size: 0.85rem;
+  color: var(--text-dim);
+  text-decoration: none;
+}
+
+footer a:hover { color: var(--accent); }
+
+/* Theme toggle */
+.theme-toggle {
+  background: none;
+  border: 1px solid var(--border);
+  color: var(--text-dim);
+  font-family: var(--mono);
+  font-size: 0.75rem;
+  padding: 0.3em 0.6em;
+  border-radius: 4px;
+  cursor: pointer;
+}
+
+.theme-toggle:hover { color: var(--accent); border-color: var(--accent); }

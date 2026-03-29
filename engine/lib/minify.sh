@@ -44,6 +44,7 @@ def save(m):
 
 html = re.sub(r'<pre[^>]*>.*?</pre>', save, html, flags=re.S)
 html = re.sub(r'<script[^>]*>.*?</script>', save, html, flags=re.S)
+html = re.sub(r'<style[^>]*>.*?</style>', save, html, flags=re.S)
 
 html = re.sub(r'<!--(?!\[).*?-->', '', html, flags=re.S)
 html = re.sub(r'>\s+<', '><', html)

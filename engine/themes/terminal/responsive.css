@@ -1,0 +1,13 @@
+/* Mobile overrides (must be last) */
+@media (max-width: 600px) {
+  header .guides { display: none; }
+  .tag-filter { display: none; }
+  .menu-toggle { display: inline-block; }
+  .mobile-menu.open { display: block; }
+  .filter-bar { justify-content: space-between; }
+  .post-list a { font-size: 0.95rem; }
+  .post-list .post-desc { -webkit-line-clamp: 3; }
+  body { font-size: 15px; }
+  .article-header h1 { font-size: 1.05rem; }
+  article h2 { font-size: 1rem; }
+}

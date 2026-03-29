@@ -1,0 +1,59 @@
+/* Syntax highlighting: breezedark (dark) + solarized (light) */
+
+code span.al { color: #95da4c; font-weight: bold }
+code span.an { color: #3f8058 }
+code span.at { color: #2980b9 }
+code span.bn { color: #f67400 }
+code span.bu { color: #7f8c8d }
+code span.ch { color: #3daee9 }
+code span.co { color: #7a7c7d }
+code span.cv { color: #7f8c8d }
+code span.cn { color: #27aeae; font-weight: bold }
+code span.cf { color: #fdbc4b; font-weight: bold }
+code span.dt { color: #2980b9 }
+code span.dv { color: #f67400 }
+code span.do { color: #a43340 }
+code span.er { color: #da4453 }
+code span.ex { color: #0099ff; font-weight: bold }
+code span.fl { color: #f67400 }
+code span.fu { color: #8e44ad }
+code span.im { color: #27ae60 }
+code span.in { color: #c45b00 }
+code span.kw { color: #cfcfc2; font-weight: bold }
+code span.op { color: #cfcfc2 }
+code span.ot { color: #27ae60 }
+code span.pp { color: #27ae60 }
+code span.re { color: #2980b9 }
+code span.sc { color: #3daee9 }
+code span.ss { color: #da4453 }
+code span.st { color: #f44f4f }
+code span.va { color: #27aeae }
+code span.vs { color: #da4453 }
+code span.wa { color: #da4453 }
+
+[data-theme="light"] code span.kw { color: #859900; font-weight: bold }
+[data-theme="light"] code span.dt { color: #b58900 }
+[data-theme="light"] code span.dv { color: #d33682 }
+[data-theme="light"] code span.bn { color: #d33682 }
+[data-theme="light"] code span.fl { color: #d33682 }
+[data-theme="light"] code span.ch { color: #2aa198 }
+[data-theme="light"] code span.st { color: #2aa198 }
+[data-theme="light"] code span.co { color: #93a1a1 }
+[data-theme="light"] code span.ot { color: #cb4b16 }
+[data-theme="light"] code span.fu { color: #268bd2 }
+[data-theme="light"] code span.cf { color: #859900; font-weight: bold }
+[data-theme="light"] code span.op { color: #586e75 }
+[data-theme="light"] code span.va { color: #268bd2 }
+[data-theme="light"] code span.cn { color: #b58900; font-weight: bold }
+[data-theme="light"] code span.sc { color: #2aa198 }
+[data-theme="light"] code span.ss { color: #cb4b16 }
+[data-theme="light"] code span.vs { color: #2aa198 }
+[data-theme="light"] code span.im { color: #859900 }
+[data-theme="light"] code span.an { color: #93a1a1 }
+[data-theme="light"] code span.cv { color: #93a1a1 }
+[data-theme="light"] code span.at { color: #b58900 }
+[data-theme="light"] code span.er { color: #dc322f }
+[data-theme="light"] code span.al { color: #dc322f; font-weight: bold }
+[data-theme="light"] code span.pp { color: #cb4b16 }
+[data-theme="light"] code span.ex { color: #268bd2; font-weight: bold }
+[data-theme="light"] code span.bu { color: #586e75 }

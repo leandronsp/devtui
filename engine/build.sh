@@ -18,6 +18,9 @@ DATE_FIELD="$(cfg date_field "$CONFIG")"
 LANG="$(cfg lang "$CONFIG")"
 ARTICLES_PATH="$(cfg articles_path "$CONFIG")"
 THEME="$(cfg theme "$CONFIG")"
+ANALYTICS_ID="$(cfg analytics_id "$CONFIG")"
+LICENSE="$(cfg license "$CONFIG")"
+LICENSE_URL="$(cfg license_url "$CONFIG")"
 
 # Theme directory (empty if no theme set)
 if [ -n "$THEME" ]; then
@@ -68,8 +71,21 @@ for md in "$POSTS_DIR"/*.md; do
   echo "  built $slug.html"
 done
 
-# Copy style
-cp "$(resolve_file style.css "$BLOG_DIR" "$THEME_DIR" "$ENGINE_DIR")" "$DIST_DIR/style.css"
+# Build style: concatenate modular CSS files or use single style.css
+STYLE_DIR=""
+for dir in "$BLOG_DIR" "$THEME_DIR" "$ENGINE_DIR"; do
+  [ -n "$dir" ] && [ -f "$dir/base.css" ] && STYLE_DIR="$dir" && break
+done
+
+if [ -n "$STYLE_DIR" ]; then
+  # Concatenate in order: base, index, article, syntax, responsive (last)
+  > "$DIST_DIR/style.css"
+  for part in base index article syntax responsive; do
+    [ -f "$STYLE_DIR/$part.css" ] && cat "$STYLE_DIR/$part.css" >> "$DIST_DIR/style.css"
+  done
+else
+  cp "$(resolve_file style.css "$BLOG_DIR" "$THEME_DIR" "$ENGINE_DIR")" "$DIST_DIR/style.css"
+fi
 
 # Copy static assets (uploads, images, etc.)
 for dir in uploads images assets; do
@@ -90,25 +106,50 @@ template_sub "$INDEX_TPL" \
   lang "$LANG" \
   > "$DIST_DIR/index.html"
 
-# Inject social links into header nav, guides before post list
+# Inject social links and guides into header nav
 LINKS_HTML="$(render_links "$CONFIG")"
-if [ -n "$LINKS_HTML" ]; then
+GUIDES_HTML="$(render_guides "$CONFIG")"
+NAV_HTML="$LINKS_HTML"
+if [ -n "$NAV_HTML" ] && [ -n "$GUIDES_HTML" ]; then
+  NAV_HTML="$NAV_HTML $GUIDES_HTML"
+elif [ -n "$GUIDES_HTML" ]; then
+  NAV_HTML="$GUIDES_HTML"
+fi
+if [ -n "$NAV_HTML" ]; then
   python3 -c "
 import sys
 html = open(sys.argv[1]).read()
-html = html.replace('<nav></nav>', '<nav>' + sys.argv[2] + '</nav>', 1)
+html = html.replace('<div class=\"guides-slot\"></div>', sys.argv[2], 1)
 with open(sys.argv[1], 'w') as f: f.write(html)
-" "$DIST_DIR/index.html" "$LINKS_HTML"
+" "$DIST_DIR/index.html" "$NAV_HTML"
 fi
 
-GUIDES_HTML="$(render_guides "$CONFIG")"
+TAGS_HTML="$(render_tags "$CONFIG")"
+if [ -n "$TAGS_HTML" ]; then
+  python3 -c "
+import sys
+html = open(sys.argv[1]).read()
+html = html.replace('<div class=\"tag-filter\"></div>', '<div class=\"tag-filter\">' + sys.argv[2] + '</div>', 1)
+with open(sys.argv[1], 'w') as f: f.write(html)
+" "$DIST_DIR/index.html" "$TAGS_HTML"
+fi
+
+# Inject guides and tags into mobile menu
 if [ -n "$GUIDES_HTML" ]; then
   python3 -c "
 import sys
 html = open(sys.argv[1]).read()
-html = html.replace('<ul class=\"post-list\">', sys.argv[2] + '<ul class=\"post-list\">', 1)
+html = html.replace('<div class=\"mobile-guides\"></div>', '<div class=\"mobile-guides\">' + sys.argv[2] + '</div>', 1)
 with open(sys.argv[1], 'w') as f: f.write(html)
 " "$DIST_DIR/index.html" "$GUIDES_HTML"
+fi
+if [ -n "$TAGS_HTML" ]; then
+  python3 -c "
+import sys
+html = open(sys.argv[1]).read()
+html = html.replace('<div class=\"mobile-tags\"></div>', '<div class=\"mobile-tags\">' + sys.argv[2] + '</div>', 1)
+with open(sys.argv[1], 'w') as f: f.write(html)
+" "$DIST_DIR/index.html" "$TAGS_HTML"
 fi
 
 # Build sorted post list (newest first by date field)
@@ -130,10 +171,56 @@ while IFS=$'\t' read -r post_date md; do
   SEEN_TITLES="$SEEN_TITLES|$post_title|"
   snippet="$(post_snippet description "$md")"
   slug="$(basename "$md" .md)"
-  echo "<li><time datetime=\"$post_date\">$post_date</time><a href=\"${ARTICLES_PREFIX}$slug.html\">$post_title</a><p class=\"post-desc\">$snippet</p></li>"
+  post_lang="$(frontmatter language "$md")"
+  # Normalize pt-BR to pt
+  case "$post_lang" in pt-BR|pt-br|pt) post_lang="pt" ;; esac
+  post_tags="$(grep '^tags:' "$md" | sed 's/^tags: *//;s/\[//;s/\]//;s/"//g;s/, */ /g' || true)"
+  echo "<li data-lang=\"$post_lang\" data-tags=\"$post_tags\"><time datetime=\"$post_date\">$post_date</time><a href=\"${ARTICLES_PREFIX}$slug.html\">$post_title</a><p class=\"post-desc\">$snippet</p></li>"
 done <<< "$(echo "$SORTED_POSTS" | sort -r)" >> "$DIST_DIR/index.html"
 
-echo '</ul></main></body></html>' >> "$DIST_DIR/index.html"
+FOOTER_HTML=""
+if [ -n "$LICENSE" ] && [ -n "$LICENSE_URL" ];then
+  FOOTER_HTML="<a href=\"$LICENSE_URL\" target=\"_blank\" rel=\"noopener\">$LICENSE</a>"
+elif [ -n "$LICENSE" ]; then
+  FOOTER_HTML="$LICENSE"
+fi
+
+GA_SCRIPT=""
+if [ -n "$ANALYTICS_ID" ]; then
+  GA_SCRIPT="<script>window.addEventListener('load',function(){setTimeout(function(){var s=document.createElement('script');s.src='https://www.googletagmanager.com/gtag/js?id=$ANALYTICS_ID';s.async=true;document.head.appendChild(s);s.onload=function(){window.dataLayer=window.dataLayer||[];function g(){dataLayer.push(arguments)}g('js',new Date());g('config','$ANALYTICS_ID')};},2000)})</script>"
+fi
+
+cat >> "$DIST_DIR/index.html" << INDEXFOOT
+</ul></main>
+<script>
+var activeLang='all',activeTag='all';
+function bindFilter(sel,cls,cb){
+  document.querySelectorAll(sel).forEach(function(el){
+    el.onclick=function(e){
+      if(!e.target.classList.contains(cls))return;
+      el.querySelector('.'+cls+'.active').classList.remove('active');
+      e.target.classList.add('active');
+      cb(e.target.dataset);
+      filterPosts();
+    };
+  });
+}
+bindFilter('.lang-filter','lang-btn',function(d){activeLang=d.lang});
+bindFilter('.tag-filter,.mobile-tags','tag-btn',function(d){activeTag=d.tag});
+function filterPosts(){
+  var q=document.querySelector('.search-input').value.toLowerCase();
+  document.querySelectorAll('.post-list li').forEach(function(li){
+    var matchLang=activeLang==='all'||li.dataset.lang===activeLang;
+    var matchTag=activeTag==='all'||(' '+li.dataset.tags+' ').indexOf(' '+activeTag+' ')!==-1;
+    var matchSearch=!q||li.textContent.toLowerCase().indexOf(q)!==-1;
+    li.style.display=matchLang&&matchTag&&matchSearch?'':'none';
+  });
+}
+</script>
+$GA_SCRIPT
+<footer>$FOOTER_HTML</footer>
+</body></html>
+INDEXFOOT
 echo "  built index.html"
 
 # Generate sitemap.xml
@@ -160,6 +247,19 @@ echo "  built feed.xml"
 # Generate robots.txt
 robots_txt "$SITE_URL" > "$DIST_DIR/robots.txt"
 echo "  built robots.txt"
+
+# Inject Google Analytics into article pages
+if [ -n "$ANALYTICS_ID" ]; then
+  for html in "$ARTICLES_DIR"/*.html; do
+    [ -f "$html" ] || continue
+    python3 -c "
+import sys
+html = open(sys.argv[1]).read()
+html = html.replace('</body>', sys.argv[2] + '</body>', 1)
+with open(sys.argv[1], 'w') as f: f.write(html)
+" "$html" "$GA_SCRIPT"
+  done
+fi
 
 # Minify: inline CSS + compress HTML
 MINIFIED_CSS="$DIST_DIR/.min.css"
