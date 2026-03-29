@@ -11,7 +11,9 @@
   <script>document.documentElement.dataset.theme=localStorage.getItem('theme')||'dark'</script>
   <header>
     <nav><a href="index.html">leandronsp.com</a></nav>
-    <button class="theme-toggle" onclick="let t=document.documentElement.dataset.theme==='dark'?'light':'dark';document.documentElement.dataset.theme=t;localStorage.setItem('theme',t)">theme</button>
+    <button class="theme-toggle" onclick="let t=document.documentElement.dataset.theme==='dark'?'light':'dark';document.documentElement.dataset.theme=t;localStorage.setItem('theme',t);this.textContent=t==='dark'?'light':'dark'">
+    <script>document.write((localStorage.getItem('theme')||'dark')==='dark'?'light':'dark')</script>
+    </button>
   </header>
   <main>
     <article>
