@@ -1,44 +1,25 @@
-POSTS    := $(sort $(wildcard posts/*.md))
-BUILD    := blog
-TEMPLATE := templates/article.html
-STYLE    := style.css
+BLOGS := $(notdir $(wildcard blogs/*))
 
-ARTICLES := $(patsubst posts/%.md,$(BUILD)/%.html,$(POSTS))
-
-.PHONY: help blog.build blog.serve blog.clean
+.PHONY: help blog.list blog.build blog.clean
 
 help: ## Show available targets
-	@grep -E '^[a-zA-Z._-]+:.*##' Makefile | awk -F ':.*## ' '{printf "  \033[36m%-14s\033[0m %s\n", $$1, $$2}'
+	@grep -E '^[a-zA-Z._%-]+:.*##' Makefile | awk -F ':.*## ' '{printf "  \033[36m%-28s\033[0m %s\n", $$1, $$2}'
 
-blog.build: $(ARTICLES) blog.index $(BUILD)/style.css ## Build the blog
+blog.list: ## List available blogs
+	@for b in $(BLOGS); do echo "  $$b"; done
 
-$(BUILD)/%.html: posts/%.md $(TEMPLATE) $(STYLE)
-	@mkdir -p $(BUILD)
-	@pandoc $< -o $@ --template=$(TEMPLATE) --highlight-style=breezedark
-	@echo "  built $@"
+blog.build: $(addprefix blog.build.,$(BLOGS)) ## Build all blogs
 
-$(BUILD)/style.css: $(STYLE)
-	@mkdir -p $(BUILD)
-	@cp $< $@
+blog.build.%: ## Build a specific blog (e.g. make blog.build.acme-alchemist)
+	@echo "building $*..."
+	@engine/build.sh blogs/$* dist/$*
 
-blog.index: $(ARTICLES)
-	@mkdir -p $(BUILD)
-	@{ \
-	cat templates/index_header.html; \
-	for f in $$(ls -r posts/*.md); do \
-		title=$$(grep '^title:' $$f | sed 's/^title: *//'); \
-		date=$$(grep '^date:' $$f | sed 's/^date: *//'); \
-		desc=$$(grep '^description:' $$f | sed 's/^description: *//'); \
-		slug=$$(basename $$f .md); \
-		echo "<li><time>$$date</time><a href=\"$$slug.html\">$$title</a><p class=\"post-desc\">$$desc</p></li>"; \
-	done; \
-	echo '</ul></main></body></html>'; \
-	} > $(BUILD)/index.html
-	@echo "  built $(BUILD)/index.html"
+blog.serve.%: blog.build.% ## Build and serve a blog on localhost:8000
+	@echo "  serving $* at http://localhost:8000"
+	@cd dist/$* && python3 -m http.server 8000
 
-blog.serve: blog.build ## Build and serve on localhost:8000
-	@echo "  serving at http://localhost:8000"
-	@cd $(BUILD) && python3 -m http.server 8000
+blog.clean: ## Remove all generated files
+	@rm -rf dist
 
-blog.clean: ## Remove generated files
-	@rm -rf $(BUILD)
+blog.clean.%: ## Clean a specific blog
+	@rm -rf dist/$*

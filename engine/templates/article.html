@@ -3,14 +3,14 @@
 <head>
   <meta charset="utf-8">
   <meta name="viewport" content="width=device-width, initial-scale=1">
-  <title>$title$ - leandronsp</title>
+  <title>$title$ - $site-title$</title>
   <meta name="description" content="$if(description)$$description$$endif$">
   <link rel="stylesheet" href="style.css">
 </head>
 <body>
   <script>document.documentElement.dataset.theme=localStorage.getItem('theme')||'dark'</script>
   <header>
-    <nav><a href="index.html">leandronsp.com</a></nav>
+    <nav><a href="index.html">$site-title$</a></nav>
     <button class="theme-toggle" onclick="let t=document.documentElement.dataset.theme==='dark'?'light':'dark';document.documentElement.dataset.theme=t;localStorage.setItem('theme',t);this.textContent=t==='dark'?'light':'dark'">
     <script>document.write((localStorage.getItem('theme')||'dark')==='dark'?'light':'dark')</script>
     </button>
