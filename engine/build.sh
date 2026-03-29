@@ -76,6 +76,18 @@ $SITEMAP_ENTRIES</urlset>
 SITEMAP
 echo "  built sitemap.xml"
 
+# Generate feed.xml (RSS)
+rss_header "$TITLE" "$SITE_URL" "$SUBTITLE" > "$DIST_DIR/feed.xml"
+for md in $(ls -r "$POSTS_DIR"/*.md 2>/dev/null); do
+  post_title="$(frontmatter title "$md")"
+  post_date="$(frontmatter "$DATE_FIELD" "$md")"
+  post_desc="$(frontmatter description "$md")"
+  slug="$(basename "$md" .md)"
+  rss_item "$post_title" "$SITE_URL/$slug.html" "$post_desc" "$post_date" >> "$DIST_DIR/feed.xml"
+done
+echo '</channel></rss>' >> "$DIST_DIR/feed.xml"
+echo "  built feed.xml"
+
 # Generate robots.txt
 robots_txt "$SITE_URL" > "$DIST_DIR/robots.txt"
 echo "  built robots.txt"

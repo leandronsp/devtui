@@ -141,6 +141,29 @@ teardown() {
   grep -q 'Sitemap: https://test-blog.com/sitemap.xml' "$DIST/robots.txt"
 }
 
+# --- rss ---
+
+@test "build: generates feed.xml" {
+  [ -f "$DIST/feed.xml" ]
+}
+
+@test "build: feed.xml has channel title" {
+  grep -q '<title>Test Blog</title>' "$DIST/feed.xml"
+}
+
+@test "build: feed.xml has atom self link" {
+  grep -q 'href="https://test-blog.com/feed.xml"' "$DIST/feed.xml"
+}
+
+@test "build: feed.xml has items for each post" {
+  grep -q '<title>Hello World</title>' "$DIST/feed.xml"
+  grep -q '<title>Second Post</title>' "$DIST/feed.xml"
+}
+
+@test "build: feed.xml items have correct links" {
+  grep -q '<link>https://test-blog.com/2026-01-01-hello.html</link>' "$DIST/feed.xml"
+}
+
 # --- style ---
 
 @test "build: copies style.css" {

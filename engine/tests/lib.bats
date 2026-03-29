@@ -134,6 +134,41 @@ teardown() {
   [[ "$result" == *"Sitemap: https://test.com/sitemap.xml"* ]]
 }
 
+# --- rss_header ---
+
+@test "rss_header: contains channel title" {
+  result="$(rss_header "My Blog" "https://test.com" "desc")"
+  [[ "$result" == *"<title>My Blog</title>"* ]]
+}
+
+@test "rss_header: contains channel link" {
+  result="$(rss_header "My Blog" "https://test.com" "desc")"
+  [[ "$result" == *"<link>https://test.com</link>"* ]]
+}
+
+@test "rss_header: contains atom self link" {
+  result="$(rss_header "My Blog" "https://test.com" "desc")"
+  [[ "$result" == *'href="https://test.com/feed.xml"'* ]]
+}
+
+# --- rss_item ---
+
+@test "rss_item: contains title and link" {
+  result="$(rss_item "Post" "https://test.com/post.html" "desc" "2026-03-29")"
+  [[ "$result" == *"<title>Post</title>"* ]]
+  [[ "$result" == *"<link>https://test.com/post.html</link>"* ]]
+}
+
+@test "rss_item: contains guid" {
+  result="$(rss_item "Post" "https://test.com/post.html" "desc" "2026-03-29")"
+  [[ "$result" == *"<guid>https://test.com/post.html</guid>"* ]]
+}
+
+@test "rss_item: contains pubDate" {
+  result="$(rss_item "Post" "https://test.com/post.html" "desc" "2026-03-29")"
+  [[ "$result" == *"<pubDate>2026-03-29</pubDate>"* ]]
+}
+
 # --- template_sub ---
 
 @test "template_sub: replaces single variable" {
