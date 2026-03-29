@@ -116,6 +116,7 @@ h1.site-title {
 
 .post-list {
   list-style: none;
+  min-height: 100vh;
 }
 
 .post-list li {
