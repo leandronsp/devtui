@@ -1,9 +1,14 @@
 [package]
 name = "devtui"
 version = "0.1.0"
-edition = "2024"
+edition = "2021"
 
 [dependencies]
 ratatui = "0.29"
 crossterm = "0.28"
 pulldown-cmark = "0.12"
+tui-term = "0.2.0"
+vt100 = "0.15"
+portable-pty = "0.9"
+nvim-rs = { version = "0.9", features = ["use_tokio"] }
+tokio = { version = "1", features = ["full"] }
