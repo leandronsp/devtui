@@ -200,8 +200,10 @@ article a {
 
 /* Bare URL links (autolinked references) */
 article .uri {
+  display: block;
   font-size: 0.8rem;
   font-family: var(--mono);
+  line-height: 1.8;
 }
 
 article a:hover { text-decoration: underline; }
