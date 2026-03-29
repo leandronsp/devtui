@@ -18,7 +18,8 @@ use ratatui::{
 use tui_term::widget::PseudoTerminal;
 
 const DRAFT_PATH: &str = "draft.md";
-const PREVIEW_TMP: &str = "/tmp/devtui-preview.md";
+const CONTENT_TMP: &str = "/tmp/devtui-content";
+const POS_TMP: &str = "/tmp/devtui-pos";
 
 fn main() -> io::Result<()> {
     let file_path = std::env::args()
@@ -30,16 +31,14 @@ fn main() -> io::Result<()> {
         std::fs::write(&file_path, "")?;
     }
 
-    // Copy file to preview tmp so preview shows initial content
-    let _ = std::fs::copy(&file_path, PREVIEW_TMP);
+    let initial_content = std::fs::read_to_string(&file_path).unwrap_or_default();
 
     let mut terminal = ratatui::init();
     let term_size = terminal.size()?;
 
-    let vim_cols = (term_size.width / 2).saturating_sub(2); // half width minus borders
-    let vim_rows = term_size.height.saturating_sub(3);     // total - top border - bottom border - status bar
+    let vim_cols = (term_size.width / 2).saturating_sub(2);
+    let vim_rows = term_size.height.saturating_sub(3);
 
-    // Spawn vim in a PTY
     let pty_system = NativePtySystem::default();
     let pty_pair = pty_system
         .openpty(PtySize {
@@ -52,17 +51,25 @@ fn main() -> io::Result<()> {
 
     let file_str = file_path.to_str().unwrap_or(DRAFT_PATH);
 
-    let vim_setup = format!(
-        "set noswapfile noruler laststatus=0 | \
-         autocmd CursorMoved,CursorMovedI,TextChanged,TextChangedI,BufReadPost * silent! write! {}",
-        PREVIEW_TMP
+    let content_autocmd = format!(
+        "autocmd TextChanged,TextChangedI * call writefile(getline(1,'$'),'{}')",
+        CONTENT_TMP
     );
+    // CursorHold fires after pause. TextChanged* fires on content edits (also updates scroll).
+    let pos_autocmd = format!(
+        "autocmd CursorHold,CursorHoldI,TextChanged,TextChangedI * call writefile([line('w0')],'{}')",
+        POS_TMP
+    );
+    let initial_write = format!("call writefile(getline(1,'$'),'{}')", CONTENT_TMP);
 
     let mut cmd = CommandBuilder::new("vim");
     cmd.args([
         "-u", "NONE",
         "-N",
-        "-c", &vim_setup,
+        "-c", "set noswapfile noruler laststatus=0 updatetime=100",
+        "-c", &content_autocmd,
+        "-c", &pos_autocmd,
+        "-c", &initial_write,
         file_str,
     ]);
 
@@ -84,40 +91,41 @@ fn main() -> io::Result<()> {
         .map_err(|e| io::Error::new(io::ErrorKind::Other, e.to_string()))?;
 
     let parser = Arc::new(RwLock::new(vt100::Parser::new(vim_rows, vim_cols, 0)));
-    let pty_has_data = Arc::new(AtomicBool::new(false));
     let running = Arc::new(AtomicBool::new(true));
-
     let vim_exited = Arc::new(AtomicBool::new(false));
 
-    // Reader thread: PTY output -> vt100 parser
     let parser_w = Arc::clone(&parser);
-    let has_data_w = Arc::clone(&pty_has_data);
     let running_r = Arc::clone(&running);
     let exited_w = Arc::clone(&vim_exited);
     let reader_handle = thread::spawn(move || {
-        read_pty(pty_reader, parser_w, has_data_w, running_r);
+        read_pty(pty_reader, parser_w, running_r);
         exited_w.store(true, Ordering::Relaxed);
     });
 
-    // Preview: start with the actual file content
-    let preview_content = Arc::new(RwLock::new(
-        std::fs::read_to_string(&file_path).unwrap_or_default(),
-    ));
-    let preview_changed = Arc::new(AtomicBool::new(false));
+    let preview_content = Arc::new(RwLock::new(initial_content));
+    let viewport_line = Arc::new(std::sync::atomic::AtomicU16::new(0));
     let preview_w = Arc::clone(&preview_content);
-    let preview_changed_w = Arc::clone(&preview_changed);
+    let viewport_w = Arc::clone(&viewport_line);
     let running_p = Arc::clone(&running);
     let preview_handle = thread::spawn(move || {
-        let mut last = String::new();
+        let mut last_content = String::new();
+        let mut last_pos = String::new();
         while running_p.load(Ordering::Relaxed) {
             thread::sleep(Duration::from_millis(100));
-            if let Ok(content) = std::fs::read_to_string(PREVIEW_TMP) {
-                if content != last {
-                    last.clone_from(&content);
+            if let Ok(content) = std::fs::read_to_string(CONTENT_TMP) {
+                if content != last_content {
+                    last_content.clone_from(&content);
                     if let Ok(mut w) = preview_w.write() {
                         *w = content;
                     }
-                    preview_changed_w.store(true, Ordering::Relaxed);
+                }
+            }
+            if let Ok(pos) = std::fs::read_to_string(POS_TMP) {
+                if pos != last_pos {
+                    last_pos.clone_from(&pos);
+                    if let Ok(n) = pos.trim().parse::<u16>() {
+                        viewport_w.store(n.saturating_sub(1), std::sync::atomic::Ordering::Relaxed);
+                    }
                 }
             }
         }
@@ -125,17 +133,25 @@ fn main() -> io::Result<()> {
 
     let file_display = file_path.display().to_string();
 
-    // Main loop
-    let result = run_loop(&mut terminal, &parser, &mut pty_writer, &pty_pair.master, &preview_content, &pty_has_data, &vim_exited, &preview_changed, &file_display);
+    let result = run_loop(
+        &mut terminal,
+        &parser,
+        &mut pty_writer,
+        &pty_pair.master,
+        &preview_content,
+        &viewport_line,
+        &vim_exited,
+        &file_display,
+    );
 
-    // Cleanup
     running.store(false, Ordering::Relaxed);
     ratatui::restore();
     drop(pty_pair.master);
     let _ = child.kill();
     let _ = reader_handle.join();
     let _ = preview_handle.join();
-    let _ = std::fs::remove_file(PREVIEW_TMP);
+    let _ = std::fs::remove_file(CONTENT_TMP);
+    let _ = std::fs::remove_file(POS_TMP);
 
     result
 }
@@ -143,7 +159,6 @@ fn main() -> io::Result<()> {
 fn read_pty(
     mut reader: Box<dyn Read + Send>,
     parser: Arc<RwLock<vt100::Parser>>,
-    has_data: Arc<AtomicBool>,
     running: Arc<AtomicBool>,
 ) {
     let mut buf = [0u8; 4096];
@@ -153,7 +168,6 @@ fn read_pty(
             Ok(n) => {
                 if let Ok(mut p) = parser.write() {
                     p.process(&buf[..n]);
-                    has_data.store(true, Ordering::Relaxed);
                 }
             }
             Err(_) => break,
@@ -165,8 +179,13 @@ fn detect_mode(parser: &Arc<RwLock<vt100::Parser>>) -> &'static str {
     if let Ok(p) = parser.read() {
         let screen = p.screen();
         let rows = screen.size().0;
-        // Check last row of vim for mode indicators
-        let last_row = extract_row(screen, rows.saturating_sub(1));
+        let cols = screen.size().1;
+        let mut last_row = String::new();
+        for col in 0..cols {
+            if let Some(cell) = screen.cell(rows.saturating_sub(1), col) {
+                last_row.push_str(&cell.contents());
+            }
+        }
         let trimmed = last_row.trim();
 
         if trimmed.starts_with(':') || trimmed.starts_with('/') || trimmed.starts_with('?') {
@@ -185,18 +204,6 @@ fn detect_mode(parser: &Arc<RwLock<vt100::Parser>>) -> &'static str {
     "NORMAL"
 }
 
-fn extract_row(screen: &vt100::Screen, row: u16) -> String {
-    let cols = screen.size().1;
-    let mut s = String::new();
-    for col in 0..cols {
-        let cell = screen.cell(row, col);
-        if let Some(cell) = cell {
-            s.push_str(&cell.contents());
-        }
-    }
-    s
-}
-
 fn mode_style(mode: &str) -> (&str, Style) {
     match mode {
         "INSERT" => (" INSERT ", Style::default().fg(Color::Black).bg(Color::Green)),
@@ -213,85 +220,80 @@ fn run_loop(
     pty_writer: &mut Box<dyn Write + Send>,
     pty_master: &Box<dyn portable_pty::MasterPty + Send>,
     preview_content: &Arc<RwLock<String>>,
-    pty_has_data: &Arc<AtomicBool>,
+    viewport_line: &Arc<std::sync::atomic::AtomicU16>,
     vim_exited: &Arc<AtomicBool>,
-    preview_changed: &Arc<AtomicBool>,
     file_display: &str,
 ) -> io::Result<()> {
-    let mut needs_draw = true;
-
     loop {
         if vim_exited.load(Ordering::Relaxed) {
             break;
         }
 
-        if needs_draw {
-            let mode = detect_mode(parser);
-            let (mode_label, mode_st) = mode_style(mode);
+        let mode = detect_mode(parser);
+        let (mode_label, mode_st) = mode_style(mode);
 
-            terminal.draw(|frame| {
-                let rows = Layout::vertical([
-                    Constraint::Min(1),
-                    Constraint::Length(1),
-                ])
-                .split(frame.area());
+        terminal.draw(|frame| {
+            let rows = Layout::vertical([
+                Constraint::Min(1),
+                Constraint::Length(1),
+            ])
+            .split(frame.area());
 
-                let panes = Layout::horizontal([
-                    Constraint::Percentage(50),
-                    Constraint::Percentage(50),
-                ])
-                .split(rows[0]);
+            let panes = Layout::horizontal([
+                Constraint::Percentage(50),
+                Constraint::Percentage(50),
+            ])
+            .split(rows[0]);
 
-                // Left: vim via PTY
-                let editor_title = Line::from(vec![
-                    Span::styled(mode_label, mode_st),
-                    Span::raw(" EDITOR"),
-                ]);
+            // Left: vim via PTY
+            let editor_title = Line::from(vec![
+                Span::styled(mode_label, mode_st),
+                Span::raw(" EDITOR"),
+            ]);
 
-                let block = Block::default()
-                    .borders(Borders::ALL)
-                    .border_style(Style::default().fg(Color::DarkGray))
-                    .title(editor_title);
+            let block = Block::default()
+                .borders(Borders::ALL)
+                .border_style(Style::default().fg(Color::DarkGray))
+                .title(editor_title);
 
-                if let Ok(p) = parser.read() {
-                    let pseudo_term = PseudoTerminal::new(p.screen()).block(block);
-                    frame.render_widget(pseudo_term, panes[0]);
-                }
+            if let Ok(p) = parser.read() {
+                let pseudo_term = PseudoTerminal::new(p.screen()).block(block);
+                frame.render_widget(pseudo_term, panes[0]);
+            }
 
-                // Right: markdown preview
-                let preview_block = Block::default()
-                    .borders(Borders::ALL)
-                    .border_style(Style::default().fg(Color::DarkGray))
-                    .title(" PREVIEW ");
+            // Right: markdown preview
+            let preview_block = Block::default()
+                .borders(Borders::ALL)
+                .border_style(Style::default().fg(Color::DarkGray))
+                .title(" PREVIEW ");
 
-                if let Ok(content) = preview_content.read() {
-                    let lines = preview::render(&content);
-                    let preview = Paragraph::new(lines)
-                        .block(preview_block)
-                        .wrap(Wrap { trim: false });
-                    frame.render_widget(preview, panes[1]);
-                }
+            if let Ok(content) = preview_content.read() {
+                let (lines, offsets) = preview::render_with_offsets(&content);
+                let source_line = viewport_line.load(std::sync::atomic::Ordering::Relaxed) as usize;
+                let scroll = if source_line < offsets.len() {
+                    offsets[source_line]
+                } else if !offsets.is_empty() {
+                    *offsets.last().unwrap()
+                } else {
+                    0
+                };
+                let preview = Paragraph::new(lines)
+                    .block(preview_block)
+                    .wrap(Wrap { trim: false })
+                    .scroll((scroll, 0));
+                frame.render_widget(preview, panes[1]);
+            }
 
-                // Status bar
-                let status = Line::from(Span::styled(
-                    format!(" {} | DevTUI", file_display),
-                    Style::default().fg(Color::DarkGray),
-                ));
-                frame.render_widget(Paragraph::new(status), rows[1]);
-            })?;
-            needs_draw = false;
-        }
-
-        // Check for PTY or preview updates
-        if pty_has_data.swap(false, Ordering::Relaxed) {
-            needs_draw = true;
-        }
-        if preview_changed.swap(false, Ordering::Relaxed) {
-            needs_draw = true;
-        }
+            // Status bar
+            let status = Line::from(Span::styled(
+                format!(" {} | DevTUI", file_display),
+                Style::default().fg(Color::DarkGray),
+            ));
+            frame.render_widget(Paragraph::new(status), rows[1]);
+        })?;
 
         // Poll for keyboard/resize events
-        if event::poll(Duration::from_millis(50))? {
+        if event::poll(Duration::from_millis(30))? {
             match event::read()? {
                 Event::Key(key) => {
                     if let Some(bytes) = key_to_bytes(key.code, key.modifiers) {
@@ -300,7 +302,6 @@ fn run_loop(
                         }
                         let _ = pty_writer.flush();
                     }
-                    needs_draw = true;
                 }
                 Event::Resize(width, height) => {
                     let new_cols = (width / 2).saturating_sub(2);
@@ -314,7 +315,6 @@ fn run_loop(
                     if let Ok(mut p) = parser.write() {
                         p.set_size(new_rows, new_cols);
                     }
-                    needs_draw = true;
                 }
                 _ => {}
             }

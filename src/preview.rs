@@ -4,16 +4,33 @@ use ratatui::{
     text::{Line, Span},
 };
 
-pub fn render(content: &str) -> Vec<Line<'_>> {
+/// Returns (rendered_lines, source_to_rendered_offset).
+/// source_to_rendered_offset[i] = how many rendered lines exist before source line i.
+pub fn render_with_offsets(content: &str) -> (Vec<Line<'_>>, Vec<u16>) {
+    let source_line_count = content.lines().count().max(1);
+    let mut source_to_rendered: Vec<u16> = vec![0; source_line_count + 1];
+
     let options =
         Options::ENABLE_STRIKETHROUGH | Options::ENABLE_TABLES | Options::ENABLE_FOOTNOTES;
 
-    let parser = Parser::new_ext(content, options);
+    let parser = Parser::new_ext(content, options).into_offset_iter();
     let mut lines: Vec<Line> = Vec::new();
     let mut spans: Vec<Span> = Vec::new();
     let mut style_stack: Vec<Style> = vec![Style::default()];
+    let mut current_source_line: usize = 0;
 
-    for event in parser {
+    for (event, range) in parser {
+        // Track which source line this event comes from
+        let byte_offset = range.start;
+        let src_line = content[..byte_offset].matches('\n').count();
+        if src_line != current_source_line {
+            // Record rendered line count at each source line boundary
+            for sl in (current_source_line + 1)..=src_line.min(source_line_count) {
+                source_to_rendered[sl] = lines.len() as u16;
+            }
+            current_source_line = src_line;
+        }
+
         match event {
             Event::Start(tag) => {
                 let style = style_for_tag(&tag, &mut spans);
@@ -52,6 +69,11 @@ pub fn render(content: &str) -> Vec<Line<'_>> {
         lines.push(Line::from(spans));
     }
 
+    // Fill remaining source lines
+    for sl in (current_source_line + 1)..=source_line_count {
+        source_to_rendered[sl] = lines.len() as u16;
+    }
+
     if lines.is_empty() {
         lines.push(Line::from(Span::styled(
             "Start typing...",
@@ -59,8 +81,9 @@ pub fn render(content: &str) -> Vec<Line<'_>> {
         )));
     }
 
-    lines
+    (lines, source_to_rendered)
 }
+
 
 fn style_for_tag<'a>(tag: &Tag<'a>, spans: &mut Vec<Span<'a>>) -> Style {
     match tag {
