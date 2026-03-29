@@ -315,9 +315,9 @@ EOF
   [[ "$result" == *"<title>AI &amp; Ruby</title>"* ]]
 }
 
-@test "rss_item: escapes special chars in description" {
+@test "rss_item: wraps description in CDATA" {
   result="$(rss_item "Post" "https://test.com/post.html" "A <b>bold</b> & \"quoted\"" "2026-03-29")"
-  [[ "$result" == *"<description>A &lt;b&gt;bold&lt;/b&gt; &amp; &quot;quoted&quot;</description>"* ]]
+  [[ "$result" == *'<description><![CDATA[A <b>bold</b> & "quoted"]]></description>'* ]]
 }
 
 # --- excerpt ---

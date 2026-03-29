@@ -13,10 +13,10 @@ alwaysApply: false
 make test
 
 # rust only
-cargo test                              # all tests
+make editor.test                        # all tests
 cargo test editor::tests                # single module
 cargo test editor::tests::inserts_char  # single test
-cargo clippy -- -D warnings            # lint check
+make editor.lint                        # lint check
 
 # engine only (bats)
 bats engine/tests/                      # all engine tests

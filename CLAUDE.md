@@ -88,24 +88,26 @@ Generated per blog: article HTMLs, index.html, 404.html, sitemap.xml, robots.txt
 
 ## Commands
 
-```bash
-# Editor
-cargo run -- file.md           # run editor
-cargo build --release          # release build
-cargo test                     # 26 preview tests
-cargo clippy -- -D warnings    # lint
+Makefile is split into `mk/editor.mk` and `mk/blog.mk`, included from the root Makefile.
 
-# Engine
-make help                      # all targets
-make test                      # cargo + bats (75 tests)
+```bash
+# Editor (mk/editor.mk)
+make editor.run FILE=file.md   # run editor
+make editor.build              # release build
+make editor.test               # 26 preview tests
+make editor.lint               # clippy
+
+# Blog (mk/blog.mk)
 make blog.list                 # list blogs
 make blog.build                # build all blogs
 make blog.build.<name>         # build one blog
 make blog.serve.<name>         # build and serve on localhost:8000
 make blog.clean                # remove dist/
+make deploy.git.<name>         # build, copy to repo
 
-# Deploy
-make deploy.git.<name>         # build, copy to repo and commit
+# All
+make help                      # all targets
+make test                      # cargo + bats
 ```
 
 ## How the Editor Works

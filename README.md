@@ -7,7 +7,7 @@ Terminal markdown editor with live preview + multi-site static blog engine.
 Embeds vim via PTY with real-time markdown preview. Left pane is full vim. Right pane renders the markdown as you type.
 
 ```bash
-cargo build --release
+make editor.build
 ./target/release/devtui mypost.md
 ```
 
@@ -18,6 +18,12 @@ All vim keybindings work. `Ctrl+D`/`Ctrl+U` for half-page scroll, `G`/`gg` for t
 ## Blog Engine
 
 Multi-site static blog generator. See [docs/BLOG_ENGINE.md](docs/BLOG_ENGINE.md) for full documentation.
+
+### Showcase
+
+[![leandronsp.com](assets/showcase-leandronsp.png)](https://leandronsp.com)
+
+[leandronsp.com](https://leandronsp.com) -- built with DevTUI's blog engine using the `paper` theme.
 
 ## Development
 
