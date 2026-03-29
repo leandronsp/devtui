@@ -46,4 +46,5 @@
 <main>
 <h1 class="site-title">$title$</h1>
 <p class="site-subtitle">$subtitle$</p>
+<input type="text" class="search-input" placeholder="search articles..." oninput="let q=this.value.toLowerCase();document.querySelectorAll('.post-list li').forEach(li=>li.style.display=li.textContent.toLowerCase().includes(q)?'':'none')">
 <ul class="post-list">

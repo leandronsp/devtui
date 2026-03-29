@@ -70,13 +70,22 @@ template_sub "$INDEX_TPL" \
   lang "$LANG" \
   > "$DIST_DIR/index.html"
 
-for md in $(ls -r "$POSTS_DIR"/*.md 2>/dev/null); do
-  post_title="$(frontmatter title "$md")"
+# Build sorted post list (newest first by date field)
+SORTED_POSTS=""
+for md in "$POSTS_DIR"/*.md; do
+  [ -f "$md" ] || continue
   post_date="$(frontmatter "$DATE_FIELD" "$md")"
+  SORTED_POSTS="$SORTED_POSTS$post_date	$md
+"
+done
+
+echo "$SORTED_POSTS" | sort -r | while IFS=$'\t' read -r post_date md; do
+  [ -z "$md" ] && continue
+  post_title="$(frontmatter title "$md")"
   post_desc="$(frontmatter description "$md")"
   slug="$(basename "$md" .md)"
-  echo "<li><time datetime=\"$post_date\">$post_date</time><a href=\"$slug.html\">$post_title</a><p class=\"post-desc\">$post_desc</p></li>" >> "$DIST_DIR/index.html"
-done
+  echo "<li><time datetime=\"$post_date\">$post_date</time><a href=\"$slug.html\">$post_title</a><p class=\"post-desc\">$post_desc</p></li>"
+done >> "$DIST_DIR/index.html"
 
 echo '</ul></main></body></html>' >> "$DIST_DIR/index.html"
 echo "  built index.html"
