@@ -24,7 +24,7 @@ body {
 
 header {
   padding: 2rem 2rem 0;
-  max-width: 720px;
+  max-width: 860px;
   margin: 0 auto;
 }
 
@@ -39,13 +39,13 @@ header nav a {
 header nav a:hover { color: var(--accent); }
 
 main {
-  max-width: 720px;
+  max-width: 860px;
   margin: 0 auto;
   padding: 2rem;
 }
 
 footer {
-  max-width: 720px;
+  max-width: 860px;
   margin: 0 auto;
   padding: 0 2rem 4rem;
 }
