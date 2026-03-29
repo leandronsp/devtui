@@ -1,11 +1,43 @@
 <!DOCTYPE html>
-<html lang="en">
+<html lang="$lang$">
 <head>
   <meta charset="utf-8">
   <meta name="viewport" content="width=device-width, initial-scale=1">
   <title>$title$ - $site-title$</title>
   <meta name="description" content="$if(description)$$description$$endif$">
+  <meta name="author" content="$site-author$">
+  <link rel="canonical" href="$site-url$/$slug$.html">
+
+  <!-- Open Graph -->
+  <meta property="og:type" content="article">
+  <meta property="og:title" content="$title$">
+  <meta property="og:description" content="$if(description)$$description$$endif$">
+  <meta property="og:url" content="$site-url$/$slug$.html">
+  <meta property="og:site_name" content="$site-title$">
+$if(date)$
+  <meta property="article:published_time" content="$date$">
+$endif$
+
+  <!-- Twitter -->
+  <meta name="twitter:card" content="summary">
+  <meta name="twitter:title" content="$title$">
+  <meta name="twitter:description" content="$if(description)$$description$$endif$">
+
   <link rel="stylesheet" href="style.css">
+
+  <!-- JSON-LD -->
+  <script type="application/ld+json">
+  {
+    "@context": "https://schema.org",
+    "@type": "BlogPosting",
+    "headline": "$title$",
+    "description": "$if(description)$$description$$endif$",
+    "datePublished": "$if(date)$$date$$endif$",
+    "author": { "@type": "Person", "name": "$site-author$" },
+    "publisher": { "@type": "Person", "name": "$site-author$" },
+    "url": "$site-url$/$slug$.html"
+  }
+  </script>
 </head>
 <body>
   <script>document.documentElement.dataset.theme=localStorage.getItem('theme')||'dark'</script>
@@ -19,7 +51,7 @@
     <article>
       <div class="article-header">
         <h1>$title$</h1>
-        <time>$date$</time>
+        <time datetime="$if(date)$$date$$endif$">$if(date)$$date$$endif$</time>
       </div>
       $body$
     </article>

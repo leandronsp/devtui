@@ -1,9 +1,40 @@
 <!DOCTYPE html>
-<html lang="en"><head>
-<meta charset="utf-8"><meta name="viewport" content="width=device-width, initial-scale=1">
+<html lang="$lang$">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
 <title>$title$</title>
+<meta name="description" content="$subtitle$">
+<meta name="author" content="$author$">
+<link rel="canonical" href="$url$/">
+
+<!-- Open Graph -->
+<meta property="og:type" content="website">
+<meta property="og:title" content="$title$">
+<meta property="og:description" content="$subtitle$">
+<meta property="og:url" content="$url$/">
+<meta property="og:site_name" content="$title$">
+
+<!-- Twitter -->
+<meta name="twitter:card" content="summary">
+<meta name="twitter:title" content="$title$">
+<meta name="twitter:description" content="$subtitle$">
+
 <link rel="stylesheet" href="style.css">
-</head><body>
+
+<!-- JSON-LD -->
+<script type="application/ld+json">
+{
+  "@context": "https://schema.org",
+  "@type": "Blog",
+  "name": "$title$",
+  "description": "$subtitle$",
+  "url": "$url$/",
+  "author": { "@type": "Person", "name": "$author$" }
+}
+</script>
+</head>
+<body>
 <script>document.documentElement.dataset.theme=localStorage.getItem('theme')||'dark'</script>
 <header>
 <nav></nav>
@@ -12,6 +43,6 @@
 </button>
 </header>
 <main>
-<p class="site-title">$title$</p>
+<h1 class="site-title">$title$</h1>
 <p class="site-subtitle">$subtitle$</p>
 <ul class="post-list">

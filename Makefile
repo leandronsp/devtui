@@ -1,9 +1,13 @@
 BLOGS := $(notdir $(wildcard blogs/*))
 
-.PHONY: help blog.list blog.build blog.clean
+.PHONY: help test blog.list blog.build blog.clean
 
 help: ## Show available targets
 	@grep -E '^[a-zA-Z._%-]+:.*##' Makefile | awk -F ':.*## ' '{printf "  \033[36m%-28s\033[0m %s\n", $$1, $$2}'
+
+test: ## Run all tests (cargo + bats)
+	@cargo test
+	@bats tests/
 
 blog.list: ## List available blogs
 	@for b in $(BLOGS); do echo "  $$b"; done

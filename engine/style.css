@@ -76,9 +76,10 @@ footer a:hover { color: var(--accent); }
 
 /* Index page */
 
-.site-title {
+h1.site-title {
   font-family: var(--mono);
   font-size: 1.1rem;
+  font-weight: 400;
   color: var(--green);
   margin-bottom: 0.25rem;
 }
