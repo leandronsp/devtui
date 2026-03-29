@@ -1,6 +1,6 @@
 # DevTUI
 
-Terminal markdown editor with live preview + static blog generator.
+Terminal markdown editor with live preview + multi-site static blog engine.
 
 ## Editor
 
@@ -15,38 +15,72 @@ Position sync uses vim's `titlestring` (zero file I/O). Content sync debounced v
 
 All vim keybindings work. `Ctrl+D`/`Ctrl+U` for half-page scroll, `G`/`gg` for top/bottom, `:w` to save, `:q` to quit.
 
-## Blog
+## Blog Engine
 
-Static site generator for [leandronsp.com](https://leandronsp.com). Converts markdown to HTML via pandoc.
+Generic static site generator. Supports multiple blogs, each with its own config, posts, and optional template/style overrides.
 
 ```bash
-make blog.build   # build all posts to blog/
-make blog.serve   # build and serve on localhost:8000
-make blog.clean   # remove blog/
+make blog.list                     # list available blogs
+make blog.build                    # build all blogs
+make blog.build.acme-alchemist     # build one blog
+make blog.serve.acme-alchemist     # build and serve on localhost:8000
+make blog.clean                    # remove all generated files
 ```
 
-### Adding a post
+### Setting up a blog
 
-Create `posts/YYYY-MM-DD-slug.md` with frontmatter:
+Create a directory in `blogs/` (gitignored) with a `blog.toml` and `posts/`:
 
-```yaml
----
-title: Post Title
-date: 2026-03-29
-description: Short description
----
+```
+blogs/my-site/
+  blog.toml
+  posts/
+    2026-03-29-my-post.md
 ```
 
-Code blocks get syntax highlighting for 140+ languages automatically.
+`blog.toml`:
 
-### Themes
+```toml
+title = "My Site"
+subtitle = "a blog about things"
+url = "https://my-site.com"
+author = "Your Name"
+date_field = "date"
+lang = "en"
+```
 
-Dark (default) and light (solarized pastel). Toggle in the top-right corner, persists in localStorage.
+Posts use YAML frontmatter with `title`, `date` (or whatever `date_field` is), and `description`.
+
+For external repos (like leandronsp.com), symlink into `blogs/`:
+
+```bash
+ln -s ../../leandronsp.com blogs/leandronsp.com
+```
+
+### Output per blog
+
+Each blog generates into `dist/<blog-name>/`:
+
+- Article HTML pages with SEO meta tags
+- `index.html` with article listing
+- `style.css` (dark/light theme toggle)
+- `sitemap.xml`
+- `robots.txt`
+- `feed.xml` (RSS)
+
+### Template overrides
+
+Blogs can override default templates and CSS by placing files in their own directory:
+
+- `blogs/my-site/templates/article.html` overrides `engine/templates/article.html`
+- `blogs/my-site/style.css` overrides `engine/style.css`
 
 ## Development
 
 ```bash
+make test                     # cargo tests + bats engine tests (76 total)
 cargo test                    # 26 preview rendering tests
+bats engine/tests/            # 50 engine tests (unit + integration)
 cargo clippy -- -D warnings   # lint
 ```
 
@@ -56,3 +90,4 @@ cargo clippy -- -D warnings   # lint
 - [portable-pty](https://docs.rs/portable-pty) + [vt100](https://docs.rs/vt100) + [tui-term](https://docs.rs/tui-term) — Vim PTY embedding
 - [pulldown-cmark](https://github.com/raphlinus/pulldown-cmark) — Markdown parsing
 - [pandoc](https://pandoc.org/) — Blog HTML generation
+- [bats](https://github.com/bats-core/bats-core) — Engine shell tests
