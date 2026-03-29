@@ -31,7 +31,7 @@ for md in "$POSTS_DIR"/*.md; do
   post_desc="$(frontmatter description "$md")"
 
   # Pipe body only (skip frontmatter) to avoid pandoc parsing --- as YAML
-  post_body "$md" | pandoc --from markdown-yaml_metadata_block -o "$DIST_DIR/$slug.html" \
+  post_body "$md" | pandoc --from markdown-yaml_metadata_block-tex_math_dollars -o "$DIST_DIR/$slug.html" \
     --template="$ARTICLE_TPL" \
     --highlight-style=breezedark \
     --metadata "title=$post_title" \
