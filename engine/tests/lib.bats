@@ -1,7 +1,7 @@
 #!/usr/bin/env bats
 
 setup() {
-  source "$BATS_TEST_DIRNAME/../engine/lib.sh"
+  source "$BATS_TEST_DIRNAME/../lib.sh"
   FIXTURES="$BATS_TEST_DIRNAME/fixtures"
   mkdir -p "$FIXTURES"
 

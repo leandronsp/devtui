@@ -7,7 +7,7 @@ help: ## Show available targets
 
 test: ## Run all tests (cargo + bats)
 	@cargo test
-	@bats tests/
+	@bats engine/tests/
 
 blog.list: ## List available blogs
 	@for b in $(BLOGS); do echo "  $$b"; done

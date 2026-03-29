@@ -1,0 +1,6 @@
+title = "Test Blog"
+subtitle = "a test subtitle"
+url = "https://test.com"
+author = "Test Author"
+date_field = "date"
+lang = "en"

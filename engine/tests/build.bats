@@ -3,7 +3,7 @@
 setup() {
   FIXTURES="$BATS_TEST_DIRNAME/fixtures"
   DIST="$BATS_TEST_DIRNAME/fixtures/dist"
-  ENGINE="$BATS_TEST_DIRNAME/../engine"
+  ENGINE="$BATS_TEST_DIRNAME/.."
   BLOG="$FIXTURES/test-blog"
 
   mkdir -p "$BLOG/posts"
