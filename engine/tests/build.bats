@@ -352,3 +352,60 @@ EOF
   grep -q 'data-emoji="wave"' "$DIST/2026-01-06-emoji.html"
   grep -q 'data-emoji="bulb"' "$DIST/2026-01-06-emoji.html"
 }
+
+# --- list preprocessing (dev.to import fix) ---
+
+@test "build: renders list items without preceding blank line" {
+  cat > "$BLOG/posts/2026-01-07-list.md" << 'EOF'
+---
+title: List Test
+date: 2026-01-07
+description: Testing lists
+---
+
+Some text:
+* item one
+* item two
+* item three
+EOF
+
+  run "$ENGINE/build.sh" "$BLOG" "$DIST"
+  [ "$status" -eq 0 ]
+  grep -q '<li>' "$DIST/2026-01-07-list.html"
+  ! grep -q '* item one' "$DIST/2026-01-07-list.html"
+}
+
+@test "build: renders dash lists without preceding blank line" {
+  cat > "$BLOG/posts/2026-01-08-dashlist.md" << 'EOF'
+---
+title: Dash List Test
+date: 2026-01-08
+description: Testing dash lists
+---
+
+Features:
+- feature one
+- feature two
+EOF
+
+  run "$ENGINE/build.sh" "$BLOG" "$DIST"
+  [ "$status" -eq 0 ]
+  grep -q '<li>' "$DIST/2026-01-08-dashlist.html"
+}
+
+@test "build: renders blockquote without preceding blank line" {
+  cat > "$BLOG/posts/2026-01-09-quote.md" << 'EOF'
+---
+title: Quote Test
+date: 2026-01-09
+description: Testing blockquotes
+---
+
+Some context:
+> This is a quote
+EOF
+
+  run "$ENGINE/build.sh" "$BLOG" "$DIST"
+  [ "$status" -eq 0 ]
+  grep -q '<blockquote>' "$DIST/2026-01-09-quote.html"
+}

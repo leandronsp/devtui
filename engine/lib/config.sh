@@ -27,9 +27,18 @@ frontmatter_date() {
 }
 
 # Extract post body (everything after the closing --- of frontmatter)
+# Also fixes lists without preceding blank lines (common in dev.to imports)
 post_body() {
   local file="$1"
-  awk 'BEGIN{n=0} /^---$/{n++; if(n==2){found=1; next}} found{print}' "$file"
+  awk 'BEGIN{n=0} /^---$/{n++; if(n==2){found=1; next}} found{print}' "$file" \
+    | python3 -c "
+import sys, re
+t = sys.stdin.read()
+t = re.sub(r'([^\n])\n(\* )', r'\1\n\n\2', t)
+t = re.sub(r'([^\n])\n(- )', r'\1\n\n\2', t)
+t = re.sub(r'([^\n])\n(> )', r'\1\n\n\2', t)
+sys.stdout.write(t)
+"
 }
 
 # Extract a text snippet from the post body (first ~300 chars, no markdown)
