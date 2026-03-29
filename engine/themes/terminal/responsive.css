@@ -4,7 +4,8 @@
   .tag-filter { display: none; }
   .menu-toggle { display: inline-block; }
   .mobile-menu.open { display: block; }
-  .filter-bar { justify-content: space-between; }
+  .filter-bar { justify-content: flex-end; }
+  .lang-filter { display: none; }
   .post-list a { font-size: 0.95rem; }
   .post-list .post-desc { -webkit-line-clamp: 3; }
   body { font-size: 15px; }

@@ -48,17 +48,34 @@
 <h1 class="site-title">$title$</h1>
 <p class="site-subtitle">$subtitle$</p>
 <div class="tag-filter"></div>
-<input type="text" class="search-input" placeholder="search articles..." oninput="filterPosts()">
+<div class="search-wrap">
+<input type="text" class="search-input" placeholder="search articles..." oninput="filterPosts();this.parentNode.querySelector('.search-clear').style.display=this.value?'block':'none'">
+<button class="search-clear" style="display:none" onclick="var i=this.parentNode.querySelector('.search-input');i.value='';this.style.display='none';filterPosts();i.focus()">&times;</button>
+</div>
 <div class="filter-bar">
-<button class="menu-toggle" onclick="document.querySelector('.mobile-menu').classList.toggle('open')">&#9776;</button>
 <div class="lang-filter">
 <button class="lang-btn active" data-lang="all">all</button>
 <button class="lang-btn" data-lang="en">en</button>
 <button class="lang-btn" data-lang="pt">pt</button>
 </div>
+<button class="menu-toggle" onclick="document.querySelector('.mobile-menu').classList.toggle('open')">&#9776;</button>
 </div>
 <div class="mobile-menu">
-<div class="mobile-guides"></div>
-<div class="mobile-tags"></div>
+<div class="mobile-section">
+<span class="mobile-label">language</span>
+<div class="mobile-pills">
+<button class="lang-btn pill active" data-lang="all">all</button>
+<button class="lang-btn pill" data-lang="pt">pt</button>
+<button class="lang-btn pill" data-lang="en">en</button>
+</div>
+</div>
+<div class="mobile-section">
+<span class="mobile-label">tags</span>
+<div class="mobile-pills mobile-tags"></div>
+</div>
+<div class="mobile-section mobile-guides-section">
+<span class="mobile-label">guides</span>
+<div class="mobile-pills mobile-guides"></div>
+</div>
 </div>
 <ul class="post-list">

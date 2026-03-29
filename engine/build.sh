@@ -139,7 +139,7 @@ if [ -n "$GUIDES_HTML" ]; then
   python3 -c "
 import sys
 html = open(sys.argv[1]).read()
-html = html.replace('<div class=\"mobile-guides\"></div>', '<div class=\"mobile-guides\">' + sys.argv[2] + '</div>', 1)
+html = html.replace('<div class=\"mobile-pills mobile-guides\"></div>', '<div class=\"mobile-pills mobile-guides\">' + sys.argv[2] + '</div>', 1)
 with open(sys.argv[1], 'w') as f: f.write(html)
 " "$DIST_DIR/index.html" "$GUIDES_HTML"
 fi
@@ -147,7 +147,7 @@ if [ -n "$TAGS_HTML" ]; then
   python3 -c "
 import sys
 html = open(sys.argv[1]).read()
-html = html.replace('<div class=\"mobile-tags\"></div>', '<div class=\"mobile-tags\">' + sys.argv[2] + '</div>', 1)
+html = html.replace('<div class=\"mobile-pills mobile-tags\"></div>', '<div class=\"mobile-pills mobile-tags\">' + sys.argv[2] + '</div>', 1)
 with open(sys.argv[1], 'w') as f: f.write(html)
 " "$DIST_DIR/index.html" "$TAGS_HTML"
 fi
@@ -205,7 +205,7 @@ function bindFilter(sel,cls,cb){
     };
   });
 }
-bindFilter('.lang-filter','lang-btn',function(d){activeLang=d.lang});
+bindFilter('.lang-filter,.mobile-menu .mobile-pills','lang-btn',function(d){activeLang=d.lang});
 bindFilter('.tag-filter,.mobile-tags','tag-btn',function(d){activeTag=d.tag});
 function filterPosts(){
   var q=document.querySelector('.search-input').value.toLowerCase();

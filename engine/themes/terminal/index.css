@@ -55,10 +55,30 @@ h1.site-title {
 }
 
 /* Search */
+.search-wrap {
+  position: relative;
+  margin-bottom: 0.4rem;
+}
+
+.search-clear {
+  position: absolute;
+  right: 0.5rem;
+  top: 50%;
+  transform: translateY(-50%);
+  background: none;
+  border: none;
+  color: var(--text-dim);
+  font-size: 1.1rem;
+  cursor: pointer;
+  padding: 0 0.3rem;
+  line-height: 1;
+}
+
+.search-clear:hover { color: var(--text-bright); }
+
 .search-input {
   width: 100%;
-  padding: 0.6rem 0.8rem;
-  margin-bottom: 0.4rem;
+  padding: 0.6rem 2rem 0.6rem 0.8rem;
   font-family: var(--mono);
   font-size: 0.85rem;
   background: var(--bg-surface);
@@ -147,40 +167,74 @@ h1.site-title {
 
 .menu-toggle:hover { color: var(--accent); border-color: var(--accent); }
 
-/* Mobile menu (hidden by default, only opens on mobile via .open) */
+/* Mobile menu (popover, hidden by default) */
 .mobile-menu {
   display: none;
-  padding: 0.5rem 0 0;
-  margin-bottom: 0.5rem;
+  background: var(--bg-surface);
+  border: 1px solid var(--border);
+  border-radius: 8px;
+  padding: 1rem;
+  margin-bottom: 1rem;
 }
+
+.mobile-section { margin-bottom: 0.75rem; }
+.mobile-section:last-child { margin-bottom: 0; }
+
+.mobile-label {
+  display: block;
+  font-family: var(--mono);
+  font-size: 0.7rem;
+  color: var(--text-dim);
+  text-transform: uppercase;
+  letter-spacing: 0.5px;
+  margin-bottom: 0.4rem;
+}
+
+.mobile-pills {
+  display: flex;
+  gap: 0.35rem;
+  flex-wrap: wrap;
+}
+
+.pill {
+  background: var(--bg);
+  border: 1px solid var(--border);
+  color: var(--text-dim);
+  font-family: var(--mono);
+  font-size: 0.75rem;
+  padding: 0.25rem 0.6rem;
+  border-radius: 99px;
+  cursor: pointer;
+}
+
+.pill:hover { color: var(--text-bright); border-color: var(--text-dim); }
+.pill.active { background: var(--accent); color: var(--bg); border-color: var(--accent); }
 
 .mobile-menu .guides::before { display: none; }
-
-.mobile-guides,
-.mobile-tags {
-  display: flex;
-  gap: 0.5rem;
-  flex-wrap: wrap;
-  align-items: center;
-  font-family: var(--mono);
-  font-size: 0.8rem;
-  padding: 0.4rem 0;
-}
-
-.mobile-guides { border-bottom: 1px solid var(--border); }
-
+.mobile-menu .guides { display: contents; }
 .mobile-menu .guide-badge {
-  border: none;
-  padding: 0;
-  font-size: 0.8rem;
+  background: var(--bg);
+  border: 1px solid var(--border);
+  font-size: 0.75rem;
+  padding: 0.25rem 0.6rem;
+  border-radius: 99px;
 }
-.mobile-menu .guide-badge:hover { background: none; }
-.mobile-menu .sep { display: inline; }
+.mobile-menu .guide-badge:hover { border-color: var(--accent); }
+.mobile-menu .sep { display: none; }
 
-.mobile-menu .tag-btn {
-  font-size: 0.8rem;
-  padding: 0;
-  border-bottom: none;
+.mobile-pills .tag-btn {
+  background: var(--bg);
+  border: 1px solid var(--border);
+  border-bottom: 1px solid var(--border);
+  border-radius: 99px;
+  padding: 0.25rem 0.6rem;
+  font-size: 0.75rem;
+}
+
+.mobile-pills .tag-btn.active {
+  background: var(--accent);
+  color: var(--bg);
+  border-color: var(--accent);
 }
 
 /* Post list */
