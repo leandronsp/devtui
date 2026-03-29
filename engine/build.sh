@@ -51,6 +51,14 @@ done
 # Copy style
 cp "$(resolve_file style.css "$BLOG_DIR" "$ENGINE_DIR")" "$DIST_DIR/style.css"
 
+# Copy static assets (uploads, images, etc.)
+for dir in uploads images assets; do
+  if [ -d "$BLOG_DIR/$dir" ]; then
+    cp -r "$BLOG_DIR/$dir" "$DIST_DIR/$dir"
+    echo "  copied $dir/"
+  fi
+done
+
 # Build index
 # Build index from template with variable substitution
 INDEX_TPL="$(resolve_file index_header.html "$BLOG_DIR/templates" "$ENGINE_DIR/templates")"
