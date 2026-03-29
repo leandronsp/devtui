@@ -24,16 +24,7 @@ $(BUILD)/style.css: $(STYLE)
 blog.index: $(ARTICLES)
 	@mkdir -p $(BUILD)
 	@{ \
-	echo '<!DOCTYPE html>'; \
-	echo '<html lang="en"><head>'; \
-	echo '<meta charset="utf-8"><meta name="viewport" content="width=device-width, initial-scale=1">'; \
-	echo '<title>leandronsp.com</title>'; \
-	echo '<link rel="stylesheet" href="style.css">'; \
-	echo '</head><body>'; \
-	echo '<main>'; \
-	echo '<p class="site-title">leandronsp.com</p>'; \
-	echo '<p class="site-subtitle">software engineering, terminal life, and clean code</p>'; \
-	echo '<ul class="post-list">'; \
+	cat templates/index_header.html; \
 	for f in $$(ls -r posts/*.md); do \
 		title=$$(grep '^title:' $$f | sed 's/^title: *//'); \
 		date=$$(grep '^date:' $$f | sed 's/^date: *//'); \

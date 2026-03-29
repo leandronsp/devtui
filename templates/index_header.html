@@ -1,0 +1,15 @@
+<!DOCTYPE html>
+<html lang="en"><head>
+<meta charset="utf-8"><meta name="viewport" content="width=device-width, initial-scale=1">
+<title>leandronsp.com</title>
+<link rel="stylesheet" href="style.css">
+</head><body>
+<script>document.documentElement.dataset.theme=localStorage.getItem('theme')||'dark'</script>
+<header>
+<nav><a href="index.html">leandronsp.com</a></nav>
+<button class="theme-toggle" onclick="let t=document.documentElement.dataset.theme==='dark'?'light':'dark';document.documentElement.dataset.theme=t;localStorage.setItem('theme',t)">theme</button>
+</header>
+<main>
+<p class="site-title">leandronsp.com</p>
+<p class="site-subtitle">software engineering, terminal life, and clean code</p>
+<ul class="post-list">

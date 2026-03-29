@@ -4,11 +4,23 @@
   --text: #c9d1d9;
   --text-bright: #e6edf3;
   --text-dim: #7d8590;
-  --accent: #58a6ff;
-  --accent-hover: #79b8ff;
+  --accent: #2f81f7;
+  --accent-hover: #58a6ff;
   --border: #30363d;
   --green: #3fb950;
   --mono: 'JetBrains Mono', 'Fira Code', 'SF Mono', 'Cascadia Code', monospace;
+}
+
+[data-theme="light"] {
+  --bg: #fdf6e3;
+  --bg-surface: #eee8d5;
+  --text: #586e75;
+  --text-bright: #073642;
+  --text-dim: #93a1a1;
+  --accent: #268bd2;
+  --accent-hover: #1a6aa5;
+  --border: #d3cbb7;
+  --green: #859900;
 }
 
 * { margin: 0; padding: 0; box-sizing: border-box; }
@@ -23,6 +35,9 @@ body {
 }
 
 header {
+  display: flex;
+  justify-content: space-between;
+  align-items: center;
   padding: 2rem 2rem 0;
   max-width: 860px;
   margin: 0 auto;
@@ -257,6 +272,48 @@ code span.st { color: #f44f4f }
 code span.va { color: #27aeae }
 code span.vs { color: #da4453 }
 code span.wa { color: #da4453 }
+
+/* Light theme syntax (solarized) */
+[data-theme="light"] code span.kw { color: #859900; font-weight: bold }
+[data-theme="light"] code span.dt { color: #b58900 }
+[data-theme="light"] code span.dv { color: #d33682 }
+[data-theme="light"] code span.bn { color: #d33682 }
+[data-theme="light"] code span.fl { color: #d33682 }
+[data-theme="light"] code span.ch { color: #2aa198 }
+[data-theme="light"] code span.st { color: #2aa198 }
+[data-theme="light"] code span.co { color: #93a1a1 }
+[data-theme="light"] code span.ot { color: #cb4b16 }
+[data-theme="light"] code span.fu { color: #268bd2 }
+[data-theme="light"] code span.cf { color: #859900; font-weight: bold }
+[data-theme="light"] code span.op { color: #586e75 }
+[data-theme="light"] code span.va { color: #268bd2 }
+[data-theme="light"] code span.cn { color: #b58900; font-weight: bold }
+[data-theme="light"] code span.sc { color: #2aa198 }
+[data-theme="light"] code span.ss { color: #cb4b16 }
+[data-theme="light"] code span.vs { color: #2aa198 }
+[data-theme="light"] code span.im { color: #859900 }
+[data-theme="light"] code span.an { color: #93a1a1 }
+[data-theme="light"] code span.cv { color: #93a1a1 }
+[data-theme="light"] code span.at { color: #b58900 }
+[data-theme="light"] code span.er { color: #dc322f }
+[data-theme="light"] code span.al { color: #dc322f; font-weight: bold }
+[data-theme="light"] code span.pp { color: #cb4b16 }
+[data-theme="light"] code span.ex { color: #268bd2; font-weight: bold }
+[data-theme="light"] code span.bu { color: #586e75 }
+
+/* Theme toggle */
+.theme-toggle {
+  background: none;
+  border: 1px solid var(--border);
+  color: var(--text-dim);
+  font-family: var(--mono);
+  font-size: 0.75rem;
+  padding: 0.3em 0.6em;
+  border-radius: 4px;
+  cursor: pointer;
+}
+
+.theme-toggle:hover { color: var(--accent); border-color: var(--accent); }
 
 /* Pandoc line numbers */
 pre > code.sourceCode { white-space: pre; position: relative; }
