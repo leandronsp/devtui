@@ -173,6 +173,16 @@ article a {
 
 article a:hover { text-decoration: underline; }
 
+article img {
+  max-width: 100%;
+  height: auto;
+  border-radius: 6px;
+  margin: 1rem 0;
+  background: var(--bg-surface);
+  padding: 0.5rem;
+  border: 1px solid var(--border);
+}
+
 article strong { color: var(--text-bright); }
 
 article em { font-style: italic; }
