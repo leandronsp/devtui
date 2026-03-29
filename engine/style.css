@@ -24,7 +24,7 @@
 }
 
 * { margin: 0; padding: 0; box-sizing: border-box; }
-html { scroll-behavior: smooth; }
+html { scroll-behavior: smooth; overflow-x: hidden; }
 
 body {
   font-family: system-ui, -apple-system, sans-serif;
@@ -58,6 +58,8 @@ main {
   max-width: 860px;
   margin: 0 auto;
   padding: 1.5rem 1.25rem;
+  overflow-wrap: break-word;
+  word-break: break-word;
 }
 
 footer {
@@ -191,6 +193,7 @@ article p {
 article a {
   color: var(--accent);
   text-decoration: none;
+  word-break: break-all;
 }
 
 article a:hover { text-decoration: underline; }
@@ -350,5 +353,5 @@ code span.wa { color: #da4453 }
 
 /* Pandoc line numbers */
 pre > code.sourceCode { white-space: pre; position: relative; }
-div.sourceCode { overflow: auto; }
+div.sourceCode { overflow-x: auto; max-width: 100%; }
 a.sourceLine { display: inline-block; }
