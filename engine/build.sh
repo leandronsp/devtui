@@ -244,7 +244,7 @@ for md in "$POSTS_DIR"/*.md; do
   RSS_ITEMS="$RSS_ITEMS$post_date	$md
 "
 done
-echo "$RSS_ITEMS" | sort -rn | head -10 | while IFS='	' read -r post_date md; do
+echo "$RSS_ITEMS" | sort -rn | head -20 | while IFS='	' read -r post_date md; do
   [ -z "$md" ] && continue
   post_title="$(frontmatter title "$md")"
   post_desc="$(post_body "$md" | pandoc --from markdown-yaml_metadata_block-tex_math_dollars-simple_tables-multiline_tables+autolink_bare_uris --highlight-style=breezedark 2>/dev/null)"
