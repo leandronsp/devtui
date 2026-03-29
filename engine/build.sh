@@ -90,6 +90,27 @@ template_sub "$INDEX_TPL" \
   lang "$LANG" \
   > "$DIST_DIR/index.html"
 
+# Inject social links into header nav, guides before post list
+if [ -f "$BLOG_DIR/links.txt" ]; then
+  LINKS_HTML="$(render_links "$BLOG_DIR/links.txt")"
+  python3 -c "
+import sys
+html = open(sys.argv[1]).read()
+html = html.replace('<nav></nav>', '<nav>' + sys.argv[2] + '</nav>', 1)
+with open(sys.argv[1], 'w') as f: f.write(html)
+" "$DIST_DIR/index.html" "$LINKS_HTML"
+fi
+
+if [ -f "$BLOG_DIR/guides.txt" ]; then
+  GUIDES_HTML="$(render_guides "$BLOG_DIR/guides.txt")"
+  python3 -c "
+import sys
+html = open(sys.argv[1]).read()
+html = html.replace('<ul class=\"post-list\">', sys.argv[2] + '<ul class=\"post-list\">', 1)
+with open(sys.argv[1], 'w') as f: f.write(html)
+" "$DIST_DIR/index.html" "$GUIDES_HTML"
+fi
+
 # Build sorted post list (newest first by date field)
 SORTED_POSTS=""
 for md in "$POSTS_DIR"/*.md; do

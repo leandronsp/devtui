@@ -382,3 +382,41 @@ EOF
   result="$(cat "$FIXTURES/page.html")"
   [[ "$result" == *"  keep   spaces  "* ]]
 }
+
+# --- render_links ---
+
+@test "render_links: generates nav with links" {
+  printf 'github|https://github.com/test\nlinkedin|https://linkedin.com/in/test\n' > "$FIXTURES/links.txt"
+  result="$(render_links "$FIXTURES/links.txt")"
+  [[ "$result" == *'<nav class="social-links">'* ]]
+  [[ "$result" == *'github'* ]]
+  [[ "$result" == *'linkedin'* ]]
+  [[ "$result" == *' · '* ]]
+}
+
+@test "render_links: returns nothing for missing file" {
+  result="$(render_links "$FIXTURES/nonexistent.txt")"
+  [[ -z "$result" ]]
+}
+
+@test "render_links: skips comments and blank lines" {
+  printf '# comment\n\ngithub|https://github.com\n' > "$FIXTURES/links.txt"
+  result="$(render_links "$FIXTURES/links.txt")"
+  [[ "$result" != *"comment"* ]]
+  [[ "$result" == *"github"* ]]
+}
+
+# --- render_guides ---
+
+@test "render_guides: generates badge list" {
+  printf 'Web 101|https://web101.example.com/\nAWS 101|https://aws101.example.com/\n' > "$FIXTURES/guides.txt"
+  result="$(render_guides "$FIXTURES/guides.txt")"
+  [[ "$result" == *'class="guide-badge"'* ]]
+  [[ "$result" == *'Web 101'* ]]
+  [[ "$result" == *'AWS 101'* ]]
+}
+
+@test "render_guides: returns nothing for missing file" {
+  result="$(render_guides "$FIXTURES/nonexistent.txt")"
+  [[ -z "$result" ]]
+}
