@@ -254,8 +254,17 @@ teardown() {
   [ "$count" -eq 1 ]
 }
 
-# --- style ---
+# --- minification ---
 
-@test "build: copies style.css" {
-  [ -f "$DIST/style.css" ]
+@test "build: inlines CSS into HTML (no external stylesheet)" {
+  ! [ -f "$DIST/style.css" ]
+  grep -q '<style>' "$DIST/index.html"
+}
+
+@test "build: minified HTML has no comments" {
+  ! grep -q '<!--' "$DIST/2026-01-01-hello.html"
+}
+
+@test "build: articles have inlined CSS" {
+  grep -q '<style>' "$DIST/2026-01-01-hello.html"
 }

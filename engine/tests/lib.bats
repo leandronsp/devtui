@@ -330,3 +330,55 @@ EOF
   result="$(template_sub "$FIXTURES/tpl.html" title "Replaced")"
   [[ "$result" == 'Replaced and $other$' ]]
 }
+
+# --- minify_css ---
+
+@test "minify_css: strips comments" {
+  echo '/* comment */ body { color: red; }' > "$FIXTURES/test.css"
+  result="$(minify_css "$FIXTURES/test.css")"
+  [[ "$result" != *"comment"* ]]
+  [[ "$result" == *"body{color:red}"* ]]
+}
+
+@test "minify_css: collapses whitespace" {
+  printf 'body {\n  color:  red;\n  font-size: 16px;\n}\n' > "$FIXTURES/test.css"
+  result="$(minify_css "$FIXTURES/test.css")"
+  [[ "$result" != *$'\n'* ]]
+  [[ "$result" == *"body{color:red;font-size:16px}"* ]]
+}
+
+# --- inline_css ---
+
+@test "inline_css: replaces link tag with style" {
+  echo '<html><head><link rel="stylesheet" href="style.css"></head><body>hi</body></html>' > "$FIXTURES/page.html"
+  echo 'body{color:red}' > "$FIXTURES/min.css"
+  inline_css "$FIXTURES/page.html" "$FIXTURES/min.css"
+  result="$(cat "$FIXTURES/page.html")"
+  [[ "$result" == *"<style>body{color:red}"* ]]
+  [[ "$result" == *"</style>"* ]]
+  [[ "$result" != *"<link"* ]]
+}
+
+# --- minify_html ---
+
+@test "minify_html: strips html comments" {
+  echo '<html><!-- comment --><body>hi</body></html>' > "$FIXTURES/page.html"
+  minify_html "$FIXTURES/page.html"
+  result="$(cat "$FIXTURES/page.html")"
+  [[ "$result" != *"comment"* ]]
+  [[ "$result" == *"hi"* ]]
+}
+
+@test "minify_html: collapses whitespace between tags" {
+  printf '<div>  \n  <p>text</p>  \n  </div>' > "$FIXTURES/page.html"
+  minify_html "$FIXTURES/page.html"
+  result="$(cat "$FIXTURES/page.html")"
+  [[ "$result" == *"<div><p>text</p></div>"* ]]
+}
+
+@test "minify_html: preserves pre content" {
+  echo '<html><pre>  keep   spaces  </pre><p>  collapse  </p></html>' > "$FIXTURES/page.html"
+  minify_html "$FIXTURES/page.html"
+  result="$(cat "$FIXTURES/page.html")"
+  [[ "$result" == *"  keep   spaces  "* ]]
+}

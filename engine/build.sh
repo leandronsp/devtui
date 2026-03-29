@@ -139,3 +139,16 @@ echo "  built feed.xml"
 # Generate robots.txt
 robots_txt "$SITE_URL" > "$DIST_DIR/robots.txt"
 echo "  built robots.txt"
+
+# Minify: inline CSS + compress HTML
+MINIFIED_CSS="$DIST_DIR/.min.css"
+minify_css "$DIST_DIR/style.css" > "$MINIFIED_CSS"
+
+for html in "$DIST_DIR"/*.html "$ARTICLES_DIR"/*.html; do
+  [ -f "$html" ] || continue
+  inline_css "$html" "$MINIFIED_CSS"
+  minify_html "$html"
+done
+
+rm -f "$MINIFIED_CSS" "$DIST_DIR/style.css"
+echo "  minified $(find "$DIST_DIR" -name '*.html' | wc -l | tr -d ' ') files"
