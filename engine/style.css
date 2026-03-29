@@ -194,7 +194,12 @@ article p {
 article a {
   color: var(--accent);
   text-decoration: none;
-  word-break: break-all;
+  overflow-wrap: break-word;
+  word-break: break-word;
+}
+
+article a:only-child {
+  font-size: 0.85rem;
 }
 
 article a:hover { text-decoration: underline; }
