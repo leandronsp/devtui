@@ -55,6 +55,21 @@ More text after horizontal rule.
 Final section.
 EOF
 
+  # Post with --- before heading (regression: was parsed as table border)
+  cat > "$BLOG/posts/2026-01-04-hr-heading.md" << 'EOF'
+---
+title: HR Before Heading
+date: 2026-01-04
+---
+
+Some text.
+
+---
+## Section After Rule
+
+Content in section.
+EOF
+
   run "$ENGINE/build.sh" "$BLOG" "$DIST"
   [ "$status" -eq 0 ]
 }
@@ -199,6 +214,16 @@ teardown() {
 
 @test "build: index includes post without description" {
   grep -q 'No Description Post' "$DIST/index.html"
+}
+
+# --- regression: --- before heading must not become table ---
+
+@test "build: heading after horizontal rule renders as h2" {
+  grep -q '<h2.*>Section After Rule</h2>' "$DIST/2026-01-04-hr-heading.html"
+}
+
+@test "build: heading after hr is not inside a table" {
+  ! grep -q '<th.*>.*Section After Rule' "$DIST/2026-01-04-hr-heading.html"
 }
 
 # --- style ---
