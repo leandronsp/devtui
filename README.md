@@ -28,34 +28,100 @@ make blog.clean                # remove all generated files
 make deploy.git.<name>         # build and rsync to blog repo
 ```
 
-### Setting up a blog
+### Getting started
 
-Create a directory in `blogs/` with a `blog.toml` and `posts/`:
+**1. Create your blog directory**
 
-```
-blogs/my-site/
-  blog.toml
-  posts/
-    2026-03-29-my-post.md
+```bash
+mkdir -p blogs/my-site/posts
 ```
 
-`blog.toml`:
+**2. Write your config**
 
 ```toml
+# blogs/my-site/blog.toml
+
+# required
 title = "My Site"
 subtitle = "a blog about things"
 url = "https://my-site.com"
 author = "Your Name"
 date_field = "date"
 lang = "en"
-theme = "paper"
+
+# optional
+theme = "paper"                    # "paper" (default) or "terminal"
+articles_path = "articles"         # URL prefix for articles (default: root)
+analytics_id = "G-XXXXXXXXXX"     # Google Analytics measurement ID
+license = "CC BY-SA 4.0"
+license_url = "https://creativecommons.org/licenses/by-sa/4.0/"
+tags = ["ruby", "rust", "docker"] # curated tags for index filter
+
+[[links]]                          # social links in header
+label = "github"
+url = "https://github.com/you"
+
+[[guides]]                         # guide badges in header
+title = "My Guide"
+url = "https://guide.my-site.com"
 ```
 
-Optional fields: `articles_path`, `analytics_id`, `license`, `license_url`, `tags`, `[[links]]`, `[[guides]]`.
+**3. Write a post**
 
-Posts use YAML frontmatter: `title`, the date field, `description`, `language`, `tags`.
+```markdown
+# blogs/my-site/posts/2026-03-29-hello-world.md
 
-### External repos
+---
+title: Hello World
+date: 2026-03-29
+description: My first post
+language: en
+tags: ["intro"]
+---
+
+Welcome to my blog.
+```
+
+**4. Build and preview**
+
+```bash
+make blog.build.my-site       # generates dist/my-site/
+make blog.serve.my-site       # serves on localhost:8000
+```
+
+**5. Deploy**
+
+For git-based deploys (Cloudflare Pages, GitHub Pages, Netlify):
+
+```bash
+make deploy.git.my-site       # rsync dist to blog repo
+cd ../my-site && git push     # auto-deploys via hosting provider
+```
+
+### Choosing a theme
+
+Set `theme` in `blog.toml`:
+
+| Theme | Style | Default mode | Best for |
+|-------|-------|-------------|----------|
+| **paper** | serif body, warm earthy tones, aged paper feel | light | long-form articles, readability |
+| **terminal** | monospace, CRT scanlines, `$` prompt, cursor blink | dark | technical blogs, dev audience |
+
+Both themes include dark/light toggle, mobile responsive popover, and identical SEO output.
+
+Themes are modular CSS in `engine/themes/<name>/`:
+
+```
+base.css        # variables, reset, layout
+index.css       # index page (search, filters, post list)
+article.css     # article page (headings, code, blockquotes)
+syntax.css      # code syntax highlighting colors
+responsive.css  # mobile breakpoints
+```
+
+To create a custom theme, copy an existing one and edit the CSS files.
+
+### Using external repos
 
 For blogs that live in their own git repo, symlink into `blogs/`:
 
@@ -67,93 +133,60 @@ blogs/leandronsp.com/
   uploads -> ../../../leandronsp.com/uploads
 ```
 
-### Themes
-
-Two built-in themes:
-
-- **paper** -- serif body, warm earthy palette, aged paper feel. Light default.
-- **terminal** -- monospace everything, CRT aesthetic, `$` prompt, cursor blink, scanlines.
-
-Themes are modular CSS split into `base.css`, `index.css`, `article.css`, `syntax.css`, `responsive.css`. Concatenated in order during build.
-
-Set in `blog.toml`: `theme = "paper"`. Default is `paper`.
+The engine reads markdown through the symlink and copies images/uploads to dist during build. On deploy, `rsync` copies everything back to the repo.
 
 ### Output per blog
 
 ```
 dist/<name>/
-  articles/*.html    # article pages with SEO meta tags
-  index.html         # article listing with search, filters
+  articles/*.html    # article pages with full SEO meta tags
+  index.html         # article listing with search and filters
   404.html           # not found page
-  feed.xml           # RSS 2.0
+  feed.xml           # RSS 2.0 with Atom self-link
   sitemap.xml
   robots.txt
-  images/            # copied from blog
-  uploads/           # copied from blog
+  images/            # copied from blog source
+  uploads/           # copied from blog source
 ```
 
-Every page gets: `<title>`, `<meta description>`, canonical URL, Open Graph, Twitter Card, JSON-LD schema. CSS inlined and HTML minified.
+Every page gets: `<title>`, `<meta description>`, canonical URL, Open Graph, Twitter Card, JSON-LD schema. CSS is inlined and HTML is minified. No external stylesheets, no JavaScript frameworks.
 
 ### Features
 
 - Incremental builds (skip unchanged articles)
-- Language filter (all/en/pt from frontmatter)
+- Language filter (all/en/pt from post frontmatter)
 - Tag filter (curated tags from blog.toml)
 - Client-side search with clear button
 - Mobile filter popover with pill buttons
 - Social links and guide badges in header
-- Google Analytics (lazy-loaded, optional)
+- Google Analytics (lazy-loaded 2s after page load, optional)
 - Footer with license and RSS link
-- Emoji shortcode conversion
-- List/blockquote preprocessing for dev.to imports
-- Dark/light theme toggle with localStorage
+- Emoji shortcode conversion (`:wave:` becomes unicode)
+- Markdown preprocessing for dev.to imports (lists, blockquotes)
+- Dark/light theme toggle persisted in localStorage
+- 404 page per blog
 
 ### Example: leandronsp.com
 
-Full pipeline from markdown to deployed blog:
+Full pipeline from markdown to production:
 
 ```bash
-# setup (one-time): symlink external repo into blogs/
+# one-time setup
 mkdir -p blogs/leandronsp.com
-cat > blogs/leandronsp.com/blog.toml << 'EOF'
-title = "Leandro Proenca"
-subtitle = "low-level curiosity, high-level pragmatism"
-url = "https://leandronsp.com"
-author = "Leandro Proenca"
-date_field = "published_at"
-lang = "en"
-articles_path = "articles"
-theme = "paper"
-analytics_id = "G-0Y5RNLZMKN"
-license = "CC BY-SA 4.0"
-license_url = "https://creativecommons.org/licenses/by-sa/4.0/"
-tags = ["ruby", "rust", "assembly", "bash", "postgres", "kubernetes", "docker"]
-
-[[links]]
-label = "github"
-url = "https://github.com/leandronsp"
-
-[[links]]
-label = "linkedin"
-url = "https://www.linkedin.com/in/leandronsp/"
-
-[[guides]]
-title = "Concorrencia 101"
-url = "https://concorrencia101.leandronsp.com/"
-EOF
 ln -s ../../../leandronsp.com/articles blogs/leandronsp.com/posts
 ln -s ../../../leandronsp.com/images blogs/leandronsp.com/images
 ln -s ../../../leandronsp.com/uploads blogs/leandronsp.com/uploads
+# create blog.toml with config...
 
 # build (incremental: skips unchanged articles)
 make blog.build.leandronsp.com
 
-# preview locally
-make blog.serve.leandronsp.com
+# preview
+make blog.serve.leandronsp.com    # localhost:8000
 
-# deploy: rsync to repo, then push
+# deploy to Cloudflare Pages
 make deploy.git.leandronsp.com
-cd ../leandronsp.com && git push   # triggers Cloudflare Pages auto-deploy
+cd ../leandronsp.com && git push  # triggers auto-deploy
 ```
 
 ## Development
