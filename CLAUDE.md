@@ -84,7 +84,7 @@ Blogs can be local directories or symlinks to external repos.
 
 ### Output (dist/, gitignored)
 
-Generated per blog: article HTMLs, index.html, style.css, sitemap.xml, robots.txt, feed.xml.
+Generated per blog: article HTMLs, index.html, 404.html, sitemap.xml, robots.txt, feed.xml. CSS inlined into HTML, no external stylesheet.
 
 ## Commands
 
@@ -97,7 +97,7 @@ cargo clippy -- -D warnings    # lint
 
 # Engine
 make help                      # all targets
-make test                      # cargo + bats (76 tests)
+make test                      # cargo + bats (75 tests)
 make blog.list                 # list blogs
 make blog.build                # build all blogs
 make blog.build.<name>         # build one blog
@@ -140,14 +140,22 @@ Each blog has a `blog.toml` with:
 - `author` — used in meta tags and JSON-LD
 - `date_field` — which frontmatter field holds the date (e.g. `date` or `published_at`)
 - `lang` — HTML lang attribute
+- `theme` — CSS theme (default: `paper`). Available: `paper`, `terminal`
+- `analytics_id` — Google Analytics measurement ID (optional, lazy-loaded)
+- `license`, `license_url` — footer license link (optional)
+- `tags` — curated tag list for index filter (optional)
+- `[[links]]` — social links in header nav (label + url)
+- `[[guides]]` — guide badges in header (title + url)
 
 ### Build Pipeline
 
 1. Read `blog.toml` config
-2. For each post: extract frontmatter, run pandoc with article template, pass site variables
-3. Generate index.html from template with variable substitution
-4. Generate sitemap.xml, robots.txt, feed.xml from post metadata
-5. Copy CSS (blog override or engine default)
+2. For each post: extract frontmatter, preprocess markdown (fix lists/blockquotes), run pandoc with article template. **Incremental**: skip if html is newer than md and template.
+3. Concatenate theme CSS modules (base, index, article, syntax, responsive)
+4. Generate index.html with post list, filters, search, social links, guides
+5. Generate sitemap.xml, robots.txt, feed.xml, 404.html
+6. Inject Google Analytics (if configured)
+7. Minify CSS, inline into HTML, minify HTML (preserves pre/script/style blocks)
 
 ### SEO Output
 
@@ -210,6 +218,10 @@ The repo path is resolved automatically by following the `posts` symlink (`REPO_
 - **`screen.title()`**: Real-time position from vim's titlestring via OSC escape sequences. Zero file I/O.
 - **`shortmess=aFIoOstTWcCS`** via `--cmd` (before file load) to suppress vim messages.
 - **Blog frontmatter quoting**: Some blogs quote values (`title: "My Title"`), others don't. The `frontmatter()` function strips both.
+- **Lists without blank lines**: dev.to markdown has lists/blockquotes without preceding blank lines. `post_body()` preprocesses to insert blank lines before `* `, `- `, `> ` markers.
+- **Emoji shortcodes**: pandoc `+emoji` extension converts `:wave:` etc. to unicode.
+- **CSS order matters**: `@media` queries must come AFTER base rules in the CSS. The minifier preserves `<style>` blocks during HTML minification.
+- **Incremental builds**: compare mtime of .md vs .html. If html is newer than both md and template, skip pandoc. Index/sitemap/feed always rebuild.
 
 ## Controls
 
