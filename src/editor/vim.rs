@@ -15,7 +15,7 @@ use ratatui::{
 };
 use tui_term::widget::PseudoTerminal;
 
-use super::chrome::ChromeHandle;
+use super::chrome::{ChromeHandle, ChromeResult};
 use super::preview;
 
 const DRAFT_PATH: &str = "draft.md";
@@ -267,6 +267,7 @@ fn run_loop(
     let mut preview_scroll: u16 = 0;
     let chrome_available = chrome.is_some();
     let mut html_rendering = false;
+    let mut chrome_error: Option<String> = None;
 
     // Debounce preview re-render
     let mut content_changed_at: Option<std::time::Instant> = None;
@@ -316,13 +317,22 @@ fn run_loop(
             }
         }
 
-        // Pick up Chrome screenshot (non-blocking)
+        // Pick up Chrome result (non-blocking)
         if preview_mode == PreviewMode::Html {
             if let Some(ch) = chrome {
-                if let Some(bytes) = ch.try_recv_image() {
-                    if let Ok(img) = image::load_from_memory(&bytes) {
-                        cached_image_protocol = Some(picker.new_resize_protocol(img));
-                        html_rendering = false;
+                if let Some(result) = ch.try_recv() {
+                    match result {
+                        ChromeResult::Image(bytes) => {
+                            if let Ok(img) = image::load_from_memory(&bytes) {
+                                cached_image_protocol = Some(picker.new_resize_protocol(img));
+                                html_rendering = false;
+                                chrome_error = None;
+                            }
+                        }
+                        ChromeResult::Error(msg) => {
+                            chrome_error = Some(msg);
+                            html_rendering = false;
+                        }
                     }
                 }
             }
@@ -388,7 +398,7 @@ fn run_loop(
                     render_editor(frame, parser, mode_label, mode_st, &title_message, panes[0]);
                     render_preview(
                         frame, &cached_lines, clamped_scroll, preview_mode,
-                        preview_mode_label, &mut cached_image_protocol, html_rendering, panes[1],
+                        preview_mode_label, &mut cached_image_protocol, html_rendering, &chrome_error, panes[1],
                     );
                 }
                 SplitLayout::Horizontal => {
@@ -400,7 +410,7 @@ fn run_loop(
                     render_editor(frame, parser, mode_label, mode_st, &title_message, panes[0]);
                     render_preview(
                         frame, &cached_lines, clamped_scroll, preview_mode,
-                        preview_mode_label, &mut cached_image_protocol, html_rendering, panes[1],
+                        preview_mode_label, &mut cached_image_protocol, html_rendering, &chrome_error, panes[1],
                     );
                 }
                 SplitLayout::EditorOnly => {
@@ -582,6 +592,7 @@ fn render_preview(
     mode_label: &str,
     cached_image_protocol: &mut Option<ratatui_image::protocol::StatefulProtocol>,
     html_rendering: bool,
+    chrome_error: &Option<String>,
     area: ratatui::layout::Rect,
 ) {
     let rendering_indicator = if html_rendering { " ..." } else { "" };
@@ -600,7 +611,15 @@ fn render_preview(
             frame.render_widget(preview_widget, area);
         }
         PreviewMode::Html => {
-            if let Some(ref mut protocol) = cached_image_protocol {
+            if let Some(ref err) = chrome_error {
+                let error_msg = Paragraph::new(Line::from(Span::styled(
+                    format!(" Chrome error: {err}"),
+                    Style::default().fg(Color::Red),
+                )))
+                .block(preview_block)
+                .wrap(Wrap { trim: false });
+                frame.render_widget(error_msg, area);
+            } else if let Some(ref mut protocol) = cached_image_protocol {
                 let image_widget = ratatui_image::StatefulImage::default();
                 let inner = preview_block.inner(area);
                 frame.render_widget(preview_block, area);

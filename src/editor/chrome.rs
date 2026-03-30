@@ -9,9 +9,15 @@ use std::thread;
 static FILE_COUNTER: AtomicU64 = AtomicU64::new(0);
 
 /// Handle to a background Chrome screenshot thread.
+/// Message from Chrome thread: either a screenshot or an error.
+pub enum ChromeResult {
+    Image(Vec<u8>),
+    Error(String),
+}
+
 pub struct ChromeHandle {
     html_tx: mpsc::Sender<String>,
-    image_rx: mpsc::Receiver<Vec<u8>>,
+    result_rx: mpsc::Receiver<ChromeResult>,
     running: Arc<AtomicBool>,
     #[allow(dead_code)]
     ready: Arc<AtomicBool>,
@@ -27,23 +33,23 @@ impl ChromeHandle {
         let ready_thread = Arc::clone(&ready);
 
         let (html_tx, html_rx) = mpsc::channel::<String>();
-        let (image_tx, image_rx) = mpsc::channel::<Vec<u8>>();
+        let (result_tx, result_rx) = mpsc::channel::<ChromeResult>();
 
         thread::spawn(move || {
-            chrome_thread(html_rx, image_tx, running_thread, ready_thread, viewport_width, viewport_height);
+            chrome_thread(html_rx, result_tx, running_thread, ready_thread, viewport_width, viewport_height);
         });
 
-        Some(Self { html_tx, image_rx, running, ready })
+        Some(Self { html_tx, result_rx, running, ready })
     }
 
     pub fn send_html(&self, html: String) {
         let _ = self.html_tx.send(html);
     }
 
-    pub fn try_recv_image(&self) -> Option<Vec<u8>> {
+    pub fn try_recv(&self) -> Option<ChromeResult> {
         let mut latest = None;
-        while let Ok(bytes) = self.image_rx.try_recv() {
-            latest = Some(bytes);
+        while let Ok(result) = self.result_rx.try_recv() {
+            latest = Some(result);
         }
         latest
     }
@@ -57,7 +63,7 @@ impl Drop for ChromeHandle {
 
 fn chrome_thread(
     html_rx: mpsc::Receiver<String>,
-    image_tx: mpsc::Sender<Vec<u8>>,
+    result_tx: mpsc::Sender<ChromeResult>,
     running: Arc<AtomicBool>,
     ready: Arc<AtomicBool>,
     viewport_width: u32,
@@ -65,7 +71,10 @@ fn chrome_thread(
 ) {
     let chrome_path = match find_chrome() {
         Some(p) => p,
-        None => return,
+        None => {
+            let _ = result_tx.send(ChromeResult::Error("Chrome not found".to_string()));
+            return;
+        }
     };
     let options = LaunchOptions {
         headless: true,
@@ -75,13 +84,18 @@ fn chrome_thread(
     };
     let browser = match Browser::new(options) {
         Ok(b) => b,
-        Err(_) => return,
+        Err(e) => {
+            let _ = result_tx.send(ChromeResult::Error(format!("Chrome launch failed: {e}")));
+            return;
+        }
     };
 
-    // Create one persistent tab, reuse it for all screenshots.
     let mut tab = match browser.new_tab() {
         Ok(t) => t,
-        Err(_) => return,
+        Err(e) => {
+            let _ = result_tx.send(ChromeResult::Error(format!("Tab creation failed: {e}")));
+            return;
+        }
     };
 
     ready.store(true, Ordering::Relaxed);
@@ -94,12 +108,18 @@ fn chrome_thread(
                 }
                 match take_screenshot(&tab, &html) {
                     Some(bytes) => {
-                        let _ = image_tx.send(bytes);
+                        let _ = result_tx.send(ChromeResult::Image(bytes));
                     }
                     None => {
-                        // Tab may be dead. Try to create a new one.
-                        if let Ok(new_tab) = browser.new_tab() {
-                            tab = new_tab;
+                        // Tab may be dead. Try to recreate.
+                        match browser.new_tab() {
+                            Ok(new_tab) => {
+                                tab = new_tab;
+                                let _ = result_tx.send(ChromeResult::Error("Tab died, recreated".to_string()));
+                            }
+                            Err(e) => {
+                                let _ = result_tx.send(ChromeResult::Error(format!("Tab recreation failed: {e}")));
+                            }
                         }
                     }
                 }
