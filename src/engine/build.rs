@@ -309,6 +309,58 @@ This is the second post.
     }
 
     #[test]
+    fn build_article_without_image_has_no_og_image() {
+        let tmp = tempdir();
+        let (blog, dist) = setup_blog(&tmp);
+        do_build(&blog, &dist);
+        let html = fs::read_to_string(dist.join("2026-01-01-hello.html")).expect("read article");
+        assert!(!html.contains("og:image"));
+        assert!(!html.contains("twitter:image"));
+        assert!(html.contains(r#"twitter:card" content="summary""#));
+    }
+
+    #[test]
+    fn build_article_with_image_has_og_image() {
+        let tmp = tempdir();
+        let (blog, dist) = setup_blog(&tmp);
+        fs::write(
+            blog.join("posts/2026-01-09-with-image.md"),
+            "---\ntitle: Image Post\ndate: 2026-01-09\ndescription: A post with image\nimage: https://example.com/cover.png\n---\n\nContent.\n",
+        )
+        .expect("write test post");
+        do_build(&blog, &dist);
+        let html = fs::read_to_string(dist.join("2026-01-09-with-image.html")).expect("read article");
+        assert!(html.contains(r#"og:image" content="https://example.com/cover.png""#));
+        assert!(html.contains(r#"twitter:image" content="https://example.com/cover.png""#));
+        assert!(html.contains(r#"twitter:card" content="summary_large_image""#));
+    }
+
+    #[test]
+    fn build_index_with_og_image_has_og_image() {
+        let tmp = tempdir();
+        let (blog, dist) = setup_blog(&tmp);
+        let toml_path = blog.join("blog.toml");
+        let toml = fs::read_to_string(&toml_path).expect("read blog.toml");
+        fs::write(&toml_path, format!("{toml}og_image = \"https://test-blog.com/og.png\"\n")).expect("write blog.toml");
+        do_build(&blog, &dist);
+        let html = fs::read_to_string(dist.join("index.html")).expect("read index");
+        assert!(html.contains(r#"og:image" content="https://test-blog.com/og.png""#));
+        assert!(html.contains(r#"twitter:card" content="summary_large_image""#));
+    }
+
+    #[test]
+    fn build_article_with_site_og_image_does_not_inherit() {
+        let tmp = tempdir();
+        let (blog, dist) = setup_blog(&tmp);
+        let toml_path = blog.join("blog.toml");
+        let toml = fs::read_to_string(&toml_path).expect("read blog.toml");
+        fs::write(&toml_path, format!("{toml}og_image = \"https://test-blog.com/og.png\"\n")).expect("write blog.toml");
+        do_build(&blog, &dist);
+        let html = fs::read_to_string(dist.join("2026-01-01-hello.html")).expect("read article");
+        assert!(!html.contains("og:image"));
+    }
+
+    #[test]
     fn build_article_has_json_ld_schema() {
         let tmp = tempdir();
         let (blog, dist) = setup_blog(&tmp);
