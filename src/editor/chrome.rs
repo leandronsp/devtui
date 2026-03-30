@@ -36,6 +36,10 @@ impl ChromePreview {
     /// Uses JavaScript to set document content directly (avoids data: URI size limits).
     /// Returns None on any error.
     pub fn screenshot(&self, html: &str) -> Option<Vec<u8>> {
+        // Navigate to blank first to reset state completely (fixes stuck renders)
+        self.tab.navigate_to("about:blank").ok()?;
+        self.tab.wait_until_navigated().ok()?;
+
         // Escape HTML for JS string literal
         let escaped = html
             .replace('\\', "\\\\")
@@ -45,15 +49,12 @@ impl ChromePreview {
         let js = format!("document.open(); document.write(`{escaped}`); document.close();");
         self.tab.evaluate(&js, true).ok()?;
 
-        // Small delay for rendering
-        std::thread::sleep(std::time::Duration::from_millis(50));
+        // Wait for rendering
+        std::thread::sleep(std::time::Duration::from_millis(100));
 
-        let bytes = self
-            .tab
+        self.tab
             .capture_screenshot(CaptureScreenshotFormatOption::Png, None, None, true)
-            .ok()?;
-
-        Some(bytes)
+            .ok()
     }
 }
 

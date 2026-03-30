@@ -1,7 +1,7 @@
 use std::io::{self, Read, Write};
 use std::path::PathBuf;
 use std::sync::atomic::{AtomicBool, Ordering};
-use std::sync::{Arc, RwLock};
+use std::sync::{Arc, Mutex, RwLock};
 use std::thread;
 use std::time::Duration;
 
@@ -122,8 +122,10 @@ pub fn run(
         exited_w.store(true, Ordering::Relaxed);
     });
 
-    let preview_content = Arc::new(RwLock::new(initial_content));
-    let preview_w = Arc::clone(&preview_content);
+    // Content swap buffer: thread writes new content here, main loop takes it.
+    // Using Mutex<Option<String>> instead of RwLock<String> to avoid read/write contention (blink source).
+    let content_swap = Arc::new(Mutex::new(Some(initial_content)));
+    let content_swap_w = Arc::clone(&content_swap);
     let running_p = Arc::clone(&running);
     let content_handle = thread::spawn(move || {
         let mut last_content = String::new();
@@ -132,8 +134,8 @@ pub fn run(
             if let Ok(content) = std::fs::read_to_string(CONTENT_TMP) {
                 if content != last_content {
                     last_content.clone_from(&content);
-                    if let Ok(mut w) = preview_w.write() {
-                        *w = content;
+                    if let Ok(mut slot) = content_swap_w.lock() {
+                        *slot = Some(content);
                     }
                 }
             }
@@ -154,15 +156,18 @@ pub fn run(
         &pty_pair.master,
         &vim_exited,
         &file_display,
-        &preview_content,
+        &content_swap,
         html_config,
         chrome,
         &picker,
     )?;
 
-    let final_content = preview_content
-        .read()
-        .map(|c| c.clone())
+    // Read final content from swap buffer or fall back to last file read
+    let final_content = content_swap
+        .lock()
+        .ok()
+        .and_then(|mut slot| slot.take())
+        .or_else(|| std::fs::read_to_string(CONTENT_TMP).ok())
         .unwrap_or_default();
 
     running.store(false, Ordering::Relaxed);
@@ -272,14 +277,13 @@ fn run_loop(
     pty_master: &Box<dyn portable_pty::MasterPty + Send>,
     vim_exited: &Arc<AtomicBool>,
     file_display: &str,
-    preview_content: &Arc<RwLock<String>>,
+    content_swap: &Arc<Mutex<Option<String>>>,
     html_config: Option<&HtmlPreviewConfig>,
     chrome: Option<&ChromePreview>,
     picker: &ratatui_image::picker::Picker,
 ) -> io::Result<()> {
     let mut last_content = String::new();
     let mut cached_lines: Vec<Line<'static>> = Vec::new();
-    let mut cached_offsets: Vec<u16> = Vec::new();
     let mut preview_mode = PreviewMode::Text;
     let mut cached_image_protocol: Option<ratatui_image::protocol::StatefulProtocol> = None;
     let mut split_layout = SplitLayout::Vertical;
@@ -292,20 +296,21 @@ fn run_loop(
             break;
         }
 
-        // Update preview content when changed
-        if let Ok(content) = preview_content.read() {
-            if *content != last_content {
-                last_content.clone_from(&content);
+        // Pick up new content from swap buffer (non-blocking take)
+        if let Ok(mut slot) = content_swap.try_lock() {
+            if let Some(new_content) = slot.take() {
+                if new_content != last_content {
+                    last_content = new_content;
 
-                if split_layout != SplitLayout::EditorOnly {
-                    let (lines, offsets) = preview::render_with_offsets(&last_content);
-                    cached_lines = lines;
-                    cached_offsets = offsets;
-                }
+                    if split_layout != SplitLayout::EditorOnly {
+                        let (lines, _) = preview::render_with_offsets(&last_content);
+                        cached_lines = lines;
+                    }
 
-                if preview_mode == PreviewMode::Html {
-                    if let Some(cfg) = html_config {
-                        pending_html = Some(render_html_preview(&last_content, cfg));
+                    if preview_mode == PreviewMode::Html {
+                        if let Some(cfg) = html_config {
+                            pending_html = Some(render_html_preview(&last_content, cfg));
+                        }
                     }
                 }
             }
@@ -387,7 +392,7 @@ fn run_loop(
 
             // Status bar
             let chrome_hint = if chrome_available { " ^P:html" } else { "" };
-            let browser_hint = if html_config.is_some() { " ^B:browser" } else { "" };
+            let browser_hint = if html_config.is_some() { " ^O:browser" } else { "" };
             let scroll_hint = if split_layout != SplitLayout::EditorOnly {
                 " ^T:sync ^J/^K:scroll"
             } else {
@@ -418,26 +423,30 @@ fn run_loop(
                         resize_pty(split_layout, terminal, pty_master, parser)?;
                         // Re-render preview content when coming back from EditorOnly
                         if split_layout != SplitLayout::EditorOnly && cached_lines.is_empty() {
-                            let (lines, offsets) = preview::render_with_offsets(&last_content);
+                            let (lines, _) = preview::render_with_offsets(&last_content);
                             cached_lines = lines;
-                            cached_offsets = offsets;
                         }
                         continue;
                     }
 
-                    // Ctrl+T: sync preview to vim cursor
+                    // Ctrl+T: sync preview to vim cursor (proportional positioning)
                     if key.code == KeyCode::Char('t') && ctrl && split_layout != SplitLayout::EditorOnly {
-                        let target = if source_line < cached_offsets.len() {
-                            cached_offsets[source_line]
-                        } else {
-                            cached_lines.len().saturating_sub(1) as u16
-                        };
+                        // Count total source lines from content
+                        let total_source_lines = last_content.lines().count().max(1);
+                        let total_rendered_lines = cached_lines.len().max(1);
+
+                        // source_line is the first visible line in vim (from titlestring w0)
+                        // Calculate what proportion of the document we're viewing
+                        let ratio = source_line as f64 / total_source_lines as f64;
+                        let target = (ratio * total_rendered_lines as f64) as u16;
+
                         let term_size = terminal.size()?;
                         let visible_height = match split_layout {
                             SplitLayout::Vertical => term_size.height.saturating_sub(4),
                             SplitLayout::Horizontal => term_size.height / 2,
                             SplitLayout::EditorOnly => 0,
                         };
+
                         preview_scroll = target.saturating_sub(visible_height / 3);
                         continue;
                     }
@@ -459,8 +468,8 @@ fn run_loop(
                         continue;
                     }
 
-                    // Ctrl+B: open in browser
-                    if key.code == KeyCode::Char('b') && ctrl {
+                    // Ctrl+O: open in browser
+                    if key.code == KeyCode::Char('o') && ctrl {
                         if let Some(cfg) = html_config {
                             let html = render_html_preview(&last_content, cfg);
                             let tmp_html = std::env::temp_dir().join("devtui-preview.html");
