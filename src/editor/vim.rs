@@ -83,8 +83,8 @@ pub fn run(
     cmd.args([
         "-u", "NONE",
         "-N",
-        "--cmd", "set shortmess=aIoOstTWcCS",
-        "-c", "set noswapfile noruler noshowmode noshowcmd laststatus=0 updatetime=150 tabstop=2 shiftwidth=2 expandtab title titlestring=%{line('w0')}:%{line('.')}:%{line('$')}:%{mode()}",
+        "--cmd", "set shortmess=aFIoOstTWcCS",
+        "-c", "set noswapfile noruler noshowmode noshowcmd laststatus=0 updatetime=150 tabstop=2 shiftwidth=2 expandtab title titlestring=%{line('w0')}:%{line('.')}:%{line('$')}:%{mode()}:%{&modified}",
         "-c", "nnoremap u :silent! undo<CR>",
         "-c", "nnoremap <C-r> :silent! redo<CR>",
         "-c", "autocmd BufWritePost * call timer_start(1,{->execute('redraw!')})",
@@ -196,20 +196,18 @@ fn read_pty(
 }
 
 /// Parsed vim state from titlestring: w0:cursor:total:mode
-#[allow(dead_code)]
 struct VimState {
-    first_visible: usize,
     cursor_line: usize,
     total_lines: usize,
     mode: &'static str,
+    modified: bool,
 }
 
 fn parse_title(parser: &Arc<RwLock<vt100::Parser>>) -> VimState {
     if let Ok(p) = parser.read() {
         let title = p.screen().title().to_string();
         let parts: Vec<&str> = title.trim().split(':').collect();
-        if parts.len() >= 4 {
-            let first_visible = parts[0].parse::<usize>().unwrap_or(1).saturating_sub(1);
+        if parts.len() >= 5 {
             let cursor_line = parts[1].parse::<usize>().unwrap_or(1);
             let total_lines = parts[2].parse::<usize>().unwrap_or(1);
             let mode = match parts[3] {
@@ -219,56 +217,15 @@ fn parse_title(parser: &Arc<RwLock<vt100::Parser>>) -> VimState {
                 "c" => "COMMAND",
                 _ => "NORMAL",
             };
-            return VimState { first_visible, cursor_line, total_lines, mode };
-        }
-        // Fallback for old format w0:mode
-        if let Some((line_str, mode_char)) = title.trim().split_once(':') {
-            let first_visible = line_str.parse::<usize>().unwrap_or(1).saturating_sub(1);
-            let mode = match mode_char {
-                "i" => "INSERT",
-                "v" | "V" | "\x16" => "VISUAL",
-                "R" => "REPLACE",
-                "c" => "COMMAND",
-                _ => "NORMAL",
-            };
-            return VimState { first_visible, cursor_line: 1, total_lines: 1, mode };
+            let modified = parts[4] == "1";
+            return VimState { cursor_line, total_lines, mode, modified };
         }
     }
-    VimState { first_visible: 0, cursor_line: 1, total_lines: 1, mode: "NORMAL" }
+    VimState { cursor_line: 1, total_lines: 1, mode: "NORMAL", modified: false }
 }
 
 /// Extract the last line from the vim PTY screen (where vim shows messages).
 /// Returns non-empty string only when vim is showing a message (e.g. "written", "E37", etc).
-fn extract_vim_message(parser: &Arc<RwLock<vt100::Parser>>) -> String {
-    if let Ok(p) = parser.read() {
-        let screen = p.screen();
-        let rows = screen.size().0;
-        if rows == 0 {
-            return String::new();
-        }
-        // Vim messages appear on the last row of the screen
-        let last_row = rows - 1;
-        let line = screen.contents_between(last_row, 0, last_row, screen.size().1);
-        let trimmed = line.trim();
-        // Filter out empty lines and tilde lines (vim's empty buffer indicator)
-        if trimmed.is_empty() || trimmed == "~" {
-            return String::new();
-        }
-        // Only show if it looks like a vim message (contains common patterns)
-        if trimmed.starts_with('"')        // "file" written
-            || trimmed.starts_with("E")     // E37: No write since last change
-            || trimmed.contains("written")
-            || trimmed.contains("change")
-            || trimmed.contains("line")
-            || trimmed.starts_with("--")    // -- INSERT --
-            || trimmed.starts_with(':')     // command line
-        {
-            return trimmed.to_string();
-        }
-    }
-    String::new()
-}
-
 fn mode_style(mode: &str) -> (&str, Style) {
     match mode {
         "INSERT" => (" INSERT ", Style::default().fg(Color::Black).bg(Color::Green)),
@@ -309,11 +266,15 @@ fn run_loop(
     let mut split_layout = SplitLayout::Vertical;
     let mut preview_scroll: u16 = 0;
     let chrome_available = chrome.is_some();
-    let mut html_rendering = false; // true while waiting for Chrome screenshot
+    let mut html_rendering = false;
 
-    // Debounce: only re-render preview after content is stable for 500ms
+    // Debounce preview re-render
     let mut content_changed_at: Option<std::time::Instant> = None;
     let mut preview_stale = false;
+
+    // Flash message (e.g. "saved") with auto-dismiss
+    let mut flash: Option<(String, std::time::Instant)> = None;
+    let mut was_modified = false; // track modified state transitions
 
     loop {
         if vim_exited.load(Ordering::Relaxed) {
@@ -370,8 +331,27 @@ fn run_loop(
         let vim_state = parse_title(parser);
         let (mode_label, mode_st) = mode_style(vim_state.mode);
 
-        // Extract vim message from last line of PTY screen
-        let vim_message = extract_vim_message(parser);
+        // Detect :w (modified transitions from true to false)
+        if was_modified && !vim_state.modified {
+            flash = Some(("saved".to_string(), std::time::Instant::now()));
+        }
+        was_modified = vim_state.modified;
+
+        // Auto-dismiss flash after 2s
+        if let Some((_, at)) = &flash {
+            if at.elapsed() > std::time::Duration::from_secs(2) {
+                flash = None;
+            }
+        }
+
+        // Build title message from flash or modified state
+        let title_message = if let Some((msg, _)) = &flash {
+            msg.clone()
+        } else if vim_state.modified {
+            "[+]".to_string()
+        } else {
+            String::new()
+        };
 
         let max_scroll = cached_lines.len().saturating_sub(1) as u16;
         let clamped_scroll = preview_scroll.min(max_scroll);
@@ -405,7 +385,7 @@ fn run_loop(
                         Constraint::Percentage(50),
                     ])
                     .split(main_area);
-                    render_editor(frame, parser, mode_label, mode_st, &vim_message, panes[0]);
+                    render_editor(frame, parser, mode_label, mode_st, &title_message, panes[0]);
                     render_preview(
                         frame, &cached_lines, clamped_scroll, preview_mode,
                         preview_mode_label, &mut cached_image_protocol, html_rendering, panes[1],
@@ -417,14 +397,14 @@ fn run_loop(
                         Constraint::Percentage(50),
                     ])
                     .split(main_area);
-                    render_editor(frame, parser, mode_label, mode_st, &vim_message, panes[0]);
+                    render_editor(frame, parser, mode_label, mode_st, &title_message, panes[0]);
                     render_preview(
                         frame, &cached_lines, clamped_scroll, preview_mode,
                         preview_mode_label, &mut cached_image_protocol, html_rendering, panes[1],
                     );
                 }
                 SplitLayout::EditorOnly => {
-                    render_editor(frame, parser, mode_label, mode_st, &vim_message, main_area);
+                    render_editor(frame, parser, mode_label, mode_st, &title_message, main_area);
                 }
             }
 
@@ -566,7 +546,7 @@ fn render_editor(
     parser: &Arc<RwLock<vt100::Parser>>,
     mode_label: &str,
     mode_st: Style,
-    vim_message: &str,
+    title_message: &str,
     area: ratatui::layout::Rect,
 ) {
     let mut title_spans = vec![
@@ -574,10 +554,10 @@ fn render_editor(
         Span::raw(" EDITOR"),
     ];
 
-    if !vim_message.is_empty() {
+    if !title_message.is_empty() {
         title_spans.push(Span::raw(" "));
         title_spans.push(Span::styled(
-            vim_message,
+            title_message.to_string(),
             Style::default().fg(Color::Yellow),
         ));
     }

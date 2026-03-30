@@ -104,9 +104,12 @@ fn chrome_thread(
 }
 
 fn take_screenshot(browser: &Browser, html: &str) -> Option<Vec<u8>> {
-    // Write HTML to temp file and load via file:// protocol.
-    // Avoids document.write escaping issues with backticks, script tags, etc.
-    let tmp_path = std::env::temp_dir().join("devtui-chrome-preview.html");
+    use std::sync::atomic::{AtomicU64, Ordering};
+    static COUNTER: AtomicU64 = AtomicU64::new(0);
+
+    // Write HTML to temp file with unique name (bust Chrome file:// cache).
+    let id = COUNTER.fetch_add(1, Ordering::Relaxed);
+    let tmp_path = std::env::temp_dir().join(format!("devtui-chrome-{id}.html"));
     std::fs::write(&tmp_path, html).ok()?;
 
     let file_url = format!("file://{}", tmp_path.display());
@@ -121,6 +124,7 @@ fn take_screenshot(browser: &Browser, html: &str) -> Option<Vec<u8>> {
         .ok()?;
 
     let _ = tab.close(true);
+    let _ = std::fs::remove_file(&tmp_path);
     Some(bytes)
 }
 
