@@ -126,7 +126,7 @@ fn render_article(
         format!("{}/{}", articles_prefix, post.slug)
     };
 
-    let og_image = config::resolve_og_image(post.image.as_deref(), cfg.og_image.as_deref());
+    let og_image = config::resolve_og_image(post.image.as_deref(), None);
     let twitter_card = config::twitter_card(og_image);
 
     let vars = HashMap::from([
