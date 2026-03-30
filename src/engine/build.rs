@@ -111,6 +111,16 @@ fn render_article(
     article_tpl: &str,
     html_out: &Path,
 ) -> Result<(), String> {
+    let rendered = render_article_html_from_post(cfg, post, articles_prefix, article_tpl);
+    fs::write(html_out, &rendered).map_err(|e| e.to_string())
+}
+
+fn render_article_html_from_post(
+    cfg: &BlogConfig,
+    post: &Post,
+    articles_prefix: &str,
+    article_tpl: &str,
+) -> String {
     let body = config::post_body(&post.content);
     let html_body = markdown::markdown_to_html(&body);
     let description = if post.description.is_empty() {
@@ -144,8 +154,48 @@ fn render_article(
         ("twitter-card", twitter_card),
     ]);
 
-    let rendered = template::template_render(article_tpl, &vars);
-    fs::write(html_out, &rendered).map_err(|e| e.to_string())
+    template::template_render(article_tpl, &vars)
+}
+
+/// Render markdown content to final HTML string (with template applied).
+/// Pure function, no disk I/O. Used by the CMS preview.
+pub fn render_preview_html(
+    content: &str,
+    title: &str,
+    cfg: &BlogConfig,
+    article_tpl: &str,
+) -> String {
+    // Content may or may not have frontmatter. Try to extract body, fall back to raw content.
+    let has_frontmatter = content.starts_with("---");
+    let body = if has_frontmatter {
+        config::post_body(content)
+    } else {
+        content.to_string()
+    };
+    let html_body = markdown::markdown_to_html(&body);
+    let description = markdown::post_snippet(&body, None, 160);
+    let date = if has_frontmatter {
+        config::frontmatter_date(&cfg.date_field, content).unwrap_or_default()
+    } else {
+        String::new()
+    };
+
+    let vars = HashMap::from([
+        ("title", title),
+        ("body", html_body.as_str()),
+        ("date", date.as_str()),
+        ("description", description.as_str()),
+        ("site-title", cfg.title.as_str()),
+        ("site-author", cfg.author.as_str()),
+        ("site-url", cfg.url.as_str()),
+        ("slug", "preview"),
+        ("lang", cfg.lang.as_str()),
+        ("base-path", ""),
+        ("og-image", ""),
+        ("twitter-card", "summary"),
+    ]);
+
+    template::template_render(article_tpl, &vars)
 }
 
 fn article_url(base_url: &str, articles_prefix: &str, slug: &str) -> String {

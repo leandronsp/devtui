@@ -29,3 +29,6 @@ serde = { version = "1", features = ["derive"] }
 gh-emoji = "1.0"
 tiny_http = "0.12"
 rusqlite = { version = "0.31", features = ["bundled"] }
+headless_chrome = "1.0"
+ratatui-image = "9.0"
+image = "0.25"

@@ -2,19 +2,19 @@ use serde::Deserialize;
 use std::fs;
 use std::path::{Path, PathBuf};
 
-#[derive(Debug, Deserialize)]
+#[derive(Debug, Clone, Deserialize)]
 pub struct Link {
     pub label: String,
     pub url: String,
 }
 
-#[derive(Debug, Deserialize)]
+#[derive(Debug, Clone, Deserialize)]
 pub struct Guide {
     pub title: String,
     pub url: String,
 }
 
-#[derive(Debug, Deserialize)]
+#[derive(Debug, Clone, Deserialize)]
 pub struct BlogConfig {
     pub title: String,
     pub subtitle: Option<String>,

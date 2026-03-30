@@ -1,3 +1,4 @@
+pub mod chrome;
 pub mod db;
 pub mod list;
 pub mod preview;
@@ -9,11 +10,13 @@ use std::path::{Path, PathBuf};
 use rusqlite::Connection;
 
 use crate::engine::config::BlogConfig;
+use crate::engine::{minify, template};
+use chrome::ChromePreview;
 use db::Status;
 use list::{ListAction, ListView};
+use vim::HtmlPreviewConfig;
 
 /// Run the CMS with article list and editor views.
-/// blog_dir is the path to a blog directory (e.g. blogs/acme-alchemist).
 pub fn run_cms(blog_dir: PathBuf) -> io::Result<()> {
     let config_path = blog_dir.join("blog.toml");
     let cfg = BlogConfig::from_file(&config_path)
@@ -28,8 +31,14 @@ pub fn run_cms(blog_dir: PathBuf) -> io::Result<()> {
         let _ = db::import_from_filesystem(&conn, &posts_dir, &cfg.date_field);
     }
 
+    // Prepare HTML preview config (template + CSS)
+    let html_config = load_html_preview_config(&cfg, &blog_dir);
+
+    // Initialize Chrome once for the entire CMS session
+    let chrome = ChromePreview::try_new(800, 600);
+
     let mut terminal = ratatui::init();
-    let result = cms_loop(&mut terminal, &conn, &cfg, &blog_dir);
+    let result = cms_loop(&mut terminal, &conn, &cfg, &blog_dir, html_config.as_ref(), chrome.as_ref());
     ratatui::restore();
     result
 }
@@ -37,9 +46,36 @@ pub fn run_cms(blog_dir: PathBuf) -> io::Result<()> {
 /// Legacy entry point: run editor for a single file (no CMS).
 pub fn run(file_path: PathBuf) -> io::Result<()> {
     let mut terminal = ratatui::init();
-    let result = vim::run(&mut terminal, file_path);
+    let result = vim::run(&mut terminal, file_path, None, None);
     ratatui::restore();
     result.map(|_| ())
+}
+
+fn load_html_preview_config(cfg: &BlogConfig, blog_dir: &Path) -> Option<HtmlPreviewConfig> {
+    let engine_dir = PathBuf::from(env!("CARGO_MANIFEST_DIR")).join("src/engine");
+    let theme = cfg.theme.as_deref().unwrap_or("paper");
+    let theme_dir = engine_dir.join("themes").join(theme);
+
+    let article_tpl_path = template::resolve_file(
+        "article.html",
+        &blog_dir.join("templates"),
+        &theme_dir.join("templates"),
+        &engine_dir.join("templates"),
+    )?;
+    let article_tpl = std::fs::read_to_string(&article_tpl_path).ok()?;
+    let mut css = minify::compile_css(blog_dir, &theme_dir).ok()?;
+    if css.is_empty() {
+        let style_path = theme_dir.join("style.css");
+        if style_path.exists() {
+            css = std::fs::read_to_string(&style_path).ok()?;
+        }
+    }
+
+    Some(HtmlPreviewConfig {
+        css,
+        article_tpl,
+        blog_config: BlogConfig::from_file(&blog_dir.join("blog.toml")).ok()?,
+    })
 }
 
 fn cms_loop(
@@ -47,6 +83,8 @@ fn cms_loop(
     conn: &Connection,
     cfg: &BlogConfig,
     blog_dir: &Path,
+    html_config: Option<&HtmlPreviewConfig>,
+    chrome: Option<&ChromePreview>,
 ) -> io::Result<()> {
     loop {
         let articles = db::list_articles(conn, None)
@@ -58,10 +96,10 @@ fn cms_loop(
         match action {
             ListAction::Quit => return Ok(()),
             ListAction::Edit(id) => {
-                edit_article(terminal, conn, cfg, blog_dir, id)?;
+                edit_article(terminal, conn, cfg, blog_dir, id, html_config, chrome)?;
             }
             ListAction::New => {
-                new_article(terminal, conn, cfg, blog_dir)?;
+                new_article(terminal, conn, blog_dir, html_config, chrome)?;
             }
         }
     }
@@ -73,6 +111,8 @@ fn edit_article(
     cfg: &BlogConfig,
     blog_dir: &Path,
     id: i64,
+    html_config: Option<&HtmlPreviewConfig>,
+    chrome: Option<&ChromePreview>,
 ) -> io::Result<()> {
     let article = db::get_article(conn, id)
         .map_err(|e| io::Error::other(e.to_string()))?;
@@ -82,7 +122,7 @@ fn edit_article(
     let tmp_file = tmp_dir.join(format!("{}.md", article.slug));
     std::fs::write(&tmp_file, &article.content)?;
 
-    let (_result, final_content) = vim::run(terminal, tmp_file.clone())?;
+    let (_result, final_content) = vim::run(terminal, tmp_file.clone(), html_config, chrome)?;
 
     let _ = db::update_content(conn, id, &final_content);
 
@@ -105,8 +145,9 @@ fn edit_article(
 fn new_article(
     terminal: &mut ratatui::DefaultTerminal,
     conn: &Connection,
-    _cfg: &BlogConfig,
     _blog_dir: &Path,
+    html_config: Option<&HtmlPreviewConfig>,
+    chrome: Option<&ChromePreview>,
 ) -> io::Result<()> {
     let article = db::create_article(conn, "Untitled")
         .map_err(|e| io::Error::other(e.to_string()))?;
@@ -116,7 +157,7 @@ fn new_article(
     let tmp_file = tmp_dir.join(format!("{}.md", article.slug));
     std::fs::write(&tmp_file, "")?;
 
-    let (_result, final_content) = vim::run(terminal, tmp_file.clone())?;
+    let (_result, final_content) = vim::run(terminal, tmp_file.clone(), html_config, chrome)?;
 
     let _ = db::update_content(conn, article.id, &final_content);
 

@@ -317,7 +317,7 @@ pub fn import_from_filesystem(
             let date = config::frontmatter_date(date_field, &content);
             let language = config::frontmatter("language", &content).unwrap_or_else(|| "en".to_string());
             let tags_str = config::extract_tags(&content);
-            let body = config::post_body(&content);
+            let body = config::post_body(&content).trim_start().to_string();
 
             let existing: Option<i64> = conn
                 .query_row(

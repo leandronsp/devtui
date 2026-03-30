@@ -15,22 +15,35 @@ use ratatui::{
 };
 use tui_term::widget::PseudoTerminal;
 
+use super::chrome::ChromePreview;
 use super::preview;
 
 const DRAFT_PATH: &str = "draft.md";
 const CONTENT_TMP: &str = "/tmp/devtui-content";
 
-/// Result of running the editor view.
+#[derive(Clone, Copy, PartialEq)]
+enum PreviewMode {
+    Text,
+    Html,
+}
+
 pub enum EditorResult {
-    /// User quit the editor (go back to list or exit).
     Quit,
 }
 
+pub struct HtmlPreviewConfig {
+    pub css: String,
+    pub article_tpl: String,
+    pub blog_config: crate::engine::config::BlogConfig,
+}
+
 /// Run the vim+preview editor for a single file.
-/// Returns the final content when the editor exits.
+/// chrome is an optional pre-initialized Chrome instance (singleton from CMS).
 pub fn run(
     terminal: &mut ratatui::DefaultTerminal,
     file_path: PathBuf,
+    html_config: Option<&HtmlPreviewConfig>,
+    chrome: Option<&ChromePreview>,
 ) -> io::Result<(EditorResult, String)> {
     if !file_path.exists() {
         std::fs::write(&file_path, "")?;
@@ -127,6 +140,8 @@ pub fn run(
         .map(|n| n.to_string_lossy().to_string())
         .unwrap_or_else(|| file_path.display().to_string());
 
+    let picker = ratatui_image::picker::Picker::halfblocks();
+
     run_loop(
         terminal,
         &parser,
@@ -135,9 +150,11 @@ pub fn run(
         &vim_exited,
         &file_display,
         &preview_content,
+        html_config,
+        chrome,
+        &picker,
     )?;
 
-    // Capture final content before cleanup
     let final_content = preview_content
         .read()
         .map(|c| c.clone())
@@ -200,7 +217,7 @@ fn mode_style(mode: &str) -> (&str, Style) {
     }
 }
 
-#[allow(clippy::borrowed_box)]
+#[allow(clippy::too_many_arguments, clippy::borrowed_box)]
 fn run_loop(
     terminal: &mut ratatui::DefaultTerminal,
     parser: &Arc<RwLock<vt100::Parser>>,
@@ -209,32 +226,90 @@ fn run_loop(
     vim_exited: &Arc<AtomicBool>,
     file_display: &str,
     preview_content: &Arc<RwLock<String>>,
+    html_config: Option<&HtmlPreviewConfig>,
+    chrome: Option<&ChromePreview>,
+    picker: &ratatui_image::picker::Picker,
 ) -> io::Result<()> {
     let mut last_content = String::new();
     let mut cached_lines: Vec<Line<'static>> = Vec::new();
     let mut cached_offsets: Vec<u16> = Vec::new();
+    let mut preview_mode = PreviewMode::Text;
+    let mut cached_image_protocol: Option<ratatui_image::protocol::StatefulProtocol> = None;
+
+    // Preview scroll state
+    let mut scroll_offset: i32 = 0; // manual scroll offset (added to auto scroll)
+    let mut last_vim_scroll: u16 = 0; // track vim scroll to detect movement
+
+    // Pending HTML for Chrome screenshot (rendered on main thread since Chrome isn't Send)
+    let mut pending_html: Option<String> = None;
+
+    let chrome_available = chrome.is_some();
 
     loop {
         if vim_exited.load(Ordering::Relaxed) {
             break;
         }
 
+        // Re-render preview when content changed
         if let Ok(content) = preview_content.read() {
             if *content != last_content {
                 last_content.clone_from(&content);
+
                 let (lines, offsets) = preview::render_with_offsets(&last_content);
                 cached_lines = lines;
                 cached_offsets = offsets;
+
+                // Queue HTML render if in HTML mode
+                if preview_mode == PreviewMode::Html {
+                    if let Some(cfg) = html_config {
+                        pending_html = Some(render_html_preview(&last_content, cfg));
+                    }
+                }
+            }
+        }
+
+        // Take Chrome screenshot on main thread (ChromePreview is not Send)
+        if preview_mode == PreviewMode::Html {
+            if let Some(html) = pending_html.take() {
+                if let Some(ch) = chrome {
+                    if let Some(bytes) = ch.screenshot(&html) {
+                        if let Ok(img) = image::load_from_memory(&bytes) {
+                            cached_image_protocol = Some(picker.new_resize_protocol(img));
+                        }
+                    }
+                }
             }
         }
 
         let (source_line, mode) = parse_title(parser);
         let (mode_label, mode_st) = mode_style(mode);
 
-        let scroll_y = if source_line < cached_offsets.len() {
+        // Auto scroll from vim
+        let auto_scroll = if source_line < cached_offsets.len() {
             cached_offsets[source_line]
         } else {
             cached_offsets.last().copied().unwrap_or(0)
+        };
+
+        // Reset manual offset when vim scrolls (user moved in vim)
+        if auto_scroll != last_vim_scroll {
+            scroll_offset = 0;
+            last_vim_scroll = auto_scroll;
+        }
+
+        // Final scroll = auto + manual offset, clamped to valid range
+        let max_scroll = cached_lines.len().saturating_sub(1) as i32;
+        let final_scroll = (auto_scroll as i32 + scroll_offset).clamp(0, max_scroll) as u16;
+
+        let preview_mode_label = match preview_mode {
+            PreviewMode::Text => "[TEXT]",
+            PreviewMode::Html => "[HTML]",
+        };
+
+        let scroll_hint = if scroll_offset != 0 {
+            format!(" scroll:{:+}", scroll_offset)
+        } else {
+            String::new()
         };
 
         terminal.draw(|frame| {
@@ -250,6 +325,7 @@ fn run_loop(
             ])
             .split(rows[0]);
 
+            // Left: vim via PTY
             let editor_title = Line::from(vec![
                 Span::styled(mode_label, mode_st),
                 Span::raw(" EDITOR"),
@@ -265,19 +341,43 @@ fn run_loop(
                 frame.render_widget(pseudo_term, panes[0]);
             }
 
+            // Right: preview pane
+            let preview_title = format!(" PREVIEW {}{} ", preview_mode_label, scroll_hint);
             let preview_block = Block::default()
                 .borders(Borders::ALL)
                 .border_style(Style::default().fg(Color::DarkGray))
-                .title(" PREVIEW ");
+                .title(preview_title);
 
-            let preview = Paragraph::new(cached_lines.clone())
-                .block(preview_block)
-                .wrap(Wrap { trim: false })
-                .scroll((scroll_y, 0));
-            frame.render_widget(preview, panes[1]);
+            match preview_mode {
+                PreviewMode::Text => {
+                    let preview_widget = Paragraph::new(cached_lines.clone())
+                        .block(preview_block)
+                        .wrap(Wrap { trim: false })
+                        .scroll((final_scroll, 0));
+                    frame.render_widget(preview_widget, panes[1]);
+                }
+                PreviewMode::Html => {
+                    if let Some(ref mut protocol) = cached_image_protocol {
+                        let image_widget = ratatui_image::StatefulImage::default();
+                        let inner = preview_block.inner(panes[1]);
+                        frame.render_widget(preview_block, panes[1]);
+                        frame.render_stateful_widget(image_widget, inner, protocol);
+                    } else {
+                        let loading = Paragraph::new(Line::from(Span::styled(
+                            " Rendering HTML preview...",
+                            Style::default().fg(Color::DarkGray),
+                        )))
+                        .block(preview_block);
+                        frame.render_widget(loading, panes[1]);
+                    }
+                }
+            }
 
+            // Status bar
+            let chrome_hint = if chrome_available { " ^P:html" } else { "" };
+            let browser_hint = if html_config.is_some() { " ^B:browser" } else { "" };
             let status = Line::from(Span::styled(
-                format!(" {} | DevTUI", file_display),
+                format!(" {} | DevTUI{}{} ^J/^K:scroll-preview", file_display, chrome_hint, browser_hint),
                 Style::default().fg(Color::DarkGray),
             ));
             frame.render_widget(Paragraph::new(status), rows[1]);
@@ -286,6 +386,49 @@ fn run_loop(
         if event::poll(Duration::from_millis(30))? {
             match event::read()? {
                 Event::Key(key) => {
+                    // Ctrl+P: toggle preview mode
+                    if key.code == KeyCode::Char('p') && key.modifiers.contains(KeyModifiers::CONTROL) && chrome_available {
+                        preview_mode = match preview_mode {
+                            PreviewMode::Text => {
+                                if let Some(cfg) = html_config {
+                                    pending_html = Some(render_html_preview(&last_content, cfg));
+                                }
+                                PreviewMode::Html
+                            }
+                            PreviewMode::Html => {
+                                cached_image_protocol = None;
+                                PreviewMode::Text
+                            }
+                        };
+                        continue;
+                    }
+
+                    // Ctrl+B: open in browser
+                    if key.code == KeyCode::Char('b') && key.modifiers.contains(KeyModifiers::CONTROL) {
+                        if let Some(cfg) = html_config {
+                            let html = render_html_preview(&last_content, cfg);
+                            let tmp_html = std::env::temp_dir().join("devtui-preview.html");
+                            let _ = std::fs::write(&tmp_html, &html);
+                            let _ = std::process::Command::new("open")
+                                .arg(&tmp_html)
+                                .spawn();
+                        }
+                        continue;
+                    }
+
+                    // Ctrl+J: scroll preview down
+                    if key.code == KeyCode::Char('j') && key.modifiers.contains(KeyModifiers::CONTROL) {
+                        scroll_offset += 3;
+                        continue;
+                    }
+
+                    // Ctrl+K: scroll preview up
+                    if key.code == KeyCode::Char('k') && key.modifiers.contains(KeyModifiers::CONTROL) {
+                        scroll_offset -= 3;
+                        continue;
+                    }
+
+                    // Pass everything else to vim
                     if let Some(bytes) = key_to_bytes(key.code, key.modifiers) {
                         if pty_writer.write_all(&bytes).is_err() {
                             break;
@@ -312,6 +455,26 @@ fn run_loop(
     }
 
     Ok(())
+}
+
+fn render_html_preview(content: &str, config: &HtmlPreviewConfig) -> String {
+    render_html_from_parts(content, &config.css, &config.article_tpl, &config.blog_config)
+}
+
+fn render_html_from_parts(
+    content: &str,
+    css: &str,
+    article_tpl: &str,
+    blog_config: &crate::engine::config::BlogConfig,
+) -> String {
+    use crate::engine::{build, minify};
+
+    let title = crate::engine::config::frontmatter("title", content)
+        .unwrap_or_else(|| "Preview".to_string());
+
+    let html = build::render_preview_html(content, &title, blog_config, article_tpl);
+    let minified_css = minify::minify_css(css);
+    minify::inline_css(&html, &minified_css)
 }
 
 pub fn key_to_bytes(code: KeyCode, modifiers: KeyModifiers) -> Option<Vec<u8>> {
