@@ -11,7 +11,7 @@ use rusqlite::Connection;
 
 use crate::engine::config::BlogConfig;
 use crate::engine::{minify, template};
-use chrome::ChromePreview;
+use chrome::ChromeHandle;
 use db::Status;
 use list::{ListAction, ListView};
 use vim::HtmlPreviewConfig;
@@ -34,8 +34,8 @@ pub fn run_cms(blog_dir: PathBuf) -> io::Result<()> {
     // Prepare HTML preview config (template + CSS)
     let html_config = load_html_preview_config(&cfg, &blog_dir);
 
-    // Initialize Chrome once for the entire CMS session
-    let chrome = ChromePreview::try_new(800, 600);
+    // Spawn Chrome background thread for HTML preview
+    let chrome = ChromeHandle::try_spawn(800, 600);
 
     let mut terminal = ratatui::init();
     let result = cms_loop(&mut terminal, &conn, &cfg, &blog_dir, html_config.as_ref(), chrome.as_ref());
@@ -84,7 +84,7 @@ fn cms_loop(
     cfg: &BlogConfig,
     blog_dir: &Path,
     html_config: Option<&HtmlPreviewConfig>,
-    chrome: Option<&ChromePreview>,
+    chrome: Option<&ChromeHandle>,
 ) -> io::Result<()> {
     loop {
         let articles = db::list_articles(conn, None)
@@ -112,7 +112,7 @@ fn edit_article(
     blog_dir: &Path,
     id: i64,
     html_config: Option<&HtmlPreviewConfig>,
-    chrome: Option<&ChromePreview>,
+    chrome: Option<&ChromeHandle>,
 ) -> io::Result<()> {
     let article = db::get_article(conn, id)
         .map_err(|e| io::Error::other(e.to_string()))?;
@@ -147,7 +147,7 @@ fn new_article(
     conn: &Connection,
     _blog_dir: &Path,
     html_config: Option<&HtmlPreviewConfig>,
-    chrome: Option<&ChromePreview>,
+    chrome: Option<&ChromeHandle>,
 ) -> io::Result<()> {
     let article = db::create_article(conn, "Untitled")
         .map_err(|e| io::Error::other(e.to_string()))?;
