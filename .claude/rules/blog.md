@@ -3,21 +3,24 @@
 ## Structure
 
 ```
-engine/              # generic, no blog-specific content
-  build.sh           # orchestrator
-  lib.sh             # module loader
-  lib/config.sh      # cfg(), frontmatter()
-  lib/template.sh    # resolve_file(), template_sub()
-  lib/seo.sh         # sitemap, robots, rss functions
-  templates/         # default templates
-  style.css          # default CSS
-  tests/             # bats tests
+src/engine/          # Rust modules, each with unit tests
+  build.rs           # pipeline orchestrator + integration tests
+  config.rs          # BlogConfig, frontmatter(), post_body()
+  template.rs        # resolve_file(), template_render()
+  seo.rs             # sitemap, robots, rss functions
+  minify.rs          # CSS/HTML minification, CSS inlining
+  links.rs           # social links, tags, guides HTML
+  markdown.rs        # markdown-to-HTML, post_snippet(), emoji
+  mod.rs             # module declarations
+
+engine/              # static assets (no code)
+  templates/         # default HTML templates
+  themes/<name>/     # theme CSS (base, index, article, syntax, responsive)
 
 blogs/               # gitignored, user-managed content
   <name>/blog.toml   # config per blog
   <name>/posts/      # markdown posts
   <name>/templates/  # optional overrides
-  <name>/style.css   # optional override
 
 dist/                # gitignored, generated output
 ```
@@ -30,13 +33,14 @@ The `date_field` allows different blogs to use different frontmatter keys for da
 
 ## Posts
 
-- YAML frontmatter required: `title`, the date field, `description`
+- YAML frontmatter required: `title`, the date field
+- `description` is optional. If missing, auto-generated from post body (160 chars, word boundary)
 - Filename becomes the URL slug
-- pandoc auto-detects code block language from fence markers (140+ languages)
+- pulldown-cmark uses language hints from fenced code blocks
 
 ## Template Override
 
-`resolve_file()` checks blog directory first, falls back to engine default. This applies to both templates and style.css.
+`resolve_file()` checks blog directory first, falls back to theme, then engine default. This applies to templates.
 
 ## SEO
 
@@ -48,7 +52,7 @@ Every build generates: canonical URLs, Open Graph, Twitter Card, JSON-LD (BlogPo
 - Unit tests in each `src/engine/*.rs` module with `#[cfg(test)]`
 - Integration tests in `src/engine/build.rs` (full pipeline with temp dirs)
 - Every new engine function needs tests. Every new output artifact needs integration assertions.
-- `make test` runs all tests (145 total)
+- `make test` runs all tests (147 total)
 
 ## Adding a new engine module
 

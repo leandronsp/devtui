@@ -40,7 +40,7 @@ brew install vim
 
 DDD module structure. Each module is self-contained with unit tests.
 
-- **`src/engine/build.rs`** — Pipeline orchestrator. 43 integration tests.
+- **`src/engine/build.rs`** — Pipeline orchestrator. 47 integration tests.
 - **`src/engine/config.rs`** — `BlogConfig` (serde), `frontmatter()`, `post_body()`. 20 tests.
 - **`src/engine/template.rs`** — `resolve_file()`, `template_render()` with `$var$` and `$if()$...$endif$`. 9 tests.
 - **`src/engine/seo.rs`** — `xml_escape()`, `sitemap_entry()`, `robots_txt()`, `rss_header()`, `rss_item()`. 14 tests.
@@ -100,7 +100,7 @@ make deploy.git.<name>         # build, copy to repo
 
 # All
 make help                      # all targets
-make test                      # cargo + bats
+make test                      # all tests + lint
 ```
 
 ## How the Editor Works
@@ -145,7 +145,7 @@ Each blog has a `blog.toml` with:
 ### Build Pipeline
 
 1. Read `blog.toml` config
-2. For each post: extract frontmatter, preprocess markdown (fix lists/blockquotes), run pandoc with article template. **Incremental**: skip if html is newer than md and template.
+2. For each post: extract frontmatter, preprocess markdown (fix lists/blockquotes), render HTML via pulldown-cmark with article template. **Incremental**: skip if html is newer than md and template.
 3. Concatenate theme CSS modules (base, index, article, syntax, responsive)
 4. Generate index.html with post list, filters, search, social links, guides
 5. Generate sitemap.xml, robots.txt, feed.xml, 404.html
@@ -214,9 +214,9 @@ The repo path is resolved automatically by following the `posts` symlink (`REPO_
 - **`shortmess=aFIoOstTWcCS`** via `--cmd` (before file load) to suppress vim messages.
 - **Blog frontmatter quoting**: Some blogs quote values (`title: "My Title"`), others don't. The `frontmatter()` function strips both.
 - **Lists without blank lines**: dev.to markdown has lists/blockquotes without preceding blank lines. `post_body()` preprocesses to insert blank lines before `* `, `- `, `> ` markers.
-- **Emoji shortcodes**: pandoc `+emoji` extension converts `:wave:` etc. to unicode.
+- **Emoji shortcodes**: `replace_emoji_shortcodes()` in markdown.rs converts `:wave:` etc. to unicode spans via gh-emoji crate.
 - **CSS order matters**: `@media` queries must come AFTER base rules in the CSS. The minifier preserves `<style>` blocks during HTML minification.
-- **Incremental builds**: compare mtime of .md vs .html. If html is newer than both md and template, skip pandoc. Index/sitemap/feed always rebuild.
+- **Incremental builds**: compare mtime of .md vs .html. If html is newer than both md and template, skip rebuild. Index/sitemap/feed always rebuild.
 
 ## Controls
 

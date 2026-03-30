@@ -28,7 +28,7 @@ Multi-site static blog generator. See [docs/BLOG_ENGINE.md](docs/BLOG_ENGINE.md)
 ## Development
 
 ```bash
-make test                     # all tests (145 tests, ~1s)
+make test                     # all tests (147 tests, ~1s)
 make editor.test              # editor tests only
 make blog.test                # engine tests only
 cargo clippy -- -D warnings   # lint
@@ -47,6 +47,7 @@ cargo clippy -- -D warnings   # lint
 - [pulldown-cmark](https://github.com/raphlinus/pulldown-cmark) -- markdown to HTML
 - [toml](https://docs.rs/toml) + [serde](https://serde.rs/) -- config parsing
 - [gh-emoji](https://docs.rs/gh-emoji) -- emoji shortcode conversion
+- [tiny_http](https://docs.rs/tiny_http) -- local dev server
 - **rsync** -- deploy only
 
 ### Install (macOS)

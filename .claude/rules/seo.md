@@ -13,7 +13,7 @@ Applies to generated blog HTML (engine templates, index pages, article pages).
 ## Semantic HTML
 
 - One `<h1>` per page. Article title on post pages, site title on index.
-- `<h2>` for sections, `<h3>` for subsections. pandoc handles this from markdown headings.
+- `<h2>` for sections, `<h3>` for subsections. pulldown-cmark preserves heading levels from markdown.
 - Use landmarks: `<header>`, `<nav>`, `<main>`, `<article>`, `<footer>`
 - `<time>` for dates with `datetime` attribute
 

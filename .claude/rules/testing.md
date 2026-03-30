@@ -1,6 +1,6 @@
 ---
-description: Testing conventions for Rust and bats
-globs: ["src/**/*.rs", "tests/**/*.rs", "engine/**/*.bats", "engine/**/*.sh"]
+description: Testing conventions for Rust (editor + engine)
+globs: ["src/**/*.rs", "tests/**/*.rs"]
 alwaysApply: false
 ---
 
@@ -12,17 +12,17 @@ alwaysApply: false
 # all tests
 make test
 
-# rust only
-make editor.test                        # all tests
+# editor
+make editor.test                        # all editor tests
 cargo test editor::tests                # single module
 cargo test editor::tests::inserts_char  # single test
-make editor.lint                        # lint check
+make editor.lint                        # clippy
 
-# engine only (bats)
-bats engine/tests/                      # all engine tests
-bats engine/tests/build.bats            # build integration tests
-bats engine/tests/lib.bats              # lib unit tests
-bats engine/tests/build.bats --filter "skips unchanged"  # single test
+# engine
+make blog.test                          # all engine tests
+cargo test engine::build::tests         # build integration tests
+cargo test engine::config::tests        # config unit tests
+cargo test engine::build::tests::build_generates_404_html  # single test
 ```
 
 ## TDD Cycle
