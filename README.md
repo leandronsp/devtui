@@ -28,9 +28,9 @@ Multi-site static blog generator. See [docs/BLOG_ENGINE.md](docs/BLOG_ENGINE.md)
 ## Development
 
 ```bash
-make test                     # cargo tests + bats engine tests
-cargo test                    # 26 preview rendering tests
-bats engine/tests/            # 49 engine tests (unit + integration)
+make test                     # all tests (145 tests, ~1s)
+make editor.test              # editor tests only
+make blog.test                # engine tests only
 cargo clippy -- -D warnings   # lint
 ```
 
@@ -44,22 +44,16 @@ cargo clippy -- -D warnings   # lint
 
 ### Engine
 
-- [pandoc](https://pandoc.org/) -- markdown to HTML
-- [dasel](https://github.com/TomWright/dasel) -- TOML config parsing
-- [jq](https://jqlang.github.io/jq/) -- JSON processing
-- **python3** -- minification, text processing
-- **xmllint** -- feed.xml validation
-- **rsync** -- static asset copying and deploy
-
-### Testing
-
-- [bats](https://github.com/bats-core/bats-core) -- engine shell tests
+- [pulldown-cmark](https://github.com/raphlinus/pulldown-cmark) -- markdown to HTML
+- [toml](https://docs.rs/toml) + [serde](https://serde.rs/) -- config parsing
+- [gh-emoji](https://docs.rs/gh-emoji) -- emoji shortcode conversion
+- **rsync** -- deploy only
 
 ### Install (macOS)
 
 ```bash
-brew install vim pandoc dasel jq bats-core
-# python3 and xmllint are pre-installed on macOS
+brew install vim
+# Rust toolchain via rustup
 ```
 
 ## License

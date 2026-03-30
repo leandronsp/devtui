@@ -5,7 +5,7 @@
 DevTUI is three things:
 
 1. **Editor** — Terminal markdown editor with live preview. Embeds vim via PTY with real-time rendered markdown preview. Built in Rust with ratatui.
-2. **Engine** — Multi-site static blog generator. Converts markdown to SEO-optimized HTML via pandoc. Shell-based, tested with bats.
+2. **Engine** — Multi-site static blog generator. Converts markdown to SEO-optimized HTML. Pure Rust, using pulldown-cmark.
 3. **CLI** — The glue. Makefile orchestrates builds across multiple blogs.
 
 ## Dependencies
@@ -18,44 +18,37 @@ DevTUI is three things:
 
 ### Engine
 
-- **pandoc** — markdown to HTML conversion
-- **dasel** — TOML config parsing (blog.toml)
-- **jq** — JSON processing (links, tags, guides)
-- **python3** — HTML/CSS minification, UTF-8 truncation
-- **xmllint** — feed.xml validation during build
-- Standard Unix: sed, awk, grep, rsync, tr, cut, head
-
-### Testing
-
-- **bats** — bash test framework for engine tests
-- **cargo test** — Rust tests for editor/preview
+- Pure Rust. No external tools.
+- Crates: pulldown-cmark, toml, serde, gh-emoji
+- **rsync** — deploy only (copies dist to blog repo)
 
 ### Install (macOS)
 
 ```bash
-brew install vim pandoc dasel jq bats-core
-# xmllint and python3 are pre-installed on macOS
+brew install vim
+# Rust toolchain via rustup
 ```
 
 ## Architecture
 
-### Editor (src/)
+### Editor (src/editor/)
 
-- **`src/main.rs`** — PTY setup, vim spawn, event loop, scroll sync, mode detection
-- **`src/preview.rs`** — Markdown to ratatui Lines rendering + 26 unit tests
+- **`src/editor/mod.rs`** — PTY setup, vim spawn, event loop, scroll sync, mode detection
+- **`src/editor/preview.rs`** — Markdown to ratatui Lines rendering + 26 unit tests
 
-Crates: portable-pty, vt100, tui-term, pulldown-cmark, ratatui, crossterm.
+### Engine (src/engine/)
 
-### Engine (engine/)
+DDD module structure. Each module is self-contained with unit tests.
 
-- **`engine/build.sh`** — Orchestrator. Reads blog config, builds articles, index, sitemap, robots, RSS.
-- **`engine/lib.sh`** — Module loader.
-- **`engine/lib/config.sh`** — `cfg()`, `frontmatter()`. Config and frontmatter parsing.
-- **`engine/lib/template.sh`** — `resolve_file()`, `template_sub()`. Template resolution with blog override > engine default fallback.
-- **`engine/lib/seo.sh`** — `sitemap_entry()`, `robots_txt()`, `rss_header()`, `rss_item()`. SEO artifact generation.
-- **`engine/templates/`** — Default HTML templates (pandoc format).
+- **`src/engine/build.rs`** — Pipeline orchestrator. 43 integration tests.
+- **`src/engine/config.rs`** — `BlogConfig` (serde), `frontmatter()`, `post_body()`. 20 tests.
+- **`src/engine/template.rs`** — `resolve_file()`, `template_render()` with `$var$` and `$if()$...$endif$`. 9 tests.
+- **`src/engine/seo.rs`** — `xml_escape()`, `sitemap_entry()`, `robots_txt()`, `rss_header()`, `rss_item()`. 14 tests.
+- **`src/engine/minify.rs`** — CSS/HTML minification, CSS inlining. 8 tests.
+- **`src/engine/links.rs`** — Social links, tags, guides HTML from BlogConfig. 6 tests.
+- **`src/engine/markdown.rs`** — Markdown-to-HTML (pulldown-cmark), `post_snippet()`, emoji shortcodes. 19 tests.
+- **`engine/templates/`** — Default HTML templates.
 - **`engine/themes/<name>/`** — Theme CSS, split into modular files.
-- **`engine/tests/`** — bats tests (unit + integration).
 
 ### Themes (engine/themes/)
 
@@ -94,7 +87,7 @@ Makefile is split into `mk/editor.mk` and `mk/blog.mk`, included from the root M
 # Editor (mk/editor.mk)
 make editor.run FILE=file.md   # run editor
 make editor.build              # release build
-make editor.test               # 26 preview tests
+make editor.test               # editor tests
 make editor.lint               # clippy
 
 # Blog (mk/blog.mk)

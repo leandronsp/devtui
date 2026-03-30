@@ -49,19 +49,14 @@ bats engine/tests/build.bats --filter "skips unchanged"  # single test
 - Unit tests in each module with `#[cfg(test)]`
 - Integration tests in `tests/` directory
 
-## Bats Conventions (engine tests)
+## Engine Tests (src/engine/)
 
-- `engine/tests/lib.bats` -- unit tests for each lib function
-- `engine/tests/build.bats` -- integration tests for full build output
-- Every new lib function needs bats tests
-- Every new output artifact needs integration assertions
-- Use `setup()` to create fixtures in `$(mktemp -d)`, `teardown()` to clean up
-- Test names: `@test "build: generates 404.html"` (prefix with module)
-- Use `run` to capture exit code and output, then assert with `[ "$status" -eq 0 ]`
-- Use `[[ "$output" == *"pattern"* ]]` to check build output messages
-- Use `grep -q` to check file contents, `! grep -q` to assert absence
-- For incremental build tests, use `sleep 1` + `touch` to change mtime
-- Prefer checking output messages over mtime comparisons (less flaky)
+- Unit tests in each module with `#[cfg(test)]` (config, template, seo, minify, links, markdown)
+- Integration tests in `src/engine/build.rs` (full pipeline with temp directories)
+- Every new engine function needs unit tests
+- Every new output artifact needs integration assertions in build.rs
+- Use `tempdir()` helper for isolated test fixtures
+- Test naming: `fn build_generates_404_html()`, `fn frontmatter_extracts_title()`
 
 ## Edge Cases to Test
 
@@ -74,7 +69,7 @@ bats engine/tests/build.bats --filter "skips unchanged"  # single test
 - Rapid mode switching (normal/insert)
 - Markdown edge cases (nested formatting, unclosed tags)
 
-### Bats (engine)
+### Engine
 
 - Posts without description field
 - Posts with horizontal rules in body (not confused with frontmatter)

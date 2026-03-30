@@ -1,11 +1,11 @@
-# Blog engine targets (shell-based static site generator)
+# Blog engine targets (Rust static site generator)
 
 BLOGS := $(notdir $(wildcard blogs/*))
 
 .PHONY: blog.list blog.build blog.clean blog.test
 
-blog.test: ## Run engine tests (bats)
-	@bats engine/tests/
+blog.test: ## Run engine tests
+	@cargo test engine::
 
 blog.list: ## List available blogs
 	@for b in $(BLOGS); do echo "  $$b"; done
@@ -14,11 +14,11 @@ blog.build: $(addprefix blog.build.,$(BLOGS)) ## Build all blogs
 
 blog.build.%: ## Build a specific blog (e.g. make blog.build.my-site)
 	@echo "building $*..."
-	@engine/build.sh blogs/$* dist/$*
+	@cargo run --release --bin devtui-engine -- blogs/$* dist/$*
 
 blog.serve.%: blog.build.% ## Build and serve a blog on localhost:8000
 	@echo "  serving $* at http://localhost:8000"
-	@cd dist/$* && python3 -m http.server 8000
+	@cargo run --release --bin devtui-engine -- serve dist/$*
 
 blog.clean: ## Remove all generated files
 	@rm -rf dist

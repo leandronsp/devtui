@@ -1,7 +1,6 @@
-mod preview;
+pub mod preview;
 
 use std::io::{self, Read, Write};
-use std::path::PathBuf;
 use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::{Arc, RwLock};
 use std::thread;
@@ -20,12 +19,7 @@ use tui_term::widget::PseudoTerminal;
 const DRAFT_PATH: &str = "draft.md";
 const CONTENT_TMP: &str = "/tmp/devtui-content";
 
-fn main() -> io::Result<()> {
-    let file_path = std::env::args()
-        .nth(1)
-        .map(PathBuf::from)
-        .unwrap_or_else(|| PathBuf::from(DRAFT_PATH));
-
+pub fn run(file_path: std::path::PathBuf) -> io::Result<()> {
     if !file_path.exists() {
         std::fs::write(&file_path, "")?;
     }

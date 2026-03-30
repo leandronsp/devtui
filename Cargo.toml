@@ -3,6 +3,18 @@ name = "devtui"
 version = "0.1.0"
 edition = "2021"
 
+[lib]
+name = "devtui"
+path = "src/lib.rs"
+
+[[bin]]
+name = "devtui"
+path = "src/bin/editor.rs"
+
+[[bin]]
+name = "devtui-engine"
+path = "src/bin/engine.rs"
+
 [dependencies]
 ratatui = "0.29"
 crossterm = "0.28"
@@ -12,3 +24,7 @@ vt100 = "0.15"
 portable-pty = "0.9"
 nvim-rs = { version = "0.9", features = ["use_tokio"] }
 tokio = { version = "1", features = ["full"] }
+toml = "0.8"
+serde = { version = "1", features = ["derive"] }
+gh-emoji = "1.0"
+tiny_http = "0.12"

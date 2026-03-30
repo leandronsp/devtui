@@ -3,10 +3,10 @@
 .PHONY: editor.build editor.run editor.test editor.lint
 
 editor.build: ## Build editor in release mode
-	@cargo build --release
+	@cargo build --release --bin devtui
 
 editor.run: ## Run editor (usage: make editor.run FILE=mypost.md)
-	@cargo run -- $(FILE)
+	@cargo run --bin devtui -- $(FILE)
 
 editor.test: ## Run editor tests
 	@cargo test

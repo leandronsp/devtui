@@ -1,0 +1,295 @@
+use pulldown_cmark::{Event, Options, Parser, Tag, TagEnd};
+
+/// Convert markdown to HTML using pulldown-cmark.
+/// Pre-processes emoji shortcodes before parsing.
+pub fn markdown_to_html(markdown: &str) -> String {
+    let preprocessed = replace_emoji_shortcodes(markdown);
+    let options = Options::ENABLE_STRIKETHROUGH | Options::ENABLE_TABLES | Options::ENABLE_FOOTNOTES;
+    let parser = Parser::new_ext(&preprocessed, options);
+    let mut html = String::new();
+    pulldown_cmark::html::push_html(&mut html, parser);
+    html
+}
+
+/// Extract a plain-text snippet from markdown, truncated at word boundary.
+pub fn post_snippet(body: &str, description: Option<&str>, limit: usize) -> String {
+    if let Some(desc) = description {
+        if !desc.is_empty() {
+            return desc.to_string();
+        }
+    }
+
+    // Parse markdown and extract only text content
+    let options = Options::ENABLE_STRIKETHROUGH | Options::ENABLE_TABLES;
+    let parser = Parser::new_ext(body, options);
+
+    let mut text = String::new();
+    let mut in_code_block = false;
+
+    for event in parser {
+        match event {
+            Event::Start(Tag::CodeBlock(_)) => in_code_block = true,
+            Event::End(TagEnd::CodeBlock) => in_code_block = false,
+            Event::Text(t) if !in_code_block => {
+                if !text.is_empty() {
+                    text.push(' ');
+                }
+                text.push_str(&t);
+            }
+            Event::SoftBreak | Event::HardBreak if !in_code_block => {
+                text.push(' ');
+            }
+            _ => {}
+        }
+    }
+
+    // Collapse whitespace
+    let text: String = text.split_whitespace().collect::<Vec<_>>().join(" ");
+
+    truncate_at_word_boundary(&text, limit)
+}
+
+fn truncate_at_word_boundary(text: &str, limit: usize) -> String {
+    if text.len() <= limit {
+        return text.to_string();
+    }
+
+    // Find the last space before or at the limit, respecting UTF-8
+    let mut end = limit;
+    while end > 0 && !text.is_char_boundary(end) {
+        end -= 1;
+    }
+
+    // Try to break at a word boundary
+    if let Some(last_space) = text[..end].rfind(' ') {
+        text[..last_space].to_string()
+    } else {
+        text[..end].to_string()
+    }
+}
+
+/// Replace :emoji: shortcodes with <span class="emoji" data-emoji="name">CHAR</span>.
+/// Skips shortcodes inside code fences.
+fn replace_emoji_shortcodes(text: &str) -> String {
+    let mut result = String::with_capacity(text.len());
+    let mut in_code_fence = false;
+    let mut in_inline_code = false;
+
+    for line in text.lines() {
+        if line.starts_with("```") {
+            in_code_fence = !in_code_fence;
+            result.push_str(line);
+            result.push('\n');
+            continue;
+        }
+
+        if in_code_fence {
+            result.push_str(line);
+            result.push('\n');
+            continue;
+        }
+
+        // Process inline, tracking backtick code spans
+        let chars: Vec<char> = line.chars().collect();
+        let len = chars.len();
+        let mut idx = 0;
+
+        while idx < len {
+            if chars[idx] == '`' {
+                in_inline_code = !in_inline_code;
+                result.push('`');
+                idx += 1;
+                continue;
+            }
+
+            if in_inline_code {
+                result.push(chars[idx]);
+                idx += 1;
+                continue;
+            }
+
+            if chars[idx] == ':' {
+                // Try to match :shortcode:
+                if let Some(end) = find_shortcode_end(&chars, idx) {
+                    let name: String = chars[idx + 1..end].iter().collect();
+                    if let Some(emoji) = gh_emoji::get(&name) {
+                        result.push_str(&format!(
+                            r#"<span class="emoji" data-emoji="{name}">{emoji}</span>"#
+                        ));
+                        idx = end + 1;
+                        continue;
+                    }
+                }
+            }
+
+            result.push(chars[idx]);
+            idx += 1;
+        }
+
+        result.push('\n');
+    }
+
+    // Remove trailing newline if input didn't have one
+    if !text.ends_with('\n') && result.ends_with('\n') {
+        result.pop();
+    }
+
+    result
+}
+
+fn find_shortcode_end(chars: &[char], start: usize) -> Option<usize> {
+    let mut idx = start + 1;
+    while idx < chars.len() {
+        if chars[idx] == ':' {
+            return Some(idx);
+        }
+        if !chars[idx].is_alphanumeric() && chars[idx] != '_' && chars[idx] != '-' && chars[idx] != '+' {
+            return None;
+        }
+        idx += 1;
+    }
+    None
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    // --- markdown_to_html ---
+
+    #[test]
+    fn markdown_to_html_renders_heading() {
+        let result = markdown_to_html("## Section Title\n");
+        assert!(result.contains("<h2>Section Title</h2>"));
+    }
+
+    #[test]
+    fn markdown_to_html_renders_bold() {
+        let result = markdown_to_html("Some **bold** text\n");
+        assert!(result.contains("<strong>bold</strong>"));
+    }
+
+    #[test]
+    fn markdown_to_html_renders_code_block() {
+        let result = markdown_to_html("```ruby\nputs 'hi'\n```\n");
+        assert!(result.contains("<code"));
+        assert!(result.contains("puts 'hi'"));
+    }
+
+    #[test]
+    fn markdown_to_html_renders_hr_before_heading_as_h2() {
+        let md = "Some text\n\n---\n\n## Section After Rule\n";
+        let result = markdown_to_html(md);
+        assert!(result.contains("<h2>Section After Rule</h2>"));
+    }
+
+    #[test]
+    fn markdown_to_html_hr_not_in_table() {
+        let md = "Some text\n\n---\n\n## Section After Rule\n";
+        let result = markdown_to_html(md);
+        assert!(!result.contains("<th"));
+    }
+
+    #[test]
+    fn markdown_to_html_converts_emoji_shortcodes() {
+        let result = markdown_to_html("Hello :wave: world :bulb:\n");
+        assert!(result.contains(r#"data-emoji="wave""#));
+        assert!(result.contains(r#"data-emoji="bulb""#));
+    }
+
+    #[test]
+    fn markdown_to_html_preserves_emoji_in_code_blocks() {
+        let result = markdown_to_html("```\n:wave:\n```\n");
+        // Inside code blocks, emoji shortcodes should NOT be converted
+        assert!(!result.contains("data-emoji"));
+    }
+
+    #[test]
+    fn markdown_to_html_renders_lists_without_blank_line() {
+        // post_body already inserts blank lines, but test the HTML output
+        let md = "Some text\n\n* item one\n* item two\n";
+        let result = markdown_to_html(md);
+        assert!(result.contains("<li>"));
+    }
+
+    #[test]
+    fn markdown_to_html_renders_blockquote() {
+        let md = "Some text\n\n> a quote\n";
+        let result = markdown_to_html(md);
+        assert!(result.contains("<blockquote>"));
+    }
+
+    #[test]
+    fn markdown_to_html_renders_links() {
+        let md = "Visit [my site](https://example.com)\n";
+        let result = markdown_to_html(md);
+        assert!(result.contains(r#"<a href="https://example.com">my site</a>"#));
+    }
+
+    // --- post_snippet ---
+
+    #[test]
+    fn post_snippet_uses_description_when_available() {
+        let result = post_snippet("body text", Some("A description"), 300);
+        assert_eq!(result, "A description");
+    }
+
+    #[test]
+    fn post_snippet_falls_back_to_body() {
+        let result = post_snippet("Content without description.", None, 300);
+        assert!(result.contains("Content without description"));
+    }
+
+    #[test]
+    fn post_snippet_strips_bold_italic_code() {
+        let result = post_snippet("Some **bold** and *italic* and `code` text", None, 300);
+        assert!(result.contains("bold"));
+        assert!(!result.contains("**"));
+        assert!(!result.contains("`"));
+    }
+
+    #[test]
+    fn post_snippet_strips_links() {
+        let result = post_snippet("Visit [my site](https://example.com) now", None, 300);
+        assert!(result.contains("my site"));
+        assert!(!result.contains("https://example.com"));
+    }
+
+    #[test]
+    fn post_snippet_strips_horizontal_rules() {
+        let result = post_snippet("Before\n\n---\n\nAfter", None, 300);
+        assert!(!result.contains("---"));
+    }
+
+    #[test]
+    fn post_snippet_strips_strikethrough() {
+        let result = post_snippet("~~shame~~ courage", None, 300);
+        assert!(result.contains("courage"));
+        assert!(!result.contains("~~"));
+    }
+
+    #[test]
+    fn post_snippet_custom_limit_truncates() {
+        let body = "This is a long body text that should be truncated at the word boundary when the limit is reached.";
+        let result = post_snippet(body, None, 50);
+        assert!(result.len() <= 50);
+    }
+
+    #[test]
+    fn post_snippet_preserves_utf8() {
+        let result = post_snippet("Sentado no sofá, então lá vai", None, 300);
+        assert!(result.contains("sofá"));
+        assert!(result.contains("então"));
+        assert!(result.contains("lá"));
+    }
+
+    #[test]
+    fn post_snippet_does_not_break_multibyte_at_boundary() {
+        // UTF-8 boundary stress test
+        let body = "á".repeat(100);
+        let result = post_snippet(&body, None, 160);
+        assert!(result.len() <= 160);
+        // Verify it's valid UTF-8 (would panic if not)
+        let _ = result.chars().count();
+    }
+}

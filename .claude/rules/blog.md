@@ -44,15 +44,14 @@ Every build generates: canonical URLs, Open Graph, Twitter Card, JSON-LD (BlogPo
 
 ## Testing
 
-- `bats engine/tests/` runs all engine tests
-- `engine/tests/lib.bats` — unit tests for each lib function
-- `engine/tests/build.bats` — integration tests for full build output
-- Every new lib function needs bats tests. Every new output artifact needs integration assertions.
-- `make test` runs both cargo and bats (76 tests total)
+- `make blog.test` runs all engine tests (119 tests, ~1s)
+- Unit tests in each `src/engine/*.rs` module with `#[cfg(test)]`
+- Integration tests in `src/engine/build.rs` (full pipeline with temp dirs)
+- Every new engine function needs tests. Every new output artifact needs integration assertions.
+- `make test` runs all tests (145 total)
 
-## Adding a new lib module
+## Adding a new engine module
 
-1. Create `engine/lib/<module>.sh` with functions
-2. Add `source "$LIB_DIR/<module>.sh"` to `engine/lib.sh`
-3. Add unit tests in `engine/tests/lib.bats`
-4. If the module produces output files, add integration tests in `engine/tests/build.bats`
+1. Create `src/engine/<module>.rs` with functions and `#[cfg(test)]` tests
+2. Add `pub mod <module>;` to `src/engine/mod.rs`
+3. If the module produces output files, add integration tests in `src/engine/build.rs`
