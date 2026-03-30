@@ -1,4 +1,5 @@
-use headless_chrome::protocol::cdp::Page::CaptureScreenshotFormatOption;
+use base64::Engine;
+use headless_chrome::protocol::cdp::Page;
 use headless_chrome::{Browser, LaunchOptions, Tab};
 use std::path::PathBuf;
 use std::sync::atomic::{AtomicBool, AtomicU64, Ordering};
@@ -147,7 +148,7 @@ fn full_page_screenshot(tab: &Arc<Tab>, html: &str) -> Option<Vec<u8>> {
         .and_then(|v| v.as_f64())
         .unwrap_or(800.0);
 
-    let clip = headless_chrome::protocol::cdp::Page::Viewport {
+    let clip = Page::Viewport {
         x: 0.0,
         y: 0.0,
         width,
@@ -155,8 +156,19 @@ fn full_page_screenshot(tab: &Arc<Tab>, html: &str) -> Option<Vec<u8>> {
         scale: 1.0,
     };
 
-    let bytes = tab
-        .capture_screenshot(CaptureScreenshotFormatOption::Png, None, Some(clip), true)
+    let result = tab
+        .call_method(Page::CaptureScreenshot {
+            format: Some(Page::CaptureScreenshotFormatOption::Png),
+            clip: Some(clip),
+            quality: None,
+            from_surface: Some(true),
+            capture_beyond_viewport: Some(true),
+            optimize_for_speed: None,
+        })
+        .ok()?;
+
+    let bytes = base64::engine::general_purpose::STANDARD
+        .decode(result.data)
         .ok()?;
 
     let _ = std::fs::remove_file(&tmp_path);
