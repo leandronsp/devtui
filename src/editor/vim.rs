@@ -338,7 +338,7 @@ fn run_loop(
         // Debounced preview re-render: wait 500ms after last change
         if preview_stale {
             if let Some(changed_at) = content_changed_at {
-                if changed_at.elapsed() >= std::time::Duration::from_millis(500) {
+                if changed_at.elapsed() >= std::time::Duration::from_millis(200) {
                     preview_stale = false;
                     content_changed_at = None;
 
@@ -630,8 +630,13 @@ fn render_preview(
                 frame.render_widget(preview_block, area);
                 frame.render_stateful_widget(image_widget, inner, protocol);
             } else {
+                let msg = if html_rendering {
+                    " Rendering..."
+                } else {
+                    " Press ^P to render HTML preview"
+                };
                 let loading = Paragraph::new(Line::from(Span::styled(
-                    " Waiting for Chrome...",
+                    msg,
                     Style::default().fg(Color::DarkGray),
                 )))
                 .block(preview_block);
