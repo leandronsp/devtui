@@ -1,14 +1,11 @@
-use std::sync::Arc;
-
 use headless_chrome::protocol::cdp::Page::CaptureScreenshotFormatOption;
-use headless_chrome::{Browser, LaunchOptions, Tab};
+use headless_chrome::{Browser, LaunchOptions};
 use std::path::PathBuf;
 
 /// Headless Chrome screenshot service for HTML preview.
-/// Keeps a warm browser instance with a reusable tab.
+/// Keeps a warm browser instance. Creates fresh tabs for each screenshot.
 pub struct ChromePreview {
-    _browser: Browser,
-    tab: Arc<Tab>,
+    browser: Browser,
 }
 
 impl ChromePreview {
@@ -23,46 +20,32 @@ impl ChromePreview {
             ..LaunchOptions::default()
         };
         let browser = Browser::new(options).ok()?;
-        let tab = browser.new_tab().ok()?;
-        tab.navigate_to("about:blank").ok()?;
-
-        Some(Self {
-            _browser: browser,
-            tab,
-        })
+        Some(Self { browser })
     }
 
     /// Render HTML string and capture screenshot as PNG bytes.
-    /// Uses JavaScript to set document content directly (avoids data: URI size limits).
-    /// Returns None on any error.
+    /// Creates a fresh tab each time for clean state.
     pub fn screenshot(&self, html: &str) -> Option<Vec<u8>> {
-        // Use data: URI for reliable loading (document.write can fail on repeated calls)
-        let encoded = format!(
-            "data:text/html;charset=utf-8,{}",
-            html.replace('%', "%25")
-                .replace('#', "%23")
-                .replace(' ', "%20")
-                .replace('\n', "%0A")
-        );
+        let tab = self.browser.new_tab().ok()?;
 
-        // Truncate if too long for data URI (Chrome limit ~2MB). Fall back to document.write.
-        if encoded.len() > 1_500_000 {
-            let escaped = html
-                .replace('\\', "\\\\")
-                .replace('`', "\\`")
-                .replace("${", "\\${");
-            let js = format!("document.open(); document.write(`{escaped}`); document.close();");
-            self.tab.evaluate(&js, true).ok()?;
-        } else {
-            self.tab.navigate_to(&encoded).ok()?;
-            self.tab.wait_until_navigated().ok()?;
-        }
+        let escaped = html
+            .replace('\\', "\\\\")
+            .replace('`', "\\`")
+            .replace("${", "\\${");
+
+        let js = format!("document.open(); document.write(`{escaped}`); document.close();");
+        tab.evaluate(&js, true).ok()?;
 
         std::thread::sleep(std::time::Duration::from_millis(100));
 
-        self.tab
+        let bytes = tab
             .capture_screenshot(CaptureScreenshotFormatOption::Png, None, None, true)
-            .ok()
+            .ok()?;
+
+        // Close tab to avoid accumulating
+        let _ = tab.close(true);
+
+        Some(bytes)
     }
 }
 
