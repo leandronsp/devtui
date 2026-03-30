@@ -15,7 +15,7 @@ use ratatui::{
 };
 use tui_term::widget::PseudoTerminal;
 
-use super::chrome::ChromePreview;
+use super::chrome::ChromeHandle;
 use super::preview;
 
 const DRAFT_PATH: &str = "draft.md";
@@ -48,7 +48,7 @@ pub fn run(
     terminal: &mut ratatui::DefaultTerminal,
     file_path: PathBuf,
     html_config: Option<&HtmlPreviewConfig>,
-    chrome: Option<&ChromePreview>,
+    chrome: Option<&ChromeHandle>,
 ) -> io::Result<(EditorResult, String)> {
     if !file_path.exists() {
         std::fs::write(&file_path, "")?;
@@ -303,7 +303,7 @@ fn run_loop(
     file_display: &str,
     content_swap: &Arc<Mutex<Option<String>>>,
     html_config: Option<&HtmlPreviewConfig>,
-    chrome: Option<&ChromePreview>,
+    chrome: Option<&ChromeHandle>,
     picker: &ratatui_image::picker::Picker,
 ) -> io::Result<()> {
     let mut last_content = String::new();
@@ -312,42 +312,60 @@ fn run_loop(
     let mut cached_image_protocol: Option<ratatui_image::protocol::StatefulProtocol> = None;
     let mut split_layout = SplitLayout::Vertical;
     let mut preview_scroll: u16 = 0;
-    let mut pending_html: Option<String> = None;
     let chrome_available = chrome.is_some();
+    let mut html_rendering = false; // true while waiting for Chrome screenshot
+
+    // Debounce: only re-render preview after content is stable for 500ms
+    let mut content_changed_at: Option<std::time::Instant> = None;
+    let mut preview_stale = false;
 
     loop {
         if vim_exited.load(Ordering::Relaxed) {
             break;
         }
 
-        // Pick up new content from swap buffer (non-blocking take)
+        // Pick up new content from swap buffer (non-blocking)
         if let Ok(mut slot) = content_swap.try_lock() {
             if let Some(new_content) = slot.take() {
                 if new_content != last_content {
                     last_content = new_content;
+                    content_changed_at = Some(std::time::Instant::now());
+                    preview_stale = true;
+                }
+            }
+        }
+
+        // Debounced preview re-render: wait 500ms after last change
+        if preview_stale {
+            if let Some(changed_at) = content_changed_at {
+                if changed_at.elapsed() >= std::time::Duration::from_millis(500) {
+                    preview_stale = false;
+                    content_changed_at = None;
 
                     if split_layout != SplitLayout::EditorOnly {
                         let (lines, _) = preview::render_with_offsets(&last_content);
                         cached_lines = lines;
                     }
 
+                    // Send to Chrome if in HTML mode
                     if preview_mode == PreviewMode::Html {
-                        if let Some(cfg) = html_config {
-                            pending_html = Some(render_html_preview(&last_content, cfg));
+                        if let (Some(cfg), Some(ch)) = (html_config, chrome) {
+                            let html = render_html_preview(&last_content, cfg);
+                            ch.send_html(html);
+                            html_rendering = true;
                         }
                     }
                 }
             }
         }
 
-        // Chrome screenshot on main thread
+        // Pick up Chrome screenshot (non-blocking)
         if preview_mode == PreviewMode::Html {
-            if let Some(html) = pending_html.take() {
-                if let Some(ch) = chrome {
-                    if let Some(bytes) = ch.screenshot(&html) {
-                        if let Ok(img) = image::load_from_memory(&bytes) {
-                            cached_image_protocol = Some(picker.new_resize_protocol(img));
-                        }
+            if let Some(ch) = chrome {
+                if let Some(bytes) = ch.try_recv_image() {
+                    if let Ok(img) = image::load_from_memory(&bytes) {
+                        cached_image_protocol = Some(picker.new_resize_protocol(img));
+                        html_rendering = false;
                     }
                 }
             }
@@ -394,7 +412,7 @@ fn run_loop(
                     render_editor(frame, parser, mode_label, mode_st, &vim_message, panes[0]);
                     render_preview(
                         frame, &cached_lines, clamped_scroll, preview_mode,
-                        preview_mode_label, &mut cached_image_protocol, panes[1],
+                        preview_mode_label, &mut cached_image_protocol, html_rendering, panes[1],
                     );
                 }
                 SplitLayout::Horizontal => {
@@ -406,7 +424,7 @@ fn run_loop(
                     render_editor(frame, parser, mode_label, mode_st, &vim_message, panes[0]);
                     render_preview(
                         frame, &cached_lines, clamped_scroll, preview_mode,
-                        preview_mode_label, &mut cached_image_protocol, panes[1],
+                        preview_mode_label, &mut cached_image_protocol, html_rendering, panes[1],
                     );
                 }
                 SplitLayout::EditorOnly => {
@@ -478,13 +496,16 @@ fn run_loop(
                     if key.code == KeyCode::Char('p') && ctrl && chrome_available {
                         preview_mode = match preview_mode {
                             PreviewMode::Text => {
-                                if let Some(cfg) = html_config {
-                                    pending_html = Some(render_html_preview(&last_content, cfg));
+                                if let (Some(cfg), Some(ch)) = (html_config, chrome) {
+                                    let html = render_html_preview(&last_content, cfg);
+                                    ch.send_html(html);
+                                    html_rendering = true;
                                 }
                                 PreviewMode::Html
                             }
                             PreviewMode::Html => {
                                 cached_image_protocol = None;
+                                html_rendering = false;
                                 PreviewMode::Text
                             }
                         };
@@ -576,6 +597,7 @@ fn render_editor(
     }
 }
 
+#[allow(clippy::too_many_arguments)]
 fn render_preview(
     frame: &mut ratatui::Frame,
     cached_lines: &[Line<'static>],
@@ -583,9 +605,11 @@ fn render_preview(
     preview_mode: PreviewMode,
     mode_label: &str,
     cached_image_protocol: &mut Option<ratatui_image::protocol::StatefulProtocol>,
+    html_rendering: bool,
     area: ratatui::layout::Rect,
 ) {
-    let preview_title = format!(" PREVIEW [{mode_label}] ");
+    let rendering_indicator = if html_rendering { " ..." } else { "" };
+    let preview_title = format!(" PREVIEW [{mode_label}]{rendering_indicator} ");
     let preview_block = Block::default()
         .borders(Borders::ALL)
         .border_style(Style::default().fg(Color::DarkGray))
@@ -607,7 +631,7 @@ fn render_preview(
                 frame.render_stateful_widget(image_widget, inner, protocol);
             } else {
                 let loading = Paragraph::new(Line::from(Span::styled(
-                    " Rendering HTML preview...",
+                    " Waiting for Chrome...",
                     Style::default().fg(Color::DarkGray),
                 )))
                 .block(preview_block);
