@@ -328,8 +328,15 @@ fn run_loop(
                                 let w = img.width();
                                 let h = img.height();
                                 drop(img);
+                                // Preserve scroll position across refreshes.
+                                let prev_scroll = kitty_image.as_ref().map(|k| k.scroll_row).unwrap_or(0);
+                                // Drop old image BEFORE transmitting new one (same ID).
+                                drop(kitty_image.take());
                                 match KittyImage::transmit(&png_bytes, w, h) {
-                                    Ok(ki) => {
+                                    Ok(mut ki) => {
+                                        let font_h = picker.font_size().1 as u32;
+                                        ki.set_max_rows((h / font_h.max(1)) as u16);
+                                        ki.scroll_row = prev_scroll;
                                         kitty_image = Some(ki);
                                         html_rendering = false;
                                         chrome_error = None;
@@ -474,14 +481,24 @@ fn run_loop(
 
                     // Ctrl+T: sync preview to vim cursor line, centered in preview
                     if key.code == KeyCode::Char('t') && ctrl && split_layout != SplitLayout::EditorOnly {
-                        let total_rendered = cached_lines.len().max(1);
                         let total_source = vim_state.total_lines.max(1);
-
-                        // Map cursor line proportionally to rendered lines
                         let ratio = vim_state.cursor_line as f64 / total_source as f64;
+
+                        if preview_mode == PreviewMode::Html {
+                            if let Some(ref mut ki) = kitty_image {
+                                let visible = terminal.size()?.height.saturating_sub(4);
+                                let target_row = (ratio * ki.max_rows() as f64) as u16;
+                                ki.scroll_row = target_row.saturating_sub(visible / 2);
+                                // Clamp
+                                let max_scroll = ki.max_rows().saturating_sub(visible);
+                                ki.scroll_row = ki.scroll_row.min(max_scroll);
+                            }
+                            continue;
+                        }
+
+                        let total_rendered = cached_lines.len().max(1);
                         let target = (ratio * total_rendered as f64) as u16;
 
-                        // Center the target in the preview viewport
                         let term_size = terminal.size()?;
                         let visible_height = match split_layout {
                             SplitLayout::Vertical => term_size.height.saturating_sub(4),
@@ -534,7 +551,8 @@ fn run_loop(
                     if key.code == KeyCode::Char('j') && ctrl && split_layout != SplitLayout::EditorOnly {
                         if preview_mode == PreviewMode::Html {
                             if let Some(ref mut ki) = kitty_image {
-                                ki.scroll_down(5);
+                                let visible = terminal.size()?.height.saturating_sub(4);
+                                ki.scroll_down(5, visible);
                             }
                         } else {
                             preview_scroll = preview_scroll.saturating_add(3).min(max_scroll);
@@ -698,7 +716,7 @@ fn render_html_preview(content: &str, config: &HtmlPreviewConfig) -> String {
     use crate::engine::{build, minify};
 
     let title = crate::engine::config::frontmatter("title", content)
-        .unwrap_or_else(|| "Preview".to_string());
+        .unwrap_or_else(|| "Untitled".to_string());
 
     let html = build::render_preview_html(content, &title, &config.blog_config, &config.article_tpl);
     let minified_css = minify::minify_css(&config.css);

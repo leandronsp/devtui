@@ -57,7 +57,8 @@ fn diacritic(val: u16) -> char {
 pub struct KittyImage {
     pub width: u32,
     pub height: u32,
-    pub scroll_row: u16, // scroll offset in terminal rows
+    pub scroll_row: u16,
+    max_rows: u16,
     id_color: String,
     id_extra: u16,
 }
@@ -96,6 +97,7 @@ impl KittyImage {
             width: img_width,
             height: img_height,
             scroll_row: 0,
+            max_rows: 0,
             id_color,
             id_extra: u16::from(id_extra_byte),
         })
@@ -153,9 +155,17 @@ impl KittyImage {
         }
     }
 
-    pub fn scroll_down(&mut self, rows: u16) {
-        let max_row = (DIACRITICS.len() as u16).saturating_sub(1);
-        self.scroll_row = (self.scroll_row + rows).min(max_row);
+    pub fn set_max_rows(&mut self, max_rows: u16) {
+        self.max_rows = max_rows;
+    }
+
+    pub fn max_rows(&self) -> u16 {
+        self.max_rows
+    }
+
+    pub fn scroll_down(&mut self, rows: u16, visible_rows: u16) {
+        let max_scroll = self.max_rows.saturating_sub(visible_rows);
+        self.scroll_row = (self.scroll_row + rows).min(max_scroll);
     }
 
     pub fn scroll_up(&mut self, rows: u16) {
