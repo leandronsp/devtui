@@ -1,5 +1,6 @@
 pub mod chrome;
 pub mod db;
+pub mod kitty;
 pub mod list;
 pub mod preview;
 pub mod vim;
@@ -34,19 +35,30 @@ pub fn run_cms(blog_dir: PathBuf) -> io::Result<()> {
     // Prepare HTML preview config (template + CSS)
     let html_config = load_html_preview_config(&cfg, &blog_dir);
 
-    // Spawn Chrome background thread for HTML preview
-    let chrome = ChromeHandle::try_spawn(800, 600);
+    // Query terminal for font size and graphics protocol BEFORE entering raw mode.
+    let picker = ratatui_image::picker::Picker::from_query_stdio()
+        .unwrap_or_else(|_| ratatui_image::picker::Picker::halfblocks());
+
+    // Chrome viewport width matches the preview pane pixel width.
+    // Height doesn't matter: we capture full-page and crop client-side.
+    let term_size = crossterm::terminal::size().unwrap_or((120, 40));
+    let font_size = picker.font_size();
+    let pane_cols = term_size.0 / 2;
+    let viewport_width = pane_cols as u32 * font_size.0 as u32;
+    let chrome = ChromeHandle::try_spawn(viewport_width);
 
     let mut terminal = ratatui::init();
-    let result = cms_loop(&mut terminal, &conn, &cfg, &blog_dir, html_config.as_ref(), chrome.as_ref());
+    let result = cms_loop(&mut terminal, &conn, &cfg, &blog_dir, html_config.as_ref(), chrome.as_ref(), &picker);
     ratatui::restore();
     result
 }
 
 /// Legacy entry point: run editor for a single file (no CMS).
 pub fn run(file_path: PathBuf) -> io::Result<()> {
+    let picker = ratatui_image::picker::Picker::from_query_stdio()
+        .unwrap_or_else(|_| ratatui_image::picker::Picker::halfblocks());
     let mut terminal = ratatui::init();
-    let result = vim::run(&mut terminal, file_path, None, None);
+    let result = vim::run(&mut terminal, file_path, None, None, &picker);
     ratatui::restore();
     result.map(|_| ())
 }
@@ -85,6 +97,7 @@ fn cms_loop(
     blog_dir: &Path,
     html_config: Option<&HtmlPreviewConfig>,
     chrome: Option<&ChromeHandle>,
+    picker: &ratatui_image::picker::Picker,
 ) -> io::Result<()> {
     loop {
         let articles = db::list_articles(conn, None)
@@ -96,10 +109,10 @@ fn cms_loop(
         match action {
             ListAction::Quit => return Ok(()),
             ListAction::Edit(id) => {
-                edit_article(terminal, conn, cfg, blog_dir, id, html_config, chrome)?;
+                edit_article(terminal, conn, cfg, blog_dir, id, html_config, chrome, picker)?;
             }
             ListAction::New => {
-                new_article(terminal, conn, blog_dir, html_config, chrome)?;
+                new_article(terminal, conn, blog_dir, html_config, chrome, picker)?;
             }
         }
     }
@@ -113,6 +126,7 @@ fn edit_article(
     id: i64,
     html_config: Option<&HtmlPreviewConfig>,
     chrome: Option<&ChromeHandle>,
+    picker: &ratatui_image::picker::Picker,
 ) -> io::Result<()> {
     let article = db::get_article(conn, id)
         .map_err(|e| io::Error::other(e.to_string()))?;
@@ -122,7 +136,7 @@ fn edit_article(
     let tmp_file = tmp_dir.join(format!("{}.md", article.slug));
     std::fs::write(&tmp_file, &article.content)?;
 
-    let (_result, final_content) = vim::run(terminal, tmp_file.clone(), html_config, chrome)?;
+    let (_result, final_content) = vim::run(terminal, tmp_file.clone(), html_config, chrome, picker)?;
 
     let _ = db::update_content(conn, id, &final_content);
 
@@ -148,6 +162,7 @@ fn new_article(
     _blog_dir: &Path,
     html_config: Option<&HtmlPreviewConfig>,
     chrome: Option<&ChromeHandle>,
+    picker: &ratatui_image::picker::Picker,
 ) -> io::Result<()> {
     let article = db::create_article(conn, "Untitled")
         .map_err(|e| io::Error::other(e.to_string()))?;
@@ -157,7 +172,7 @@ fn new_article(
     let tmp_file = tmp_dir.join(format!("{}.md", article.slug));
     std::fs::write(&tmp_file, "")?;
 
-    let (_result, final_content) = vim::run(terminal, tmp_file.clone(), html_config, chrome)?;
+    let (_result, final_content) = vim::run(terminal, tmp_file.clone(), html_config, chrome, picker)?;
 
     let _ = db::update_content(conn, article.id, &final_content);
 

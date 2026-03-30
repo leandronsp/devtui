@@ -32,3 +32,4 @@ rusqlite = { version = "0.31", features = ["bundled"] }
 headless_chrome = "1.0"
 ratatui-image = "9.0"
 image = "0.25"
+base64 = "0.22.1"

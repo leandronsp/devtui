@@ -16,6 +16,7 @@ use ratatui::{
 use tui_term::widget::PseudoTerminal;
 
 use super::chrome::{ChromeHandle, ChromeResult};
+use super::kitty::KittyImage;
 use super::preview;
 
 const DRAFT_PATH: &str = "draft.md";
@@ -49,6 +50,7 @@ pub fn run(
     file_path: PathBuf,
     html_config: Option<&HtmlPreviewConfig>,
     chrome: Option<&ChromeHandle>,
+    picker: &ratatui_image::picker::Picker,
 ) -> io::Result<(EditorResult, String)> {
     if !file_path.exists() {
         std::fs::write(&file_path, "")?;
@@ -146,8 +148,6 @@ pub fn run(
         .file_name()
         .map(|n| n.to_string_lossy().to_string())
         .unwrap_or_else(|| file_path.display().to_string());
-
-    let picker = ratatui_image::picker::Picker::halfblocks();
 
     run_loop(
         terminal,
@@ -263,6 +263,7 @@ fn run_loop(
     let mut cached_lines: Vec<Line<'static>> = Vec::new();
     let mut preview_mode = PreviewMode::Text;
     let mut cached_image_protocol: Option<ratatui_image::protocol::StatefulProtocol> = None;
+    let mut kitty_image: Option<KittyImage> = None;
     let mut split_layout = SplitLayout::Vertical;
     let mut preview_scroll: u16 = 0;
     let chrome_available = chrome.is_some();
@@ -322,11 +323,22 @@ fn run_loop(
             if let Some(ch) = chrome {
                 if let Some(result) = ch.try_recv() {
                     match result {
-                        ChromeResult::Image(bytes) => {
-                            if let Ok(img) = image::load_from_memory(&bytes) {
-                                cached_image_protocol = Some(picker.new_resize_protocol(img));
-                                html_rendering = false;
-                                chrome_error = None;
+                        ChromeResult::Image(png_bytes) => {
+                            if let Ok(img) = image::load_from_memory(&png_bytes) {
+                                let w = img.width();
+                                let h = img.height();
+                                drop(img);
+                                match KittyImage::transmit(&png_bytes, w, h) {
+                                    Ok(ki) => {
+                                        kitty_image = Some(ki);
+                                        html_rendering = false;
+                                        chrome_error = None;
+                                    }
+                                    Err(e) => {
+                                        chrome_error = Some(format!("Kitty transmit failed: {e}"));
+                                        html_rendering = false;
+                                    }
+                                }
                             }
                         }
                         ChromeResult::Error(msg) => {
@@ -398,7 +410,8 @@ fn run_loop(
                     render_editor(frame, parser, mode_label, mode_st, &title_message, panes[0]);
                     render_preview(
                         frame, &cached_lines, clamped_scroll, preview_mode,
-                        preview_mode_label, &mut cached_image_protocol, html_rendering, &chrome_error, panes[1],
+                        preview_mode_label, &kitty_image,
+                        html_rendering, &chrome_error, panes[1],
                     );
                 }
                 SplitLayout::Horizontal => {
@@ -410,7 +423,8 @@ fn run_loop(
                     render_editor(frame, parser, mode_label, mode_st, &title_message, panes[0]);
                     render_preview(
                         frame, &cached_lines, clamped_scroll, preview_mode,
-                        preview_mode_label, &mut cached_image_protocol, html_rendering, &chrome_error, panes[1],
+                        preview_mode_label, &kitty_image,
+                        html_rendering, &chrome_error, panes[1],
                     );
                 }
                 SplitLayout::EditorOnly => {
@@ -435,6 +449,7 @@ fn run_loop(
             ));
             frame.render_widget(Paragraph::new(status), status_area);
         })?;
+
 
         if event::poll(Duration::from_millis(30))? {
             match event::read()? {
@@ -491,6 +506,10 @@ fn run_loop(
                             }
                             PreviewMode::Html => {
                                 cached_image_protocol = None;
+                                // Delete Kitty image from terminal
+                                if let Some(ki) = kitty_image.take() {
+                                    ki.delete();
+                                }
                                 html_rendering = false;
                                 PreviewMode::Text
                             }
@@ -513,13 +532,25 @@ fn run_loop(
 
                     // Ctrl+J: scroll preview down
                     if key.code == KeyCode::Char('j') && ctrl && split_layout != SplitLayout::EditorOnly {
-                        preview_scroll = preview_scroll.saturating_add(3).min(max_scroll);
+                        if preview_mode == PreviewMode::Html {
+                            if let Some(ref mut ki) = kitty_image {
+                                ki.scroll_down(5);
+                            }
+                        } else {
+                            preview_scroll = preview_scroll.saturating_add(3).min(max_scroll);
+                        }
                         continue;
                     }
 
                     // Ctrl+K: scroll preview up
                     if key.code == KeyCode::Char('k') && ctrl && split_layout != SplitLayout::EditorOnly {
-                        preview_scroll = preview_scroll.saturating_sub(3);
+                        if preview_mode == PreviewMode::Html {
+                            if let Some(ref mut ki) = kitty_image {
+                                ki.scroll_up(5);
+                            }
+                        } else {
+                            preview_scroll = preview_scroll.saturating_sub(3);
+                        }
                         continue;
                     }
 
@@ -590,7 +621,7 @@ fn render_preview(
     scroll: u16,
     preview_mode: PreviewMode,
     mode_label: &str,
-    cached_image_protocol: &mut Option<ratatui_image::protocol::StatefulProtocol>,
+    kitty_image: &Option<KittyImage>,
     html_rendering: bool,
     chrome_error: &Option<String>,
     area: ratatui::layout::Rect,
@@ -619,11 +650,10 @@ fn render_preview(
                 .block(preview_block)
                 .wrap(Wrap { trim: false });
                 frame.render_widget(error_msg, area);
-            } else if let Some(ref mut protocol) = cached_image_protocol {
-                let image_widget = ratatui_image::StatefulImage::default();
+            } else if let Some(ref ki) = kitty_image {
                 let inner = preview_block.inner(area);
                 frame.render_widget(preview_block, area);
-                frame.render_stateful_widget(image_widget, inner, protocol);
+                ki.render_placeholders(inner, frame.buffer_mut());
             } else {
                 let msg = if html_rendering {
                     " Rendering..."
@@ -640,6 +670,8 @@ fn render_preview(
         }
     }
 }
+
+
 
 #[allow(clippy::borrowed_box)]
 fn resize_pty(
@@ -677,7 +709,7 @@ pub fn key_to_bytes(code: KeyCode, modifiers: KeyModifiers) -> Option<Vec<u8>> {
     if modifiers.contains(KeyModifiers::CONTROL) {
         return match code {
             KeyCode::Char(c) => {
-                let byte = (c as u8).wrapping_sub(b'a').wrapping_add(1);
+                let byte = (c as u8) & 0x1f;
                 Some(vec![byte])
             }
             _ => None,

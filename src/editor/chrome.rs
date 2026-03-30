@@ -8,42 +8,36 @@ use std::thread;
 
 static FILE_COUNTER: AtomicU64 = AtomicU64::new(0);
 
-/// Handle to a background Chrome screenshot thread.
-/// Message from Chrome thread: either a screenshot or an error.
 pub enum ChromeResult {
     Image(Vec<u8>),
     Error(String),
 }
 
 pub struct ChromeHandle {
-    html_tx: mpsc::Sender<String>,
+    cmd_tx: mpsc::Sender<String>,
     result_rx: mpsc::Receiver<ChromeResult>,
     running: Arc<AtomicBool>,
-    #[allow(dead_code)]
-    ready: Arc<AtomicBool>,
 }
 
 impl ChromeHandle {
-    pub fn try_spawn(viewport_width: u32, viewport_height: u32) -> Option<Self> {
+    pub fn try_spawn(viewport_width: u32) -> Option<Self> {
         find_chrome()?;
 
         let running = Arc::new(AtomicBool::new(true));
-        let ready = Arc::new(AtomicBool::new(false));
         let running_thread = Arc::clone(&running);
-        let ready_thread = Arc::clone(&ready);
 
-        let (html_tx, html_rx) = mpsc::channel::<String>();
+        let (cmd_tx, cmd_rx) = mpsc::channel::<String>();
         let (result_tx, result_rx) = mpsc::channel::<ChromeResult>();
 
         thread::spawn(move || {
-            chrome_thread(html_rx, result_tx, running_thread, ready_thread, viewport_width, viewport_height);
+            chrome_thread(cmd_rx, result_tx, running_thread, viewport_width);
         });
 
-        Some(Self { html_tx, result_rx, running, ready })
+        Some(Self { cmd_tx, result_rx, running })
     }
 
     pub fn send_html(&self, html: String) {
-        let _ = self.html_tx.send(html);
+        let _ = self.cmd_tx.send(html);
     }
 
     pub fn try_recv(&self) -> Option<ChromeResult> {
@@ -61,76 +55,68 @@ impl Drop for ChromeHandle {
     }
 }
 
-fn chrome_thread(
-    html_rx: mpsc::Receiver<String>,
-    result_tx: mpsc::Sender<ChromeResult>,
-    running: Arc<AtomicBool>,
-    ready: Arc<AtomicBool>,
-    viewport_width: u32,
-    viewport_height: u32,
-) {
-    let chrome_path = match find_chrome() {
-        Some(p) => p,
-        None => {
-            let _ = result_tx.send(ChromeResult::Error("Chrome not found".to_string()));
-            return;
-        }
-    };
+fn launch_browser(viewport_width: u32) -> Option<(Browser, Arc<Tab>)> {
+    let chrome_path = find_chrome()?;
     let options = LaunchOptions {
         headless: true,
-        window_size: Some((viewport_width, viewport_height)),
+        window_size: Some((viewport_width, 4000)),
         path: Some(chrome_path),
         ..LaunchOptions::default()
     };
-    let browser = match Browser::new(options) {
-        Ok(b) => b,
-        Err(e) => {
-            let _ = result_tx.send(ChromeResult::Error(format!("Chrome launch failed: {e}")));
+    let browser = Browser::new(options).ok()?;
+    let tab = browser.new_tab().ok()?;
+    Some((browser, tab))
+}
+
+fn chrome_thread(
+    cmd_rx: mpsc::Receiver<String>,
+    result_tx: mpsc::Sender<ChromeResult>,
+    running: Arc<AtomicBool>,
+    viewport_width: u32,
+) {
+    let (mut browser, mut tab) = match launch_browser(viewport_width) {
+        Some(bt) => bt,
+        None => {
+            let _ = result_tx.send(ChromeResult::Error("Chrome launch failed".to_string()));
             return;
         }
     };
-
-    let mut tab = match browser.new_tab() {
-        Ok(t) => t,
-        Err(e) => {
-            let _ = result_tx.send(ChromeResult::Error(format!("Tab creation failed: {e}")));
-            return;
-        }
-    };
-
-    ready.store(true, Ordering::Relaxed);
 
     while running.load(Ordering::Relaxed) {
-        match html_rx.recv_timeout(std::time::Duration::from_millis(100)) {
-            Ok(mut html) => {
-                while let Ok(newer) = html_rx.try_recv() {
-                    html = newer;
-                }
-                match take_screenshot(&tab, &html) {
-                    Some(bytes) => {
-                        let _ = result_tx.send(ChromeResult::Image(bytes));
+        let mut html = match cmd_rx.recv_timeout(std::time::Duration::from_millis(100)) {
+            Ok(h) => h,
+            Err(mpsc::RecvTimeoutError::Timeout) => continue,
+            Err(mpsc::RecvTimeoutError::Disconnected) => break,
+        };
+
+        // Drain to latest
+        while let Ok(newer) = cmd_rx.try_recv() {
+            html = newer;
+        }
+
+        match full_page_screenshot(&tab, &html) {
+            Some(bytes) => {
+                let _ = result_tx.send(ChromeResult::Image(bytes));
+            }
+            None => {
+                match launch_browser(viewport_width) {
+                    Some((new_browser, new_tab)) => {
+                        browser = new_browser;
+                        tab = new_tab;
+                        let _ = result_tx.send(ChromeResult::Error("Chrome restarted".to_string()));
                     }
                     None => {
-                        // Tab may be dead. Try to recreate.
-                        match browser.new_tab() {
-                            Ok(new_tab) => {
-                                tab = new_tab;
-                                let _ = result_tx.send(ChromeResult::Error("Tab died, recreated".to_string()));
-                            }
-                            Err(e) => {
-                                let _ = result_tx.send(ChromeResult::Error(format!("Tab recreation failed: {e}")));
-                            }
-                        }
+                        let _ = result_tx.send(ChromeResult::Error("Chrome restart failed".to_string()));
                     }
                 }
             }
-            Err(mpsc::RecvTimeoutError::Timeout) => continue,
-            Err(mpsc::RecvTimeoutError::Disconnected) => break,
         }
     }
+
+    drop(browser);
 }
 
-fn take_screenshot(tab: &Arc<Tab>, html: &str) -> Option<Vec<u8>> {
+fn full_page_screenshot(tab: &Arc<Tab>, html: &str) -> Option<Vec<u8>> {
     let id = FILE_COUNTER.fetch_add(1, Ordering::Relaxed);
     let tmp_path = std::env::temp_dir().join(format!("devtui-chrome-{id}.html"));
     std::fs::write(&tmp_path, html).ok()?;
@@ -138,11 +124,33 @@ fn take_screenshot(tab: &Arc<Tab>, html: &str) -> Option<Vec<u8>> {
     let file_url = format!("file://{}", tmp_path.display());
     tab.navigate_to(&file_url).ok()?;
     tab.wait_until_navigated().ok()?;
+    thread::sleep(std::time::Duration::from_millis(200));
 
-    thread::sleep(std::time::Duration::from_millis(50));
+    // Get full document height for full-page capture
+    let height = tab
+        .evaluate("document.documentElement.scrollHeight", false)
+        .ok()
+        .and_then(|r| r.value)
+        .and_then(|v| v.as_f64())
+        .unwrap_or(800.0);
+
+    let width = tab
+        .evaluate("document.documentElement.scrollWidth", false)
+        .ok()
+        .and_then(|r| r.value)
+        .and_then(|v| v.as_f64())
+        .unwrap_or(800.0);
+
+    let clip = headless_chrome::protocol::cdp::Page::Viewport {
+        x: 0.0,
+        y: 0.0,
+        width,
+        height,
+        scale: 1.0,
+    };
 
     let bytes = tab
-        .capture_screenshot(CaptureScreenshotFormatOption::Png, None, None, true)
+        .capture_screenshot(CaptureScreenshotFormatOption::Png, None, Some(clip), true)
         .ok()?;
 
     let _ = std::fs::remove_file(&tmp_path);

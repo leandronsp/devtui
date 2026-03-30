@@ -546,6 +546,7 @@ dependencies = [
 name = "devtui"
 version = "0.1.0"
 dependencies = [
+ "base64",
  "crossterm",
  "gh-emoji",
  "headless_chrome",
