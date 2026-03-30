@@ -159,7 +159,7 @@ pub fn run(
         &content_swap,
         html_config,
         chrome,
-        &picker,
+        picker,
     )?;
 
     // Read final content from the actual file vim was editing.
@@ -262,7 +262,6 @@ fn run_loop(
     let mut last_content = String::new();
     let mut cached_lines: Vec<Line<'static>> = Vec::new();
     let mut preview_mode = PreviewMode::Text;
-    let mut cached_image_protocol: Option<ratatui_image::protocol::StatefulProtocol> = None;
     let mut kitty_image: Option<KittyImage> = None;
     let mut split_layout = SplitLayout::Vertical;
     let mut preview_scroll: u16 = 0;
@@ -522,7 +521,6 @@ fn run_loop(
                                 PreviewMode::Html
                             }
                             PreviewMode::Html => {
-                                cached_image_protocol = None;
                                 // Delete Kitty image from terminal
                                 if let Some(ki) = kitty_image.take() {
                                     ki.delete();

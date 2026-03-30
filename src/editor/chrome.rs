@@ -94,22 +94,28 @@ fn chrome_thread(
             html = newer;
         }
 
-        match full_page_screenshot(&tab, &html) {
-            Some(bytes) => {
-                let _ = result_tx.send(ChromeResult::Image(bytes));
-            }
-            None => {
-                match launch_browser(viewport_width) {
-                    Some((new_browser, new_tab)) => {
-                        browser = new_browser;
-                        tab = new_tab;
-                        let _ = result_tx.send(ChromeResult::Error("Chrome restarted".to_string()));
-                    }
-                    None => {
-                        let _ = result_tx.send(ChromeResult::Error("Chrome restart failed".to_string()));
-                    }
+        if let Some(bytes) = full_page_screenshot(&tab, &html) {
+            let _ = result_tx.send(ChromeResult::Image(bytes));
+            continue;
+        }
+
+        // Screenshot failed. Retry up to 3 times with browser restart.
+        let mut recovered = false;
+        for attempt in 1..=3 {
+            let _ = result_tx.send(ChromeResult::Error(format!("Restarting Chrome... ({attempt}/3)")));
+            thread::sleep(std::time::Duration::from_millis(500));
+            if let Some((new_browser, new_tab)) = launch_browser(viewport_width) {
+                browser = new_browser;
+                tab = new_tab;
+                if let Some(bytes) = full_page_screenshot(&tab, &html) {
+                    let _ = result_tx.send(ChromeResult::Image(bytes));
+                    recovered = true;
+                    break;
                 }
             }
+        }
+        if !recovered {
+            let _ = result_tx.send(ChromeResult::Error("Chrome failed after 3 retries".to_string()));
         }
     }
 

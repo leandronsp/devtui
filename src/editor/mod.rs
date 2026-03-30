@@ -118,6 +118,7 @@ fn cms_loop(
     }
 }
 
+#[allow(clippy::too_many_arguments)]
 fn edit_article(
     terminal: &mut ratatui::DefaultTerminal,
     conn: &Connection,
