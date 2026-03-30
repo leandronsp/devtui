@@ -133,16 +133,16 @@ fn full_page_screenshot(tab: &Arc<Tab>, html: &str) -> Option<Vec<u8>> {
     tab.wait_until_navigated().ok()?;
     thread::sleep(std::time::Duration::from_millis(200));
 
-    // Get actual content dimensions (not viewport-padded)
+    // Get maximum content height from all possible sources
     let height = tab
-        .evaluate("Math.max(document.body.offsetHeight, document.body.scrollHeight)", false)
+        .evaluate("Math.max(document.body.scrollHeight, document.body.offsetHeight, document.documentElement.scrollHeight, document.documentElement.offsetHeight)", false)
         .ok()
         .and_then(|r| r.value)
         .and_then(|v| v.as_f64())
         .unwrap_or(800.0);
 
     let width = tab
-        .evaluate("document.body.offsetWidth", false)
+        .evaluate("Math.max(document.body.scrollWidth, document.body.offsetWidth)", false)
         .ok()
         .and_then(|r| r.value)
         .and_then(|v| v.as_f64())
