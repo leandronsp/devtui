@@ -83,7 +83,7 @@ pub fn run(
     cmd.args([
         "-u", "NONE",
         "-N",
-        "--cmd", "set shortmess=aFIoOstTWcCS",
+        "--cmd", "set shortmess=aIoOstTWcCS",
         "-c", "set noswapfile noruler noshowmode noshowcmd laststatus=0 updatetime=150 tabstop=2 shiftwidth=2 expandtab title titlestring=%{line('w0')}:%{line('.')}:%{line('$')}:%{mode()}",
         "-c", "nnoremap u :silent! undo<CR>",
         "-c", "nnoremap <C-r> :silent! redo<CR>",
@@ -162,13 +162,9 @@ pub fn run(
         &picker,
     )?;
 
-    // Read final content from swap buffer or fall back to last file read
-    let final_content = content_swap
-        .lock()
-        .ok()
-        .and_then(|mut slot| slot.take())
-        .or_else(|| std::fs::read_to_string(CONTENT_TMP).ok())
-        .unwrap_or_default();
+    // Read final content from the actual file vim was editing.
+    // This respects :q! (file unchanged) vs :wq (file saved).
+    let final_content = std::fs::read_to_string(&file_path).unwrap_or_default();
 
     running.store(false, Ordering::Relaxed);
     drop(pty_pair.master);
@@ -338,7 +334,7 @@ fn run_loop(
         // Debounced preview re-render: wait 500ms after last change
         if preview_stale {
             if let Some(changed_at) = content_changed_at {
-                if changed_at.elapsed() >= std::time::Duration::from_millis(200) {
+                if changed_at.elapsed() >= std::time::Duration::from_millis(100) {
                     preview_stale = false;
                     content_changed_at = None;
 

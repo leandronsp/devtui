@@ -104,17 +104,17 @@ fn chrome_thread(
 }
 
 fn take_screenshot(browser: &Browser, html: &str) -> Option<Vec<u8>> {
+    // Write HTML to temp file and load via file:// protocol.
+    // Avoids document.write escaping issues with backticks, script tags, etc.
+    let tmp_path = std::env::temp_dir().join("devtui-chrome-preview.html");
+    std::fs::write(&tmp_path, html).ok()?;
+
+    let file_url = format!("file://{}", tmp_path.display());
     let tab = browser.new_tab().ok()?;
+    tab.navigate_to(&file_url).ok()?;
+    tab.wait_until_navigated().ok()?;
 
-    let escaped = html
-        .replace('\\', "\\\\")
-        .replace('`', "\\`")
-        .replace("${", "\\${");
-
-    let js = format!("document.open(); document.write(`{escaped}`); document.close();");
-    tab.evaluate(&js, true).ok()?;
-
-    thread::sleep(std::time::Duration::from_millis(100));
+    thread::sleep(std::time::Duration::from_millis(50));
 
     let bytes = tab
         .capture_screenshot(CaptureScreenshotFormatOption::Png, None, None, true)
