@@ -1,21 +1,23 @@
 use headless_chrome::protocol::cdp::Page::CaptureScreenshotFormatOption;
-use headless_chrome::{Browser, LaunchOptions};
+use headless_chrome::{Browser, LaunchOptions, Tab};
 use std::path::PathBuf;
-use std::sync::atomic::{AtomicBool, Ordering};
+use std::sync::atomic::{AtomicBool, AtomicU64, Ordering};
 use std::sync::mpsc;
 use std::sync::Arc;
 use std::thread;
+
+static FILE_COUNTER: AtomicU64 = AtomicU64::new(0);
 
 /// Handle to a background Chrome screenshot thread.
 pub struct ChromeHandle {
     html_tx: mpsc::Sender<String>,
     image_rx: mpsc::Receiver<Vec<u8>>,
     running: Arc<AtomicBool>,
+    #[allow(dead_code)]
     ready: Arc<AtomicBool>,
 }
 
 impl ChromeHandle {
-    /// Spawn the Chrome background thread. Returns None if Chrome isn't installed.
     pub fn try_spawn(viewport_width: u32, viewport_height: u32) -> Option<Self> {
         find_chrome()?;
 
@@ -34,17 +36,10 @@ impl ChromeHandle {
         Some(Self { html_tx, image_rx, running, ready })
     }
 
-    /// True when the Chrome browser has initialized successfully.
-    pub fn is_ready(&self) -> bool {
-        self.ready.load(Ordering::Relaxed)
-    }
-
-    /// Send HTML to render. Non-blocking.
     pub fn send_html(&self, html: String) {
         let _ = self.html_tx.send(html);
     }
 
-    /// Try to receive a screenshot. Non-blocking.
     pub fn try_recv_image(&self) -> Option<Vec<u8>> {
         let mut latest = None;
         while let Ok(bytes) = self.image_rx.try_recv() {
@@ -83,18 +78,30 @@ fn chrome_thread(
         Err(_) => return,
     };
 
+    // Create one persistent tab, reuse it for all screenshots.
+    let mut tab = match browser.new_tab() {
+        Ok(t) => t,
+        Err(_) => return,
+    };
+
     ready.store(true, Ordering::Relaxed);
 
     while running.load(Ordering::Relaxed) {
-        // Block until we get HTML (with timeout to check running flag)
         match html_rx.recv_timeout(std::time::Duration::from_millis(100)) {
             Ok(mut html) => {
-                // Drain to get the latest, skip intermediate
                 while let Ok(newer) = html_rx.try_recv() {
                     html = newer;
                 }
-                if let Some(bytes) = take_screenshot(&browser, &html) {
-                    let _ = image_tx.send(bytes);
+                match take_screenshot(&tab, &html) {
+                    Some(bytes) => {
+                        let _ = image_tx.send(bytes);
+                    }
+                    None => {
+                        // Tab may be dead. Try to create a new one.
+                        if let Ok(new_tab) = browser.new_tab() {
+                            tab = new_tab;
+                        }
+                    }
                 }
             }
             Err(mpsc::RecvTimeoutError::Timeout) => continue,
@@ -103,17 +110,12 @@ fn chrome_thread(
     }
 }
 
-fn take_screenshot(browser: &Browser, html: &str) -> Option<Vec<u8>> {
-    use std::sync::atomic::{AtomicU64, Ordering};
-    static COUNTER: AtomicU64 = AtomicU64::new(0);
-
-    // Write HTML to temp file with unique name (bust Chrome file:// cache).
-    let id = COUNTER.fetch_add(1, Ordering::Relaxed);
+fn take_screenshot(tab: &Arc<Tab>, html: &str) -> Option<Vec<u8>> {
+    let id = FILE_COUNTER.fetch_add(1, Ordering::Relaxed);
     let tmp_path = std::env::temp_dir().join(format!("devtui-chrome-{id}.html"));
     std::fs::write(&tmp_path, html).ok()?;
 
     let file_url = format!("file://{}", tmp_path.display());
-    let tab = browser.new_tab().ok()?;
     tab.navigate_to(&file_url).ok()?;
     tab.wait_until_navigated().ok()?;
 
@@ -123,7 +125,6 @@ fn take_screenshot(browser: &Browser, html: &str) -> Option<Vec<u8>> {
         .capture_screenshot(CaptureScreenshotFormatOption::Png, None, None, true)
         .ok()?;
 
-    let _ = tab.close(true);
     let _ = std::fs::remove_file(&tmp_path);
     Some(bytes)
 }
