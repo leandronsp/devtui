@@ -30,12 +30,15 @@ dist/                # gitignored, generated output
 
 Required fields: `title`, `subtitle`, `url`, `author`, `date_field`, `lang`.
 
+Optional: `og_image` (site-wide Open Graph image URL for social previews).
+
 The `date_field` allows different blogs to use different frontmatter keys for dates (e.g. `date` vs `published_at`).
 
 ## Posts
 
 - YAML frontmatter required: `title`, the date field
 - `description` is optional. If missing, auto-generated from post body (160 chars, word boundary)
+- `image` is optional. Per-post Open Graph image URL (overrides site `og_image`)
 - Filename becomes the URL slug
 - pulldown-cmark uses language hints from fenced code blocks
 

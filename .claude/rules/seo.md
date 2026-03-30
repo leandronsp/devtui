@@ -7,8 +7,9 @@ Applies to generated blog HTML (engine templates, index pages, article pages).
 - `<title>` 50-60 chars. Articles: "Post Title - Site Name". Index: site name only.
 - `<meta name="description">` 150-160 chars. Use post `description` from frontmatter.
 - `<link rel="canonical">` on every page
-- Open Graph: `og:title`, `og:description`, `og:type` (article), `og:url`, `og:site_name`
-- Twitter: `twitter:card` (summary). Falls back to OG tags.
+- Open Graph: `og:title`, `og:description`, `og:type` (article), `og:url`, `og:site_name`, `og:image` (optional)
+- Twitter: `twitter:card` (`summary` without image, `summary_large_image` with image), `twitter:image`. Falls back to OG tags.
+- Image priority: post frontmatter `image` > site `og_image` from blog.toml
 
 ## Semantic HTML
 

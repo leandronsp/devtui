@@ -35,6 +35,7 @@ lang = "en"
 # optional
 theme = "paper"                    # "paper" (default) or "terminal"
 articles_path = "articles"         # URL prefix for articles (default: root)
+og_image = "https://my-site.com/og.png"  # Open Graph image for social previews
 analytics_id = "G-XXXXXXXXXX"     # Google Analytics measurement ID
 license = "CC BY-SA 4.0"
 license_url = "https://creativecommons.org/licenses/by-sa/4.0/"
@@ -58,6 +59,7 @@ url = "https://guide.my-site.com"
 title: Hello World
 date: 2026-03-29
 description: My first post
+image: https://my-site.com/hello-og.png
 language: en
 tags: ["intro"]
 ---
@@ -132,7 +134,7 @@ dist/<name>/
   uploads/           # copied from blog source
 ```
 
-Every page gets: `<title>`, `<meta description>`, canonical URL, Open Graph, Twitter Card, JSON-LD schema. CSS is inlined and HTML is minified. No external stylesheets, no JavaScript frameworks.
+Every page gets: `<title>`, `<meta description>`, canonical URL, Open Graph (with `og:image`), Twitter Card (`summary_large_image` when image present), JSON-LD schema. CSS is inlined and HTML is minified. No external stylesheets, no JavaScript frameworks.
 
 ## Features
 
@@ -146,6 +148,7 @@ Every page gets: `<title>`, `<meta description>`, canonical URL, Open Graph, Twi
 - Footer with license and RSS link
 - Emoji shortcode conversion (`:wave:` becomes unicode)
 - Markdown preprocessing for dev.to imports (lists, blockquotes)
+- Open Graph image support (site-wide via `og_image` in blog.toml, per-post via `image` in frontmatter)
 - Dark/light theme toggle persisted in localStorage
 - 404 page per blog
 

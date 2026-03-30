@@ -27,6 +27,7 @@ pub struct BlogConfig {
     pub analytics_id: Option<String>,
     pub license: Option<String>,
     pub license_url: Option<String>,
+    pub og_image: Option<String>,
     pub tags: Option<Vec<String>>,
     pub links: Option<Vec<Link>>,
     pub guides: Option<Vec<Guide>>,
@@ -117,6 +118,7 @@ pub struct Post {
     pub title: String,
     pub date: String,
     pub description: String,
+    pub image: Option<String>,
     pub content: String,
     pub path: PathBuf,
 }
@@ -146,10 +148,21 @@ fn post_from_path(path: &Path, date_field: &str) -> Result<Post, String> {
         title: frontmatter("title", &content).unwrap_or_default(),
         date: frontmatter_date(date_field, &content).unwrap_or_default(),
         description: frontmatter("description", &content).unwrap_or_default(),
+        image: frontmatter("image", &content),
         slug,
         path: path.to_path_buf(),
         content,
     })
+}
+
+/// Resolve og:image URL: post image overrides site default.
+pub fn resolve_og_image<'a>(post_image: Option<&'a str>, site_image: Option<&'a str>) -> &'a str {
+    post_image.or(site_image).unwrap_or("")
+}
+
+/// Twitter card type based on whether an og:image is present.
+pub fn twitter_card(og_image: &str) -> &'static str {
+    if og_image.is_empty() { "summary" } else { "summary_large_image" }
 }
 
 /// Extract space-separated tags from post frontmatter.

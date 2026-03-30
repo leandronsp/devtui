@@ -126,6 +126,9 @@ fn render_article(
         format!("{}/{}", articles_prefix, post.slug)
     };
 
+    let og_image = config::resolve_og_image(post.image.as_deref(), cfg.og_image.as_deref());
+    let twitter_card = config::twitter_card(og_image);
+
     let vars = HashMap::from([
         ("title", post.title.as_str()),
         ("body", html_body.as_str()),
@@ -137,6 +140,8 @@ fn render_article(
         ("slug", slug_with_prefix.as_str()),
         ("lang", cfg.lang.as_str()),
         ("base-path", base_path),
+        ("og-image", og_image),
+        ("twitter-card", twitter_card),
     ]);
 
     let rendered = template::template_render(article_tpl, &vars);

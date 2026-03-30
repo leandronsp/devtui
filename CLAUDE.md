@@ -41,7 +41,7 @@ brew install vim
 DDD module structure. Each module is self-contained with unit tests.
 
 - **`src/engine/build.rs`** — Thin pipeline orchestrator. 47 integration tests.
-- **`src/engine/config.rs`** — `BlogConfig`, `Post`, `frontmatter()`, `post_body()`, `collect_posts()`. 20 tests.
+- **`src/engine/config.rs`** — `BlogConfig`, `Post`, `frontmatter()`, `post_body()`, `collect_posts()`, `resolve_og_image()`, `twitter_card()`. 20 tests.
 - **`src/engine/template.rs`** — `resolve_file()`, `template_render()` with `$var$` and `$if()$...$endif$`. 9 tests.
 - **`src/engine/index.rs`** — Index page assembly: nav, post list, footer, filter script.
 - **`src/engine/feed.rs`** — RSS feed generation (`rss_header()`, `rss_item()`, `generate()`). 7 tests.
@@ -139,6 +139,7 @@ Each blog has a `blog.toml` with:
 - `date_field` — which frontmatter field holds the date (e.g. `date` or `published_at`)
 - `lang` — HTML lang attribute
 - `theme` — CSS theme (default: `paper`). Available: `paper`, `terminal`
+- `og_image` — Open Graph image URL for social media previews (optional, site-wide default)
 - `analytics_id` — Google Analytics measurement ID (optional, lazy-loaded)
 - `license`, `license_url` — footer license link (optional)
 - `tags` — curated tag list for index filter (optional)
@@ -157,7 +158,7 @@ Each blog has a `blog.toml` with:
 
 ### SEO Output
 
-Every page gets: `<title>`, `<meta description>`, `<link rel="canonical">`, Open Graph tags, Twitter Card, JSON-LD schema (BlogPosting/Blog), `<time datetime>`. Plus sitemap.xml, robots.txt, feed.xml (RSS 2.0 with Atom self-link).
+Every page gets: `<title>`, `<meta description>`, `<link rel="canonical">`, Open Graph tags (including `og:image`), Twitter Card (`summary_large_image` when image present), JSON-LD schema (BlogPosting/Blog with optional `image`), `<time datetime>`. Plus sitemap.xml, robots.txt, feed.xml (RSS 2.0 with Atom self-link). Post frontmatter `image` overrides site-level `og_image`.
 
 ### Template Override
 

@@ -16,11 +16,14 @@
 <meta property="og:description" content="$subtitle$">
 <meta property="og:url" content="$url$/">
 <meta property="og:site_name" content="$title$">
-
+$if(og-image)$<meta property="og:image" content="$og-image$">
+$endif$
 <!-- Twitter -->
-<meta name="twitter:card" content="summary">
+<meta name="twitter:card" content="$twitter-card$">
 <meta name="twitter:title" content="$title$">
 <meta name="twitter:description" content="$subtitle$">
+$if(og-image)$<meta name="twitter:image" content="$og-image$">
+$endif$
 
 <link rel="stylesheet" href="style.css">
 

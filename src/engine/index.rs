@@ -28,12 +28,16 @@ pub fn build(
     let index_tpl = fs::read_to_string(&index_tpl_path).map_err(|e| e.to_string())?;
 
     let subtitle = cfg.subtitle.as_deref().unwrap_or("");
+    let og_image = config::resolve_og_image(None, cfg.og_image.as_deref());
+    let twitter_card = config::twitter_card(og_image);
     let index_vars = HashMap::from([
         ("title", cfg.title.as_str()),
         ("subtitle", subtitle),
         ("url", cfg.url.as_str()),
         ("author", cfg.author.as_str()),
         ("lang", cfg.lang.as_str()),
+        ("og-image", og_image),
+        ("twitter-card", twitter_card),
     ]);
     let mut index_html = template::template_render(&index_tpl, &index_vars);
 

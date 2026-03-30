@@ -15,14 +15,20 @@
   <meta property="og:description" content="$if(description)$$description$$endif$">
   <meta property="og:url" content="$site-url$/$slug$.html">
   <meta property="og:site_name" content="$site-title$">
+$if(og-image)$
+  <meta property="og:image" content="$og-image$">
+$endif$
 $if(date)$
   <meta property="article:published_time" content="$date$">
 $endif$
 
   <!-- Twitter -->
-  <meta name="twitter:card" content="summary">
+  <meta name="twitter:card" content="$twitter-card$">
   <meta name="twitter:title" content="$title$">
   <meta name="twitter:description" content="$if(description)$$description$$endif$">
+$if(og-image)$
+  <meta name="twitter:image" content="$og-image$">
+$endif$
 
   <link rel="stylesheet" href="$base-path$style.css">
   <link rel="alternate" type="application/rss+xml" title="$site-title$" href="$site-url$/feed.xml">
@@ -37,7 +43,8 @@ $endif$
     "datePublished": "$if(date)$$date$$endif$",
     "author": { "@type": "Person", "name": "$site-author$" },
     "publisher": { "@type": "Person", "name": "$site-author$" },
-    "url": "$site-url$/$slug$.html"
+    "url": "$site-url$/$slug$.html"$if(og-image)$,
+    "image": "$og-image$"$endif$
   }
   </script>
 </head>
