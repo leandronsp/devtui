@@ -28,3 +28,4 @@ toml = "0.8"
 serde = { version = "1", features = ["derive"] }
 gh-emoji = "1.0"
 tiny_http = "0.12"
+rusqlite = { version = "0.31", features = ["bundled"] }
