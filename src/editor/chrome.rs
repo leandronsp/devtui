@@ -36,20 +36,28 @@ impl ChromePreview {
     /// Uses JavaScript to set document content directly (avoids data: URI size limits).
     /// Returns None on any error.
     pub fn screenshot(&self, html: &str) -> Option<Vec<u8>> {
-        // Navigate to blank first to reset state completely (fixes stuck renders)
-        self.tab.navigate_to("about:blank").ok()?;
-        self.tab.wait_until_navigated().ok()?;
+        // Use data: URI for reliable loading (document.write can fail on repeated calls)
+        let encoded = format!(
+            "data:text/html;charset=utf-8,{}",
+            html.replace('%', "%25")
+                .replace('#', "%23")
+                .replace(' ', "%20")
+                .replace('\n', "%0A")
+        );
 
-        // Escape HTML for JS string literal
-        let escaped = html
-            .replace('\\', "\\\\")
-            .replace('`', "\\`")
-            .replace("${", "\\${");
+        // Truncate if too long for data URI (Chrome limit ~2MB). Fall back to document.write.
+        if encoded.len() > 1_500_000 {
+            let escaped = html
+                .replace('\\', "\\\\")
+                .replace('`', "\\`")
+                .replace("${", "\\${");
+            let js = format!("document.open(); document.write(`{escaped}`); document.close();");
+            self.tab.evaluate(&js, true).ok()?;
+        } else {
+            self.tab.navigate_to(&encoded).ok()?;
+            self.tab.wait_until_navigated().ok()?;
+        }
 
-        let js = format!("document.open(); document.write(`{escaped}`); document.close();");
-        self.tab.evaluate(&js, true).ok()?;
-
-        // Wait for rendering
         std::thread::sleep(std::time::Duration::from_millis(100));
 
         self.tab

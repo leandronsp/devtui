@@ -84,7 +84,7 @@ pub fn run(
         "-u", "NONE",
         "-N",
         "--cmd", "set shortmess=aFIoOstTWcCS",
-        "-c", "set noswapfile noruler noshowmode noshowcmd laststatus=0 updatetime=150 tabstop=2 shiftwidth=2 expandtab title titlestring=%{line('w0')}:%{mode()}",
+        "-c", "set noswapfile noruler noshowmode noshowcmd laststatus=0 updatetime=150 tabstop=2 shiftwidth=2 expandtab title titlestring=%{line('w0')}:%{line('.')}:%{line('$')}:%{mode()}",
         "-c", "nnoremap u :silent! undo<CR>",
         "-c", "nnoremap <C-r> :silent! redo<CR>",
         "-c", "autocmd BufWritePost * call timer_start(1,{->execute('redraw!')})",
@@ -199,11 +199,35 @@ fn read_pty(
     }
 }
 
-fn parse_title(parser: &Arc<RwLock<vt100::Parser>>) -> (usize, &'static str) {
+/// Parsed vim state from titlestring: w0:cursor:total:mode
+#[allow(dead_code)]
+struct VimState {
+    first_visible: usize,
+    cursor_line: usize,
+    total_lines: usize,
+    mode: &'static str,
+}
+
+fn parse_title(parser: &Arc<RwLock<vt100::Parser>>) -> VimState {
     if let Ok(p) = parser.read() {
         let title = p.screen().title().to_string();
+        let parts: Vec<&str> = title.trim().split(':').collect();
+        if parts.len() >= 4 {
+            let first_visible = parts[0].parse::<usize>().unwrap_or(1).saturating_sub(1);
+            let cursor_line = parts[1].parse::<usize>().unwrap_or(1);
+            let total_lines = parts[2].parse::<usize>().unwrap_or(1);
+            let mode = match parts[3] {
+                "i" => "INSERT",
+                "v" | "V" | "\x16" => "VISUAL",
+                "R" => "REPLACE",
+                "c" => "COMMAND",
+                _ => "NORMAL",
+            };
+            return VimState { first_visible, cursor_line, total_lines, mode };
+        }
+        // Fallback for old format w0:mode
         if let Some((line_str, mode_char)) = title.trim().split_once(':') {
-            let source_line = line_str.parse::<usize>().unwrap_or(1).saturating_sub(1);
+            let first_visible = line_str.parse::<usize>().unwrap_or(1).saturating_sub(1);
             let mode = match mode_char {
                 "i" => "INSERT",
                 "v" | "V" | "\x16" => "VISUAL",
@@ -211,10 +235,10 @@ fn parse_title(parser: &Arc<RwLock<vt100::Parser>>) -> (usize, &'static str) {
                 "c" => "COMMAND",
                 _ => "NORMAL",
             };
-            return (source_line, mode);
+            return VimState { first_visible, cursor_line: 1, total_lines: 1, mode };
         }
     }
-    (0, "NORMAL")
+    VimState { first_visible: 0, cursor_line: 1, total_lines: 1, mode: "NORMAL" }
 }
 
 /// Extract the last line from the vim PTY screen (where vim shows messages).
@@ -329,8 +353,8 @@ fn run_loop(
             }
         }
 
-        let (source_line, mode) = parse_title(parser);
-        let (mode_label, mode_st) = mode_style(mode);
+        let vim_state = parse_title(parser);
+        let (mode_label, mode_st) = mode_style(vim_state.mode);
 
         // Extract vim message from last line of PTY screen
         let vim_message = extract_vim_message(parser);
@@ -429,17 +453,16 @@ fn run_loop(
                         continue;
                     }
 
-                    // Ctrl+T: sync preview to vim cursor (proportional positioning)
+                    // Ctrl+T: sync preview to vim cursor line, centered in preview
                     if key.code == KeyCode::Char('t') && ctrl && split_layout != SplitLayout::EditorOnly {
-                        // Count total source lines from content
-                        let total_source_lines = last_content.lines().count().max(1);
-                        let total_rendered_lines = cached_lines.len().max(1);
+                        let total_rendered = cached_lines.len().max(1);
+                        let total_source = vim_state.total_lines.max(1);
 
-                        // source_line is the first visible line in vim (from titlestring w0)
-                        // Calculate what proportion of the document we're viewing
-                        let ratio = source_line as f64 / total_source_lines as f64;
-                        let target = (ratio * total_rendered_lines as f64) as u16;
+                        // Map cursor line proportionally to rendered lines
+                        let ratio = vim_state.cursor_line as f64 / total_source as f64;
+                        let target = (ratio * total_rendered as f64) as u16;
 
+                        // Center the target in the preview viewport
                         let term_size = terminal.size()?;
                         let visible_height = match split_layout {
                             SplitLayout::Vertical => term_size.height.saturating_sub(4),
@@ -447,7 +470,7 @@ fn run_loop(
                             SplitLayout::EditorOnly => 0,
                         };
 
-                        preview_scroll = target.saturating_sub(visible_height / 3);
+                        preview_scroll = target.saturating_sub(visible_height / 2);
                         continue;
                     }
 
