@@ -1,3 +1,10 @@
+use std::collections::HashMap;
+use std::fs;
+use std::path::Path;
+
+use super::config::BlogConfig;
+use super::template;
+
 pub fn xml_escape(input: &str) -> String {
     input
         .replace('&', "&amp;")
@@ -14,24 +21,36 @@ pub fn robots_txt(base_url: &str) -> String {
     format!("User-agent: *\nAllow: /\nSitemap: {base_url}/sitemap.xml\n")
 }
 
-pub fn rss_header(title: &str, url: &str, description: &str) -> String {
-    format!(
-        r#"<?xml version="1.0" encoding="UTF-8"?>
-<rss version="2.0" xmlns:atom="http://www.w3.org/2005/Atom">
-<channel>
-<title>{title}</title>
-<link>{url}</link>
-<description>{description}</description>
-<atom:link href="{url}/feed.xml" rel="self" type="application/rss+xml"/>
-"#
-    )
+/// Generate sitemap.xml with index URL and article entries.
+pub fn sitemap(cfg: &BlogConfig, dist_dir: &Path, sitemap_entries: &str) -> Result<(), String> {
+    let sitemap = format!(
+        "<?xml version=\"1.0\" encoding=\"UTF-8\"?>\n<urlset xmlns=\"http://www.sitemaps.org/schemas/sitemap/0.9\">\n<url><loc>{}/</loc></url>\n{}</urlset>",
+        cfg.url, sitemap_entries
+    );
+    fs::write(dist_dir.join("sitemap.xml"), &sitemap).map_err(|e| e.to_string())
 }
 
-pub fn rss_item(title: &str, link: &str, description: &str, date: &str) -> String {
-    let escaped_title = xml_escape(title);
-    format!(
-        "<item>\n<title>{escaped_title}</title>\n<link>{link}</link>\n<guid>{link}</guid>\n<description><![CDATA[{description}]]></description>\n<pubDate>{date}</pubDate>\n</item>\n"
+/// Generate robots.txt and 404.html.
+pub fn generate_files(
+    cfg: &BlogConfig,
+    dist_dir: &Path,
+    blog_dir: &Path,
+    theme_dir: &Path,
+    engine_dir: &Path,
+) -> Result<(), String> {
+    fs::write(dist_dir.join("robots.txt"), robots_txt(&cfg.url)).map_err(|e| e.to_string())?;
+
+    let error_tpl_path = template::resolve_file(
+        "404.html",
+        &blog_dir.join("templates"),
+        &theme_dir.join("templates"),
+        &engine_dir.join("templates"),
     )
+    .ok_or("404.html template not found")?;
+    let error_tpl = fs::read_to_string(&error_tpl_path).map_err(|e| e.to_string())?;
+    let error_vars = HashMap::from([("title", cfg.title.as_str()), ("lang", cfg.lang.as_str())]);
+    let error_html = template::template_render(&error_tpl, &error_vars);
+    fs::write(dist_dir.join("404.html"), &error_html).map_err(|e| e.to_string())
 }
 
 #[cfg(test)]
@@ -81,61 +100,4 @@ mod tests {
         assert!(result.contains("Sitemap: https://test.com/sitemap.xml"));
     }
 
-    // --- rss_header ---
-
-    #[test]
-    fn rss_header_contains_channel_title() {
-        let result = rss_header("My Blog", "https://test.com", "A blog");
-        assert!(result.contains("<title>My Blog</title>"));
-    }
-
-    #[test]
-    fn rss_header_contains_channel_link() {
-        let result = rss_header("My Blog", "https://test.com", "A blog");
-        assert!(result.contains("<link>https://test.com</link>"));
-    }
-
-    #[test]
-    fn rss_header_contains_atom_self_link() {
-        let result = rss_header("My Blog", "https://test.com", "A blog");
-        assert!(result.contains(r#"href="https://test.com/feed.xml""#));
-    }
-
-    // --- rss_item ---
-
-    #[test]
-    fn rss_item_contains_title_and_link() {
-        let result = rss_item("Post", "https://test.com/post.html", "desc", "2026-03-29");
-        assert!(result.contains("<title>Post</title>"));
-        assert!(result.contains("<link>https://test.com/post.html</link>"));
-    }
-
-    #[test]
-    fn rss_item_contains_guid() {
-        let result = rss_item("Post", "https://test.com/post.html", "desc", "2026-03-29");
-        assert!(result.contains("<guid>https://test.com/post.html</guid>"));
-    }
-
-    #[test]
-    fn rss_item_contains_pub_date() {
-        let result = rss_item("Post", "https://test.com/post.html", "desc", "2026-03-29");
-        assert!(result.contains("<pubDate>2026-03-29</pubDate>"));
-    }
-
-    #[test]
-    fn rss_item_escapes_ampersand_in_title() {
-        let result = rss_item("AI & Ruby", "https://test.com/post.html", "desc", "2026-03-29");
-        assert!(result.contains("<title>AI &amp; Ruby</title>"));
-    }
-
-    #[test]
-    fn rss_item_wraps_description_in_cdata() {
-        let result = rss_item(
-            "Post",
-            "https://test.com/post.html",
-            r#"A <b>bold</b> & "quoted""#,
-            "2026-03-29",
-        );
-        assert!(result.contains(r#"<description><![CDATA[A <b>bold</b> & "quoted"]]></description>"#));
-    }
 }

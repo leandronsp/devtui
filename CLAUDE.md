@@ -40,22 +40,25 @@ brew install vim
 
 DDD module structure. Each module is self-contained with unit tests.
 
-- **`src/engine/build.rs`** — Pipeline orchestrator. 47 integration tests.
-- **`src/engine/config.rs`** — `BlogConfig` (serde), `frontmatter()`, `post_body()`. 20 tests.
+- **`src/engine/build.rs`** — Thin pipeline orchestrator. 47 integration tests.
+- **`src/engine/config.rs`** — `BlogConfig`, `Post`, `frontmatter()`, `post_body()`, `collect_posts()`. 20 tests.
 - **`src/engine/template.rs`** — `resolve_file()`, `template_render()` with `$var$` and `$if()$...$endif$`. 9 tests.
-- **`src/engine/seo.rs`** — `xml_escape()`, `sitemap_entry()`, `robots_txt()`, `rss_header()`, `rss_item()`. 14 tests.
-- **`src/engine/minify.rs`** — CSS/HTML minification, CSS inlining. 8 tests.
+- **`src/engine/index.rs`** — Index page assembly: nav, post list, footer, filter script.
+- **`src/engine/feed.rs`** — RSS feed generation (`rss_header()`, `rss_item()`, `generate()`). 7 tests.
+- **`src/engine/seo.rs`** — `xml_escape()`, `sitemap_entry()`, `robots_txt()`, `sitemap()`, `generate_files()`. 6 tests.
+- **`src/engine/analytics.rs`** — Google Analytics injection. 2 tests.
+- **`src/engine/minify.rs`** — CSS compilation, CSS/HTML minification, CSS inlining. 8 tests.
 - **`src/engine/links.rs`** — Social links, tags, guides HTML from BlogConfig. 6 tests.
 - **`src/engine/markdown.rs`** — Markdown-to-HTML (pulldown-cmark), `post_snippet()`, emoji shortcodes. 19 tests.
-- **`engine/templates/`** — Default HTML templates.
-- **`engine/themes/<name>/`** — Theme CSS, split into modular files.
+- **`src/engine/templates/`** — Default HTML templates.
+- **`src/engine/themes/<name>/`** — Theme CSS, split into modular files.
 
-### Themes (engine/themes/)
+### Themes (src/engine/themes/)
 
 Themes provide modular CSS split into files concatenated in order:
 
 ```
-engine/themes/<name>/
+src/engine/themes/<name>/
   base.css        # variables, reset, body defaults (line-height, font-size)
   index.css       # index page styles
   article.css     # article page styles
@@ -65,7 +68,7 @@ engine/themes/<name>/
 
 Blog selects theme via `theme = "paper"` in `blog.toml`. Default theme is `paper`. The build concatenates the CSS files, minifies, and inlines into each HTML.
 
-**To change CSS, edit the theme files under `engine/themes/<name>/`. There is no fallback CSS file.**
+**To change CSS, edit the theme files under `src/engine/themes/<name>/`. There is no fallback CSS file.**
 
 ### Blog Content (blogs/, gitignored)
 
@@ -96,7 +99,7 @@ make blog.build                # build all blogs
 make blog.build.<name>         # build one blog
 make blog.serve.<name>         # build and serve on localhost:8000
 make blog.clean                # remove dist/
-make deploy.git.<name>         # build, copy to repo
+make deploy.cp.<name>         # build, copy to repo
 
 # All
 make help                      # all targets
@@ -158,7 +161,7 @@ Every page gets: `<title>`, `<meta description>`, `<link rel="canonical">`, Open
 
 ### Template Override
 
-`resolve_file()` checks `blogs/<name>/templates/` first, falls back to `engine/templates/`. Same for `style.css`. Blogs inherit defaults unless they explicitly override.
+`resolve_file()` checks `blogs/<name>/templates/` first, falls back to `src/engine/templates/`. Same for `style.css`. Blogs inherit defaults unless they explicitly override.
 
 ### Blog-to-Repo Symlink Pattern
 
@@ -176,7 +179,7 @@ The symlinks mean the engine reads directly from the repo without copying source
 
 ### Build and Deploy Flow
 
-`make deploy.git.<name>` builds and prepares a commit in the blog's repo. Push is manual.
+`make deploy.cp.<name>` builds and copies dist to the blog's repo via rsync. Commit and push are manual.
 
 ```
 repo/articles/*.md ─── symlink ──> engine reads markdown

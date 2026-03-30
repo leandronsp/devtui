@@ -1,5 +1,6 @@
 use serde::Deserialize;
-use std::path::Path;
+use std::fs;
+use std::path::{Path, PathBuf};
 
 #[derive(Debug, Deserialize)]
 pub struct Link {
@@ -78,29 +79,29 @@ pub fn frontmatter_date(field: &str, content: &str) -> Option<String> {
 /// Extract post body (everything after the closing --- of frontmatter).
 /// Inserts blank lines before list items and blockquotes without preceding blank lines.
 pub fn post_body(content: &str) -> String {
-    let mut lines = content.lines();
-    let mut frontmatter_count = 0;
+    let body_lines = skip_frontmatter(content);
+    fix_markdown_spacing(&body_lines)
+}
 
-    // Skip frontmatter
+fn skip_frontmatter(content: &str) -> Vec<&str> {
+    let mut lines = content.lines();
+    let mut count = 0;
     for line in lines.by_ref() {
         if line == "---" {
-            frontmatter_count += 1;
-            if frontmatter_count == 2 {
-                break;
-            }
+            count += 1;
+            if count == 2 { break; }
         }
     }
+    lines.collect()
+}
 
-    let body_lines: Vec<&str> = lines.collect();
-
-    // Fix lists/blockquotes without preceding blank lines
+/// Insert blank lines before list items and blockquotes that lack them.
+fn fix_markdown_spacing(lines: &[&str]) -> String {
     let mut result = String::new();
     let mut prev_line = "";
-
-    for line in &body_lines {
+    for line in lines {
         let needs_blank = !prev_line.is_empty()
             && (line.starts_with("* ") || line.starts_with("- ") || line.starts_with("> "));
-
         if needs_blank {
             result.push('\n');
         }
@@ -108,8 +109,64 @@ pub fn post_body(content: &str) -> String {
         result.push('\n');
         prev_line = line;
     }
-
     result
+}
+
+pub struct Post {
+    pub slug: String,
+    pub title: String,
+    pub date: String,
+    pub description: String,
+    pub content: String,
+    pub path: PathBuf,
+}
+
+/// Collect all markdown posts from a directory, extracting frontmatter fields.
+pub fn collect_posts(posts_dir: &Path, date_field: &str) -> Result<Vec<Post>, String> {
+    if !posts_dir.exists() {
+        return Ok(Vec::new());
+    }
+    let mut entries = markdown_entries(posts_dir)?;
+    entries.sort_by_key(|e| e.file_name());
+    entries.iter().map(|e| post_from_path(&e.path(), date_field)).collect()
+}
+
+fn markdown_entries(dir: &Path) -> Result<Vec<fs::DirEntry>, String> {
+    Ok(fs::read_dir(dir)
+        .map_err(|e| e.to_string())?
+        .filter_map(|e| e.ok())
+        .filter(|e| e.path().extension().is_some_and(|ext| ext == "md"))
+        .collect())
+}
+
+fn post_from_path(path: &Path, date_field: &str) -> Result<Post, String> {
+    let content = fs::read_to_string(path).map_err(|e| e.to_string())?;
+    let slug = path.file_stem().map(|s| s.to_string_lossy().to_string()).unwrap_or_default();
+    Ok(Post {
+        title: frontmatter("title", &content).unwrap_or_default(),
+        date: frontmatter_date(date_field, &content).unwrap_or_default(),
+        description: frontmatter("description", &content).unwrap_or_default(),
+        slug,
+        path: path.to_path_buf(),
+        content,
+    })
+}
+
+/// Extract space-separated tags from post frontmatter.
+pub fn extract_tags(content: &str) -> String {
+    for line in content.lines() {
+        if let Some(rest) = line.strip_prefix("tags:") {
+            return rest
+                .trim()
+                .trim_matches(|c| c == '[' || c == ']')
+                .replace('"', "")
+                .split(',')
+                .map(|t| t.trim())
+                .collect::<Vec<_>>()
+                .join(" ");
+        }
+    }
+    String::new()
 }
 
 #[cfg(test)]

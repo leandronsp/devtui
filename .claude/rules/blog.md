@@ -3,17 +3,18 @@
 ## Structure
 
 ```
-src/engine/          # Rust modules, each with unit tests
-  build.rs           # pipeline orchestrator + integration tests
-  config.rs          # BlogConfig, frontmatter(), post_body()
+src/engine/          # Rust modules + static assets
+  build.rs           # thin pipeline orchestrator + integration tests
+  config.rs          # BlogConfig, Post, frontmatter(), collect_posts()
   template.rs        # resolve_file(), template_render()
-  seo.rs             # sitemap, robots, rss functions
-  minify.rs          # CSS/HTML minification, CSS inlining
+  index.rs           # index page assembly (nav, posts, footer, filter script)
+  feed.rs            # RSS feed generation
+  seo.rs             # sitemap, robots.txt, 404, xml_escape
+  analytics.rs       # Google Analytics injection
+  minify.rs          # CSS compilation, minification, inlining
   links.rs           # social links, tags, guides HTML
   markdown.rs        # markdown-to-HTML, post_snippet(), emoji
   mod.rs             # module declarations
-
-engine/              # static assets (no code)
   templates/         # default HTML templates
   themes/<name>/     # theme CSS (base, index, article, syntax, responsive)
 

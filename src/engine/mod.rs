@@ -1,5 +1,8 @@
+pub mod analytics;
 pub mod build;
 pub mod config;
+pub mod feed;
+pub mod index;
 pub mod links;
 pub mod markdown;
 pub mod minify;

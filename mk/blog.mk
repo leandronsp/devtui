@@ -26,10 +26,10 @@ blog.clean: ## Remove all generated files
 blog.clean.%: ## Clean a specific blog
 	@rm -rf dist/$*
 
-# ——— Deploy (git auto-deploy) ———
+# ——— Deploy (copy to blog repo) ———
 
 REPO_DIR = $(dir $(realpath blogs/$*/posts))
 
-deploy.git.%: blog.build.% ## Build and copy to blog repo
+deploy.cp.%: blog.build.% ## Build and copy to blog repo
 	@echo "deploying $* to $(REPO_DIR)..."
 	@rsync -a dist/$*/ $(REPO_DIR)

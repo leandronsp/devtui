@@ -17,7 +17,7 @@ fn main() {
 
     let blog_dir = Path::new(&args[1]);
     let dist_dir = Path::new(&args[2]);
-    let engine_dir = Path::new(env!("CARGO_MANIFEST_DIR")).join("engine");
+    let engine_dir = Path::new(env!("CARGO_MANIFEST_DIR")).join("src/engine");
 
     match devtui::engine::build::build(blog_dir, dist_dir, &engine_dir) {
         Ok(report) => {

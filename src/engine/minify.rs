@@ -1,50 +1,82 @@
+use std::fs;
+use std::path::{Path, PathBuf};
+
+/// Concatenate theme CSS modules (base, index, article, syntax, responsive).
+/// Uses blog overrides if present, otherwise falls back to theme directory.
+pub fn compile_css(blog_dir: &Path, theme_dir: &Path) -> Result<String, String> {
+    let style_dir = if blog_dir.join("base.css").exists() {
+        blog_dir.to_path_buf()
+    } else {
+        theme_dir.to_path_buf()
+    };
+    let mut css = String::new();
+    for part in &["base", "index", "article", "syntax", "responsive"] {
+        let css_file = style_dir.join(format!("{part}.css"));
+        if css_file.exists() {
+            css.push_str(&fs::read_to_string(&css_file).map_err(|e| e.to_string())?);
+        }
+    }
+    Ok(css)
+}
+
+/// Minify CSS, inline into HTML files, minify HTML, then remove the standalone CSS file.
+pub fn minify_and_inline(dist_dir: &Path, css: &str, rebuilt_articles: &[String]) -> Result<(), String> {
+    let minified_css = minify_css(css);
+    let mut process_files = vec![dist_dir.join("index.html")];
+    for path in rebuilt_articles {
+        process_files.push(PathBuf::from(path));
+    }
+    process_files.push(dist_dir.join("404.html"));
+
+    for html_path in &process_files {
+        if html_path.exists() {
+            let content = fs::read_to_string(html_path).map_err(|e| e.to_string())?;
+            let content = inline_css(&content, &minified_css);
+            let content = minify_html(&content);
+            fs::write(html_path, content).map_err(|e| e.to_string())?;
+        }
+    }
+
+    let _ = fs::remove_file(dist_dir.join("style.css"));
+    Ok(())
+}
+
 /// Minify CSS: strip comments, collapse whitespace, remove unnecessary chars.
 pub fn minify_css(css: &str) -> String {
+    let no_comments = strip_css_comments(css);
+    let collapsed = collapse_whitespace_runs(&no_comments);
+    strip_css_whitespace_around_operators(&collapsed)
+}
+
+fn strip_css_comments(css: &str) -> String {
     let mut result = String::with_capacity(css.len());
     let chars: Vec<char> = css.chars().collect();
     let len = chars.len();
     let mut idx = 0;
-
-    // Strip comments
     while idx < len {
         if idx + 1 < len && chars[idx] == '/' && chars[idx + 1] == '*' {
             idx += 2;
             while idx + 1 < len && !(chars[idx] == '*' && chars[idx + 1] == '/') {
                 idx += 1;
             }
-            idx += 2; // skip */
+            idx += 2;
         } else {
             result.push(chars[idx]);
             idx += 1;
         }
     }
+    result
+}
 
-    // Collapse whitespace to single space
-    let mut collapsed = String::with_capacity(result.len());
-    let mut prev_ws = false;
-    for ch in result.chars() {
-        if ch.is_whitespace() {
-            if !prev_ws {
-                collapsed.push(' ');
-            }
-            prev_ws = true;
-        } else {
-            collapsed.push(ch);
-            prev_ws = false;
-        }
-    }
-
-    // Remove whitespace around operators
+fn strip_css_whitespace_around_operators(css: &str) -> String {
     let operators = ['{', '}', ':', ';', ',', '>', '~', '+'];
-    let mut minified = collapsed;
+    let mut result = css.to_string();
     for op in operators {
-        minified = minified.replace(&format!(" {op}"), &format!("{op}"));
-        minified = minified.replace(&format!("{op} "), &format!("{op}"));
+        result = result.replace(&format!(" {op}"), &format!("{op}"));
+        result = result.replace(&format!("{op} "), &format!("{op}"));
     }
-
-    // Remove trailing semicolons before }
-    minified = minified.replace(";}", "}");
-    minified.trim().to_string()
+    result = result.replace(";}", "}");
+    result.trim().to_string()
 }
 
 /// Replace <link rel="stylesheet"> with inline <style> block.
@@ -72,22 +104,23 @@ pub fn inline_css(html: &str, css: &str) -> String {
 
 /// Minify HTML: strip comments, collapse whitespace. Preserves <pre>, <script>, <style> content.
 pub fn minify_html(html: &str) -> String {
+    let (mut result, preserved) = extract_preserved_blocks(html);
+    strip_html_comments(&mut result);
+    let result = collapse_inter_tag_whitespace(&result);
+    let result = collapse_whitespace_runs(&result);
+    restore_preserved_blocks(&result, &preserved)
+}
+
+/// Extract <pre>, <script>, <style> blocks and replace with placeholders.
+fn extract_preserved_blocks(html: &str) -> (String, Vec<String>) {
     let mut result = html.to_string();
-
-    // Extract and preserve <pre>, <script>, <style> blocks
-    let preserve_tags = ["pre", "script", "style"];
     let mut preserved: Vec<String> = Vec::new();
-
-    for tag in &preserve_tags {
+    for tag in &["pre", "script", "style"] {
         let open = format!("<{tag}");
         let close = format!("</{tag}>");
         loop {
-            let Some(start) = result.find(&open) else {
-                break;
-            };
-            let Some(end_offset) = result[start..].find(&close) else {
-                break;
-            };
+            let Some(start) = result.find(&open) else { break; };
+            let Some(end_offset) = result[start..].find(&close) else { break; };
             let end = start + end_offset + close.len();
             let block = result[start..end].to_string();
             let placeholder = format!("__PRESERVE_{}__", preserved.len());
@@ -95,65 +128,59 @@ pub fn minify_html(html: &str) -> String {
             result.replace_range(start..end, &placeholder);
         }
     }
+    (result, preserved)
+}
 
-    // Strip HTML comments
+fn strip_html_comments(html: &mut String) {
     loop {
-        let Some(start) = result.find("<!--") else {
-            break;
-        };
-        let Some(end_offset) = result[start..].find("-->") else {
-            break;
-        };
-        result.replace_range(start..start + end_offset + 3, "");
+        let Some(start) = html.find("<!--") else { break; };
+        let Some(end_offset) = html[start..].find("-->") else { break; };
+        html.replace_range(start..start + end_offset + 3, "");
     }
+}
 
-    // Collapse whitespace between tags: >   < becomes ><
-    let mut collapsed = String::with_capacity(result.len());
-    let mut chars = result.chars().peekable();
+/// Collapse whitespace between tags: `>   <` becomes `><`.
+fn collapse_inter_tag_whitespace(html: &str) -> String {
+    let mut result = String::with_capacity(html.len());
+    let mut chars = html.chars().peekable();
     while let Some(ch) = chars.next() {
+        result.push(ch);
         if ch == '>' {
-            collapsed.push(ch);
-            // Skip whitespace until next <
-            let mut ws = String::new();
-            while let Some(&next) = chars.peek() {
-                if next.is_whitespace() {
-                    ws.push(next);
-                    chars.next();
-                } else {
-                    break;
-                }
+            let mut has_ws = false;
+            while chars.peek().is_some_and(|c| c.is_whitespace()) {
+                has_ws = true;
+                chars.next();
             }
-            if chars.peek() != Some(&'<') && !ws.is_empty() {
-                // Not followed by <, keep one space
-                collapsed.push(' ');
+            if has_ws && chars.peek() != Some(&'<') {
+                result.push(' ');
             }
-        } else {
-            collapsed.push(ch);
         }
     }
+    result
+}
 
-    // Collapse runs of whitespace to single space
-    let mut final_result = String::with_capacity(collapsed.len());
+fn collapse_whitespace_runs(html: &str) -> String {
+    let mut result = String::with_capacity(html.len());
     let mut prev_ws = false;
-    for ch in collapsed.chars() {
+    for ch in html.chars() {
         if ch.is_whitespace() {
-            if !prev_ws {
-                final_result.push(' ');
-            }
+            if !prev_ws { result.push(' '); }
             prev_ws = true;
         } else {
-            final_result.push(ch);
+            result.push(ch);
             prev_ws = false;
         }
     }
+    result
+}
 
-    // Restore preserved blocks
+fn restore_preserved_blocks(html: &str, preserved: &[String]) -> String {
+    let mut result = html.to_string();
     for (idx, block) in preserved.iter().enumerate() {
         let placeholder = format!("__PRESERVE_{idx}__");
-        final_result = final_result.replace(&placeholder, block);
+        result = result.replace(&placeholder, block);
     }
-
-    final_result
+    result
 }
 
 #[cfg(test)]

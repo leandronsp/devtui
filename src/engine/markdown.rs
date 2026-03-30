@@ -12,17 +12,21 @@ pub fn markdown_to_html(markdown: &str) -> String {
 }
 
 /// Extract a plain-text snippet from markdown, truncated at word boundary.
+/// Uses explicit description if provided, otherwise extracts text from markdown body.
 pub fn post_snippet(body: &str, description: Option<&str>, limit: usize) -> String {
     if let Some(desc) = description {
         if !desc.is_empty() {
             return desc.to_string();
         }
     }
+    let text = extract_plain_text(body);
+    truncate_at_word_boundary(&text, limit)
+}
 
-    // Parse markdown and extract only text content
+/// Parse markdown and extract only visible text content, skipping code blocks.
+fn extract_plain_text(markdown: &str) -> String {
     let options = Options::ENABLE_STRIKETHROUGH | Options::ENABLE_TABLES;
-    let parser = Parser::new_ext(body, options);
-
+    let parser = Parser::new_ext(markdown, options);
     let mut text = String::new();
     let mut in_code_block = false;
 
@@ -31,22 +35,14 @@ pub fn post_snippet(body: &str, description: Option<&str>, limit: usize) -> Stri
             Event::Start(Tag::CodeBlock(_)) => in_code_block = true,
             Event::End(TagEnd::CodeBlock) => in_code_block = false,
             Event::Text(t) if !in_code_block => {
-                if !text.is_empty() {
-                    text.push(' ');
-                }
+                if !text.is_empty() { text.push(' '); }
                 text.push_str(&t);
             }
-            Event::SoftBreak | Event::HardBreak if !in_code_block => {
-                text.push(' ');
-            }
+            Event::SoftBreak | Event::HardBreak if !in_code_block => text.push(' '),
             _ => {}
         }
     }
-
-    // Collapse whitespace
-    let text: String = text.split_whitespace().collect::<Vec<_>>().join(" ");
-
-    truncate_at_word_boundary(&text, limit)
+    text.split_whitespace().collect::<Vec<_>>().join(" ")
 }
 
 fn truncate_at_word_boundary(text: &str, limit: usize) -> String {
@@ -69,72 +65,60 @@ fn truncate_at_word_boundary(text: &str, limit: usize) -> String {
 }
 
 /// Replace :emoji: shortcodes with <span class="emoji" data-emoji="name">CHAR</span>.
-/// Skips shortcodes inside code fences.
+/// Skips shortcodes inside code fences and inline code spans.
 fn replace_emoji_shortcodes(text: &str) -> String {
     let mut result = String::with_capacity(text.len());
     let mut in_code_fence = false;
-    let mut in_inline_code = false;
 
     for line in text.lines() {
         if line.starts_with("```") {
             in_code_fence = !in_code_fence;
+        }
+        if in_code_fence || line.starts_with("```") {
             result.push_str(line);
-            result.push('\n');
-            continue;
+        } else {
+            replace_emoji_in_line(line, &mut result);
         }
-
-        if in_code_fence {
-            result.push_str(line);
-            result.push('\n');
-            continue;
-        }
-
-        // Process inline, tracking backtick code spans
-        let chars: Vec<char> = line.chars().collect();
-        let len = chars.len();
-        let mut idx = 0;
-
-        while idx < len {
-            if chars[idx] == '`' {
-                in_inline_code = !in_inline_code;
-                result.push('`');
-                idx += 1;
-                continue;
-            }
-
-            if in_inline_code {
-                result.push(chars[idx]);
-                idx += 1;
-                continue;
-            }
-
-            if chars[idx] == ':' {
-                // Try to match :shortcode:
-                if let Some(end) = find_shortcode_end(&chars, idx) {
-                    let name: String = chars[idx + 1..end].iter().collect();
-                    if let Some(emoji) = gh_emoji::get(&name) {
-                        result.push_str(&format!(
-                            r#"<span class="emoji" data-emoji="{name}">{emoji}</span>"#
-                        ));
-                        idx = end + 1;
-                        continue;
-                    }
-                }
-            }
-
-            result.push(chars[idx]);
-            idx += 1;
-        }
-
         result.push('\n');
     }
 
-    // Remove trailing newline if input didn't have one
     if !text.ends_with('\n') && result.ends_with('\n') {
         result.pop();
     }
-
     result
+}
+
+fn replace_emoji_in_line(line: &str, result: &mut String) {
+    let chars: Vec<char> = line.chars().collect();
+    let len = chars.len();
+    let mut idx = 0;
+    let mut in_inline_code = false;
+
+    while idx < len {
+        if chars[idx] == '`' {
+            in_inline_code = !in_inline_code;
+            result.push('`');
+            idx += 1;
+            continue;
+        }
+        if in_inline_code || chars[idx] != ':' {
+            result.push(chars[idx]);
+            idx += 1;
+            continue;
+        }
+        if let Some(end) = find_shortcode_end(&chars, idx) {
+            let name: String = chars[idx + 1..end].iter().collect();
+            if let Some(emoji) = gh_emoji::get(&name) {
+                result.push_str(&format!(
+                    r#"<span class="emoji" data-emoji="{name}">{emoji}</span>"#
+                ));
+                idx = end + 1;
+                continue;
+            }
+        }
+        result.push(chars[idx]);
+        idx += 1;
+    }
 }
 
 fn find_shortcode_end(chars: &[char], start: usize) -> Option<usize> {

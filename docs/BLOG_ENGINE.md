@@ -8,7 +8,7 @@ make blog.build.<name>         # build one blog
 make blog.build                # build all blogs
 make blog.serve.<name>         # build and serve on localhost:8000
 make blog.clean                # remove all generated files
-make deploy.git.<name>         # build and rsync to blog repo
+make deploy.cp.<name>         # build and rsync to blog repo
 ```
 
 ## Getting started
@@ -77,7 +77,7 @@ make blog.serve.my-site       # serves on localhost:8000
 For git-based deploys (Cloudflare Pages, GitHub Pages, Netlify):
 
 ```bash
-make deploy.git.my-site       # rsync dist to blog repo
+make deploy.cp.my-site       # rsync dist to blog repo
 cd ../my-site && git push     # auto-deploys via hosting provider
 ```
 
@@ -92,7 +92,7 @@ Set `theme` in `blog.toml`:
 
 Both themes include dark/light toggle, mobile responsive popover, and identical SEO output.
 
-Themes are modular CSS in `engine/themes/<name>/`:
+Themes are modular CSS in `src/engine/themes/<name>/`:
 
 ```
 base.css        # variables, reset, layout
@@ -168,7 +168,7 @@ make blog.build.leandronsp.com
 make blog.serve.leandronsp.com    # localhost:8000
 
 # deploy: copies built files to blog repo
-make deploy.git.leandronsp.com
+make deploy.cp.leandronsp.com
 
 # review, commit and push manually
 cd ../leandronsp.com

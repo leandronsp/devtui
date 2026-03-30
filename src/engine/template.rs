@@ -18,21 +18,19 @@ pub fn resolve_file(
 
 /// Render a template by substituting $var$ placeholders and $if(var)$...$endif$ blocks.
 pub fn template_render(template: &str, vars: &HashMap<&str, &str>) -> String {
-    let mut result = template.to_string();
+    let result = resolve_conditionals(template, vars);
+    substitute_vars(&result, vars)
+}
 
-    // Process $if(key)$...$endif$ blocks
+/// Process $if(key)$...$endif$ blocks: include inner content if key is present and non-empty.
+fn resolve_conditionals(template: &str, vars: &HashMap<&str, &str>) -> String {
+    let mut result = template.to_string();
     loop {
-        let Some(if_start) = result.find("$if(") else {
-            break;
-        };
-        let Some(cond_end) = result[if_start + 4..].find(")$") else {
-            break;
-        };
+        let Some(if_start) = result.find("$if(") else { break; };
+        let Some(cond_end) = result[if_start + 4..].find(")$") else { break; };
         let key = &result[if_start + 4..if_start + 4 + cond_end];
         let block_start = if_start + 4 + cond_end + 2;
-        let Some(endif_pos) = result[block_start..].find("$endif$") else {
-            break;
-        };
+        let Some(endif_pos) = result[block_start..].find("$endif$") else { break; };
         let inner = &result[block_start..block_start + endif_pos];
         let end = block_start + endif_pos + 7;
 
@@ -40,13 +38,14 @@ pub fn template_render(template: &str, vars: &HashMap<&str, &str>) -> String {
         let replacement = if has_value { inner.to_string() } else { String::new() };
         result.replace_range(if_start..end, &replacement);
     }
+    result
+}
 
-    // Replace $key$ with values
+fn substitute_vars(template: &str, vars: &HashMap<&str, &str>) -> String {
+    let mut result = template.to_string();
     for (key, value) in vars {
-        let placeholder = format!("${}$", key);
-        result = result.replace(&placeholder, value);
+        result = result.replace(&format!("${key}$"), value);
     }
-
     result
 }
 
