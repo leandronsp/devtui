@@ -28,10 +28,10 @@ Multi-site static blog generator. See [docs/BLOG_ENGINE.md](docs/BLOG_ENGINE.md)
 ## Development
 
 ```bash
-make test                     # all tests (147 tests, ~1s)
+make test                     # all tests (149 tests, ~1s) + lint
 make editor.test              # editor tests only
 make blog.test                # engine tests only
-cargo clippy -- -D warnings   # lint
+make lint                     # clippy
 ```
 
 ## Dependencies

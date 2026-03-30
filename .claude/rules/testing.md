@@ -16,7 +16,7 @@ make test
 make editor.test                        # all editor tests
 cargo test editor::tests                # single module
 cargo test editor::tests::inserts_char  # single test
-make editor.lint                        # clippy
+make lint                               # clippy
 
 # engine
 make blog.test                          # all engine tests

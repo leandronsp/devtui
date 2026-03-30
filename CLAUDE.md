@@ -91,7 +91,6 @@ Makefile is split into `mk/editor.mk` and `mk/blog.mk`, included from the root M
 make editor.run FILE=file.md   # run editor
 make editor.build              # release build
 make editor.test               # editor tests
-make editor.lint               # clippy
 
 # Blog (mk/blog.mk)
 make blog.list                 # list blogs
@@ -104,6 +103,7 @@ make deploy.cp.<name>         # build, copy to repo
 # All
 make help                      # all targets
 make test                      # all tests + lint
+make lint                      # clippy
 ```
 
 ## How the Editor Works
