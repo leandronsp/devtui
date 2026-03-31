@@ -139,15 +139,14 @@ impl KittyImage {
 
             let mut symbol = String::with_capacity(256);
 
-            write!(
+            let _ = write!(
                 symbol,
                 "\x1b[s{}\u{10EEEE}{}{}{}",
                 self.id_color,
                 diacritic(img_row),
                 diacritic(0),
                 diacritic(self.id_extra),
-            )
-            .unwrap();
+            );
 
             symbol.push_str(&row_placeholders);
             symbol.push_str(&restore_cursor);
@@ -190,14 +189,13 @@ impl KittyImage {
             let mut symbol = String::with_capacity(512);
 
             // DCS passthrough: cursor move + fg color + placeholders with diacritics
-            write!(
+            let _ = write!(
                 symbol,
                 "\x1bPtmux;\x1b\x1b[{term_row};{term_col}H{tmux_id_color}\u{10EEEE}{}{}{}",
                 diacritic(img_row),
                 diacritic(0),
                 diacritic(self.id_extra),
-            )
-            .unwrap();
+            );
 
             // Rest of row: plain U+10EEEE (inherit diacritics from first char)
             symbol.push_str(&row_placeholders);
@@ -217,9 +215,6 @@ impl KittyImage {
         }
     }
 
-    /// Place image directly via Kitty APC escape, bypassing ratatui buffer.
-    /// Used in tmux where Unicode placeholders don't survive.
-    /// Must be called AFTER `terminal.draw()` so it overlays the rendered frame.
     /// Place image directly via Kitty APC escape, bypassing ratatui buffer.
     /// Used in tmux where Unicode placeholders don't survive.
     /// Must be called AFTER `terminal.draw()` so it overlays the rendered frame.

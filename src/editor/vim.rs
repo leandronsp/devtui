@@ -276,7 +276,7 @@ fn run_loop(
     let mut preview_stale = false;
 
     // Flash message (e.g. "saved") with auto-dismiss
-    let mut flash: Option<(String, std::time::Instant)> = None;
+    let mut flash: Option<(&'static str, std::time::Instant)> = None;
     let mut was_modified = false; // track modified state transitions
 
 
@@ -375,7 +375,7 @@ fn run_loop(
 
         // Detect :w (modified transitions from true to false)
         if was_modified && !vim_state.modified {
-            flash = Some(("saved".to_string(), std::time::Instant::now()));
+            flash = Some(("saved", std::time::Instant::now()));
 
             // Open preview if hidden
             if split_layout == SplitLayout::EditorOnly {
@@ -420,11 +420,11 @@ fn run_loop(
 
         // Build title message from flash or modified state
         let title_message = if let Some((msg, _)) = &flash {
-            msg.clone()
+            *msg
         } else if vim_state.modified {
-            "[+]".to_string()
+            "[+]"
         } else {
-            String::new()
+            ""
         };
 
 
@@ -478,7 +478,7 @@ fn run_loop(
                         Constraint::Percentage(50),
                     ])
                     .split(main_area);
-                    render_editor(frame, parser, mode_label, mode_st, &title_message, panes[0]);
+                    render_editor(frame, parser, mode_label, mode_st, title_message, panes[0]);
                     render_preview(
                         frame, &cached_lines, clamped_scroll, preview_mode,
                         preview_mode_label, &kitty_image,
@@ -487,7 +487,7 @@ fn run_loop(
                     preview_area = panes[1];
                 }
                 SplitLayout::EditorOnly => {
-                    render_editor(frame, parser, mode_label, mode_st, &title_message, main_area);
+                    render_editor(frame, parser, mode_label, mode_st, title_message, main_area);
                 }
             }
 

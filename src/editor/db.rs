@@ -108,6 +108,7 @@ pub fn init_db(path: &Path) -> Result<Connection, CmsError> {
     Ok(conn)
 }
 
+#[cfg(test)]
 pub fn init_db_memory() -> Result<Connection, CmsError> {
     let conn = Connection::open_in_memory()?;
     conn.execute_batch(

@@ -5,7 +5,7 @@ use super::config::{self, BlogConfig, Post};
 use super::markdown;
 use super::seo::xml_escape;
 
-pub fn rss_header(title: &str, url: &str, description: &str) -> String {
+fn rss_header(title: &str, url: &str, description: &str) -> String {
     format!(
         r#"<?xml version="1.0" encoding="UTF-8"?>
 <rss version="2.0" xmlns:atom="http://www.w3.org/2005/Atom">
@@ -18,7 +18,7 @@ pub fn rss_header(title: &str, url: &str, description: &str) -> String {
     )
 }
 
-pub fn rss_item(title: &str, link: &str, description: &str, date: &str) -> String {
+fn rss_item(title: &str, link: &str, description: &str, date: &str) -> String {
     let escaped_title = xml_escape(title);
     format!(
         "<item>\n<title>{escaped_title}</title>\n<link>{link}</link>\n<guid>{link}</guid>\n<description><![CDATA[{description}]]></description>\n<pubDate>{date}</pubDate>\n</item>\n"

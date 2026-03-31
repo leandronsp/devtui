@@ -17,7 +17,7 @@ pub fn sitemap_entry(url: &str, lastmod: &str) -> String {
     format!("<url><loc>{url}</loc><lastmod>{lastmod}</lastmod></url>")
 }
 
-pub fn robots_txt(base_url: &str) -> String {
+fn robots_txt(base_url: &str) -> String {
     format!("User-agent: *\nAllow: /\nSitemap: {base_url}/sitemap.xml\n")
 }
 

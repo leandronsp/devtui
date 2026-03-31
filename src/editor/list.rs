@@ -25,7 +25,7 @@ pub struct ListView {
     table_state: TableState,
     search_query: String,
     search_active: bool,
-    flash: Option<(String, Instant)>,
+    flash: Option<(&'static str, Instant)>,
     show_help: bool,
     confirm_delete: Option<i64>,
 }
@@ -112,7 +112,7 @@ impl ListView {
         if let Some((msg, _)) = &self.flash {
             spans.push(Span::raw("  "));
             spans.push(Span::styled(
-                msg.clone(),
+                *msg,
                 Style::default().fg(Color::Green).add_modifier(Modifier::BOLD),
             ));
         }
@@ -289,19 +289,11 @@ impl ListView {
             match code {
                 KeyCode::Char('y') => {
                     self.confirm_delete = None;
-                    if let Some(article) = self.selected_article() {
-                        let was_published = article.status == Status::Published;
-                        let slug = article.slug.clone();
-                        if db::delete_article(conn, id).is_ok() {
-                            // If published, the .md file removal is handled by the caller
-                            // For now we just track it
-                            self.flash = Some(("Deleted".to_string(), Instant::now()));
-                            self.refresh(conn);
-                            // Store info for filesystem cleanup
-                            if was_published {
-                                let _ = (slug, was_published); // caller handles fs
-                            }
-                        }
+                    if self.selected_article().is_some()
+                        && db::delete_article(conn, id).is_ok()
+                    {
+                        self.flash = Some(("Deleted", Instant::now()));
+                        self.refresh(conn);
                     }
                 }
                 _ => {
@@ -409,7 +401,7 @@ impl ListView {
                 }
             };
             if let Ok(msg) = result {
-                self.flash = Some((msg.to_string(), Instant::now()));
+                self.flash = Some((msg, Instant::now()));
                 self.refresh(conn);
             }
         }
@@ -425,7 +417,7 @@ impl ListView {
                 db::pin(conn, id).map(|_| "Pinned")
             };
             if let Ok(msg) = result {
-                self.flash = Some((msg.to_string(), Instant::now()));
+                self.flash = Some((msg, Instant::now()));
                 self.refresh(conn);
             }
         }

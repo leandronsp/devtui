@@ -91,11 +91,10 @@ fn load_html_preview_config(cfg: &BlogConfig, blog_dir: &Path) -> Option<HtmlPre
         &theme_dir.join("templates"),
         &engine_dir.join("templates"),
     );
-    if article_tpl_path.is_none() {
+    let Some(article_tpl_path) = article_tpl_path else {
         log::warn!("Article template not found in blog, theme, or engine dirs");
         return None;
-    }
-    let article_tpl_path = article_tpl_path.unwrap();
+    };
 
     let article_tpl = match std::fs::read_to_string(&article_tpl_path) {
         Ok(tpl) => tpl,
