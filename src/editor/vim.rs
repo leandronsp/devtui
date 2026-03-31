@@ -31,7 +31,6 @@ enum PreviewMode {
 #[derive(Clone, Copy, PartialEq)]
 enum SplitLayout {
     Vertical,   // editor left, preview right (50/50)
-    Horizontal, // editor top, preview bottom (2/3 + 1/3)
     EditorOnly, // no preview
 }
 
@@ -241,7 +240,6 @@ fn vim_size(layout: SplitLayout, width: u16, height: u16) -> (u16, u16) {
     let rows = height.saturating_sub(3); // status bar + borders
     match layout {
         SplitLayout::Vertical => ((width / 2).saturating_sub(2), rows),
-        SplitLayout::Horizontal => (width.saturating_sub(2), rows / 2),
         SplitLayout::EditorOnly => (width.saturating_sub(2), rows),
     }
 }
@@ -387,7 +385,6 @@ fn run_loop(
         // Calculate actual visual lines after word-wrap based on pane width.
         let pane_width = match split_layout {
             SplitLayout::Vertical => (terminal.size()?.width / 2).saturating_sub(2),
-            SplitLayout::Horizontal => terminal.size()?.width.saturating_sub(2),
             SplitLayout::EditorOnly => 1,
         } as usize;
         let visual_lines: usize = cached_lines.iter().map(|line| {
@@ -400,7 +397,6 @@ fn run_loop(
 
         let layout_label = match split_layout {
             SplitLayout::Vertical => "|",
-            SplitLayout::Horizontal => "-",
             SplitLayout::EditorOnly => "[]",
         };
 
@@ -423,19 +419,6 @@ fn run_loop(
             match split_layout {
                 SplitLayout::Vertical => {
                     let panes = Layout::horizontal([
-                        Constraint::Percentage(50),
-                        Constraint::Percentage(50),
-                    ])
-                    .split(main_area);
-                    render_editor(frame, parser, mode_label, mode_st, &title_message, panes[0]);
-                    render_preview(
-                        frame, &cached_lines, clamped_scroll, preview_mode,
-                        preview_mode_label, &kitty_image,
-                        html_rendering, &chrome_error, panes[1],
-                    );
-                }
-                SplitLayout::Horizontal => {
-                    let panes = Layout::vertical([
                         Constraint::Percentage(50),
                         Constraint::Percentage(50),
                     ])
@@ -479,8 +462,7 @@ fn run_loop(
                     // Ctrl+G: cycle layout
                     if key.code == KeyCode::Char('g') && ctrl {
                         split_layout = match split_layout {
-                            SplitLayout::Vertical => SplitLayout::Horizontal,
-                            SplitLayout::Horizontal => SplitLayout::EditorOnly,
+                            SplitLayout::Vertical => SplitLayout::EditorOnly,
                             SplitLayout::EditorOnly => SplitLayout::Vertical,
                         };
                         resize_pty(split_layout, terminal, pty_master, parser)?;
