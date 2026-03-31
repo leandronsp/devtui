@@ -708,6 +708,70 @@ mod tests {
         assert_eq!(articles.len(), 1);
     }
 
+    // --- content preservation ---
+
+    #[test]
+    fn update_content_with_empty_string_clears_content() {
+        let conn = test_db();
+        let article = create_article(&conn, "Will Be Cleared").unwrap();
+        update_content(&conn, article.id, "Original content here").unwrap();
+        update_content(&conn, article.id, "").unwrap();
+        let fetched = get_article(&conn, article.id).unwrap();
+        assert_eq!(fetched.content, "");
+    }
+
+    #[test]
+    fn content_survives_when_caller_guards_empty() {
+        // Simulates the fix in mod.rs: caller checks !final_content.is_empty()
+        // before calling update_content. This test verifies the DB behavior.
+        let conn = test_db();
+        let article = create_article(&conn, "Precious Content").unwrap();
+        update_content(&conn, article.id, "Do not lose this").unwrap();
+
+        // Simulate editor returning empty (user did :q! without saving)
+        let final_content = "";
+        if !final_content.is_empty() {
+            update_content(&conn, article.id, final_content).unwrap();
+        }
+
+        let fetched = get_article(&conn, article.id).unwrap();
+        assert_eq!(fetched.content, "Do not lose this");
+    }
+
+    #[test]
+    fn content_updates_when_changed() {
+        let conn = test_db();
+        let article = create_article(&conn, "Will Update").unwrap();
+        update_content(&conn, article.id, "Version 1").unwrap();
+
+        let final_content = "Version 2";
+        if !final_content.is_empty() && final_content != "Version 1" {
+            update_content(&conn, article.id, final_content).unwrap();
+        }
+
+        let fetched = get_article(&conn, article.id).unwrap();
+        assert_eq!(fetched.content, "Version 2");
+    }
+
+    #[test]
+    fn content_not_updated_when_unchanged() {
+        let conn = test_db();
+        let article = create_article(&conn, "Same Content").unwrap();
+        update_content(&conn, article.id, "Original").unwrap();
+        let before = get_article(&conn, article.id).unwrap().updated_at;
+
+        // Small delay to ensure different timestamp if updated
+        std::thread::sleep(std::time::Duration::from_millis(1100));
+
+        let final_content = "Original";
+        if !final_content.is_empty() && final_content != "Original" {
+            update_content(&conn, article.id, final_content).unwrap();
+        }
+
+        let after = get_article(&conn, article.id).unwrap().updated_at;
+        assert_eq!(before, after);
+    }
+
     // --- slugify ---
 
     #[test]

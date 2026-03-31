@@ -31,8 +31,9 @@ enum PreviewMode {
 
 #[derive(Clone, Copy, PartialEq)]
 enum SplitLayout {
-    Vertical,   // editor left, preview right (50/50)
-    EditorOnly, // no preview
+    Vertical,    // editor left, preview right (50/50)
+    EditorOnly,  // full editor, no preview
+    PreviewOnly, // full preview, no editor
 }
 
 pub enum EditorResult {
@@ -242,6 +243,7 @@ fn vim_size(layout: SplitLayout, width: u16, height: u16) -> (u16, u16) {
     match layout {
         SplitLayout::Vertical => ((width / 2).saturating_sub(2), rows),
         SplitLayout::EditorOnly => (width.saturating_sub(2), rows),
+        SplitLayout::PreviewOnly => (1, 1), // vim hidden, minimal PTY
     }
 }
 
@@ -362,6 +364,61 @@ fn run_loop(
         // Detect :w (modified transitions from true to false)
         if was_modified && !vim_state.modified {
             flash = Some(("saved".to_string(), std::time::Instant::now()));
+
+            // Open preview if hidden
+            if split_layout == SplitLayout::EditorOnly {
+                split_layout = SplitLayout::Vertical;
+                resize_pty(split_layout, terminal, pty_master, parser)?;
+            }
+
+            // Refresh text preview
+            let (lines, offsets) = preview::render_with_offsets(&last_content);
+            cached_offsets = offsets;
+            cached_lines = lines;
+
+            // Refresh HTML preview
+            if preview_mode == PreviewMode::Html {
+                if let (Some(cfg), Some(ch)) = (html_config, chrome) {
+                    let html = render_html_preview(&last_content, cfg);
+                    ch.send_html(html);
+                    html_rendering = true;
+                }
+            }
+
+            // Sync preview to cursor position (same as Ctrl+T)
+            let total_source = vim_state.total_lines.max(1);
+            let ratio = vim_state.cursor_line as f64 / total_source as f64;
+            if preview_mode == PreviewMode::Html {
+                if let Some(ref mut ki) = kitty_image {
+                    let visible = terminal.size()?.height.saturating_sub(4);
+                    let target_row = (ratio * ki.max_rows() as f64) as u16;
+                    ki.scroll_row = target_row.saturating_sub(visible / 2);
+                    let scroll_max = ki.max_rows().saturating_sub(visible);
+                    ki.scroll_row = ki.scroll_row.min(scroll_max);
+                }
+            } else {
+                let pane_w = (terminal.size()?.width / 2).saturating_sub(2) as usize;
+                let vis: usize = cached_lines.iter().map(|l| {
+                    let w = l.width();
+                    if w == 0 { 1 } else { w.div_ceil(pane_w) }
+                }).sum();
+                let vis_rows = terminal.size()?.height.saturating_sub(4) as usize;
+                let target = if !cached_offsets.is_empty() {
+                    let idx = vim_state.cursor_line.min(cached_offsets.len().saturating_sub(1));
+                    let rendered = cached_offsets[idx] as usize;
+                    cached_lines[..rendered.min(cached_lines.len())]
+                        .iter()
+                        .map(|l| {
+                            let w = l.width();
+                            if w == 0 { 1u16 } else { w.div_ceil(pane_w) as u16 }
+                        })
+                        .sum::<u16>()
+                } else {
+                    (ratio * vis as f64) as u16
+                };
+                let max_s = vis.saturating_sub(vis_rows) as u16;
+                preview_scroll = target.saturating_sub(vis_rows as u16 / 2).min(max_s);
+            }
         }
         was_modified = vim_state.modified;
 
@@ -385,6 +442,7 @@ fn run_loop(
         let pane_width = match split_layout {
             SplitLayout::Vertical => (terminal.size()?.width / 2).saturating_sub(2),
             SplitLayout::EditorOnly => 1,
+            SplitLayout::PreviewOnly => terminal.size()?.width.saturating_sub(2),
         } as usize;
         let visual_lines: usize = cached_lines.iter().map(|line| {
             let w = line.width();
@@ -397,6 +455,7 @@ fn run_loop(
         let layout_label = match split_layout {
             SplitLayout::Vertical => "|",
             SplitLayout::EditorOnly => "[]",
+            SplitLayout::PreviewOnly => "{}",
         };
 
         let preview_mode_label = match preview_mode {
@@ -435,6 +494,14 @@ fn run_loop(
                 SplitLayout::EditorOnly => {
                     render_editor(frame, parser, mode_label, mode_st, &title_message, main_area);
                 }
+                SplitLayout::PreviewOnly => {
+                    render_preview(
+                        frame, &cached_lines, clamped_scroll, preview_mode,
+                        preview_mode_label, &kitty_image,
+                        html_rendering, &chrome_error, main_area,
+                    );
+                    preview_area = main_area;
+                }
             }
 
             // Status bar
@@ -470,7 +537,8 @@ fn run_loop(
                     if key.code == KeyCode::Char('g') && ctrl {
                         split_layout = match split_layout {
                             SplitLayout::Vertical => SplitLayout::EditorOnly,
-                            SplitLayout::EditorOnly => SplitLayout::Vertical,
+                            SplitLayout::EditorOnly => SplitLayout::PreviewOnly,
+                            SplitLayout::PreviewOnly => SplitLayout::Vertical,
                         };
                         resize_pty(split_layout, terminal, pty_master, parser)?;
                         // Re-render preview content when coming back from EditorOnly
@@ -524,19 +592,18 @@ fn run_loop(
                         log::info!("Ctrl+P: toggling preview mode (current={:?})", preview_mode);
                         preview_mode = match preview_mode {
                             PreviewMode::Text => {
-                                if let (Some(cfg), Some(ch)) = (html_config, chrome) {
-                                    let html = render_html_preview(&last_content, cfg);
-                                    log::info!("Sending HTML to Chrome ({}B)", html.len());
-                                    ch.send_html(html);
-                                    html_rendering = true;
+                                // Only render if no image exists yet
+                                if kitty_image.is_none() {
+                                    if let (Some(cfg), Some(ch)) = (html_config, chrome) {
+                                        let html = render_html_preview(&last_content, cfg);
+                                        log::info!("Sending HTML to Chrome ({}B)", html.len());
+                                        ch.send_html(html);
+                                        html_rendering = true;
+                                    }
                                 }
                                 PreviewMode::Html
                             }
                             PreviewMode::Html => {
-                                if let Some(ki) = kitty_image.take() {
-                                    ki.delete();
-                                }
-                                html_rendering = false;
                                 PreviewMode::Text
                             }
                         };

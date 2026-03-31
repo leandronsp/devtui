@@ -190,18 +190,21 @@ fn edit_article(
 
     let (_result, final_content) = vim::run(terminal, tmp_file.clone(), html_config, chrome, picker)?;
 
-    let _ = db::update_content(conn, id, &final_content);
+    // Only update DB if content actually changed (protects against :q! or crash)
+    if !final_content.is_empty() && final_content != article.content {
+        let _ = db::update_content(conn, id, &final_content);
 
-    if let Some(title) = crate::engine::config::frontmatter("title", &final_content) {
-        if title != article.title {
-            let _ = db::update_title(conn, id, &title);
+        if let Some(title) = crate::engine::config::frontmatter("title", &final_content) {
+            if title != article.title {
+                let _ = db::update_title(conn, id, &title);
+            }
         }
-    }
 
-    let updated = db::get_article(conn, id)
-        .map_err(|e| io::Error::other(e.to_string()))?;
-    if updated.status == Status::Published {
-        write_published_md(&updated, cfg, blog_dir)?;
+        let updated = db::get_article(conn, id)
+            .map_err(|e| io::Error::other(e.to_string()))?;
+        if updated.status == Status::Published {
+            write_published_md(&updated, cfg, blog_dir)?;
+        }
     }
 
     let _ = std::fs::remove_file(&tmp_file);
@@ -226,10 +229,12 @@ fn new_article(
 
     let (_result, final_content) = vim::run(terminal, tmp_file.clone(), html_config, chrome, picker)?;
 
-    let _ = db::update_content(conn, article.id, &final_content);
+    if !final_content.is_empty() {
+        let _ = db::update_content(conn, article.id, &final_content);
 
-    if let Some(title) = crate::engine::config::frontmatter("title", &final_content) {
-        let _ = db::update_title(conn, article.id, &title);
+        if let Some(title) = crate::engine::config::frontmatter("title", &final_content) {
+            let _ = db::update_title(conn, article.id, &title);
+        }
     }
 
     let _ = std::fs::remove_file(&tmp_file);
