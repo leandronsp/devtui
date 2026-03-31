@@ -88,12 +88,9 @@ impl KittyImage {
         for (idx, chunk) in chunks.iter().enumerate() {
             let more = if idx == chunks.len() - 1 { 0 } else { 1 };
             let params = if idx == 0 {
-                // U=1 enables virtual placement (Unicode placeholders). Skip in tmux.
-                if is_tmux {
-                    format!("i={IMAGE_ID},a=T,f=100,t=d,m={more},q=2")
-                } else {
-                    format!("i={IMAGE_ID},a=T,U=1,f=100,t=d,m={more},q=2")
-                }
+                // U=1 enables virtual placement (Unicode placeholders).
+                // Works in both tmux (via DCS passthrough) and direct.
+                format!("i={IMAGE_ID},a=T,U=1,f=100,t=d,m={more},q=2")
             } else {
                 format!("m={more}")
             };
@@ -117,16 +114,17 @@ impl KittyImage {
     }
 
     /// Render unicode placeholders into the ratatui buffer.
-    /// Only used outside tmux. Inside tmux, use `place_direct()` after `terminal.draw()`.
+    /// Outside tmux: write U+10EEEE directly into cells.
+    /// Inside tmux: wrap U+10EEEE in DCS passthrough to bypass tmux's utf8 validation.
     pub fn render_placeholders(&self, area: Rect, buf: &mut Buffer) {
         if tmux::in_tmux() {
+            self.render_placeholders_tmux(area, buf);
             return;
         }
 
         let width = area.width;
         let row_placeholders: String = std::iter::repeat_n('\u{10EEEE}', (width as usize).saturating_sub(1)).collect();
 
-        // Restore cursor to end of area after each row
         let right = area.width - 1;
         let down = area.height - 1;
         let restore_cursor = format!("\x1b[u\x1b[{right}C\x1b[{down}B");
@@ -141,7 +139,6 @@ impl KittyImage {
 
             let mut symbol = String::with_capacity(256);
 
-            // Save cursor, set fg color to image ID, write placeholder + diacritics
             write!(
                 symbol,
                 "\x1b[s{}\u{10EEEE}{}{}{}",
@@ -152,18 +149,66 @@ impl KittyImage {
             )
             .unwrap();
 
-            // Rest of row: just placeholder chars (inherit diacritics)
             symbol.push_str(&row_placeholders);
-
-            // Restore cursor to bottom-right
             symbol.push_str(&restore_cursor);
 
-            // Write into first cell of this row
             if let Some(cell) = buf.cell_mut((area.left(), area.top() + y)) {
                 cell.set_symbol(&symbol);
             }
 
-            // Mark remaining cells as skip (placeholder spans them)
+            for x in 1..width {
+                if let Some(cell) = buf.cell_mut((area.left() + x, area.top() + y)) {
+                    cell.set_skip(true);
+                }
+            }
+        }
+    }
+
+    /// tmux: send U+10EEEE placeholders via DCS passthrough to bypass utf8 validation.
+    /// All cursor moves + placeholders for every row packed into one DCS per row,
+    /// written as cell symbols so they flow through ratatui's normal draw pipeline.
+    fn render_placeholders_tmux(&self, area: Rect, buf: &mut Buffer) {
+        let width = area.width;
+        let max_rows = area.height.min(DIACRITICS.len() as u16);
+
+        // Inside DCS passthrough, ESC must be doubled: \x1b -> \x1b\x1b
+        // U+10EEEE in UTF-8 is F4 8E BB AE (no 0x1B bytes, passes through unchanged)
+        let row_placeholders: String = std::iter::repeat_n('\u{10EEEE}', (width as usize).saturating_sub(1)).collect();
+        // id_color with doubled ESC for DCS passthrough
+        let tmux_id_color = self.id_color.replace('\x1b', "\x1b\x1b");
+
+        for y in 0..max_rows {
+            let img_row = y + self.scroll_row;
+            if img_row >= DIACRITICS.len() as u16 {
+                break;
+            }
+
+            // Terminal row/col (1-indexed) for cursor positioning inside DCS
+            let term_row = area.top() + y + 1;
+            let term_col = area.left() + 1;
+
+            let mut symbol = String::with_capacity(512);
+
+            // DCS passthrough: cursor move + fg color + placeholders with diacritics
+            write!(
+                symbol,
+                "\x1bPtmux;\x1b\x1b[{term_row};{term_col}H{tmux_id_color}\u{10EEEE}{}{}{}",
+                diacritic(img_row),
+                diacritic(0),
+                diacritic(self.id_extra),
+            )
+            .unwrap();
+
+            // Rest of row: plain U+10EEEE (inherit diacritics from first char)
+            symbol.push_str(&row_placeholders);
+
+            // End DCS passthrough
+            symbol.push_str("\x1b\\");
+
+            if let Some(cell) = buf.cell_mut((area.left(), area.top() + y)) {
+                cell.set_symbol(&symbol);
+            }
+
             for x in 1..width {
                 if let Some(cell) = buf.cell_mut((area.left() + x, area.top() + y)) {
                     cell.set_skip(true);

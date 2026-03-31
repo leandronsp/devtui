@@ -464,23 +464,6 @@ fn run_loop(
             frame.render_widget(Paragraph::new(status), status_area);
         })?;
 
-        // Direct placement for tmux (after frame is drawn, so it overlays)
-        if preview_mode == PreviewMode::Html && split_layout != SplitLayout::EditorOnly {
-            if let Some(ref ki) = kitty_image {
-                if tmux::in_tmux() {
-                    let inner = Rect {
-                        x: preview_area.x + 1,
-                        y: preview_area.y + 1,
-                        width: preview_area.width.saturating_sub(2),
-                        height: preview_area.height.saturating_sub(2),
-                    };
-                    let (font_w, font_h) = picker.font_size();
-                    ki.place_direct(inner, font_w as u32, font_h as u32);
-                }
-            }
-        }
-
-
         if event::poll(Duration::from_millis(30))? {
             match event::read()? {
                 Event::Key(key) => {
