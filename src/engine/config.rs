@@ -41,6 +41,15 @@ impl BlogConfig {
     }
 }
 
+/// Build a relative href like `slug.html` or `prefix/slug.html`.
+pub fn article_href(articles_prefix: &str, slug: &str) -> String {
+    if articles_prefix.is_empty() {
+        format!("{slug}.html")
+    } else {
+        format!("{articles_prefix}/{slug}.html")
+    }
+}
+
 /// Extract a frontmatter field value from markdown content.
 /// Handles both quoted and unquoted values.
 pub fn frontmatter(field: &str, content: &str) -> Option<String> {

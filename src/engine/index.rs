@@ -107,11 +107,7 @@ fn post_list_item(post: &Post, articles_prefix: &str) -> String {
     );
     let lang = normalize_lang(&post.content);
     let tags = config::extract_tags(&post.content);
-    let slug_href = if articles_prefix.is_empty() {
-        format!("{}.html", post.slug)
-    } else {
-        format!("{}/{}.html", articles_prefix, post.slug)
-    };
+    let slug_href = config::article_href(articles_prefix, &post.slug);
     format!(
         r#"<li data-lang="{lang}" data-tags="{tags}"><time datetime="{date}">{date}</time><a href="{slug_href}">{title}</a><p class="post-desc">{snippet}</p></li>"#,
         date = post.date,

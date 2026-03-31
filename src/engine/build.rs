@@ -199,11 +199,7 @@ pub fn render_preview_html(
 }
 
 fn article_url(base_url: &str, articles_prefix: &str, slug: &str) -> String {
-    if articles_prefix.is_empty() {
-        format!("{}/{}.html", base_url, slug)
-    } else {
-        format!("{}/{}/{}.html", base_url, articles_prefix, slug)
-    }
+    format!("{}/{}", base_url, config::article_href(articles_prefix, slug))
 }
 
 // --- Static assets ---

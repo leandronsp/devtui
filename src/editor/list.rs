@@ -424,30 +424,26 @@ impl ListView {
     }
 
     fn refresh(&mut self, conn: &Connection) {
-        let search = if self.search_query.is_empty() {
-            None
-        } else {
-            Some(self.search_query.as_str())
-        };
-        let selected_idx = self.table_state.selected().unwrap_or(0);
-        self.articles = db::list_articles(conn, search).unwrap_or_default();
-        if self.articles.is_empty() {
-            self.table_state.select(None);
-        } else {
-            let idx = selected_idx.min(self.articles.len().saturating_sub(1));
-            self.table_state.select(Some(idx));
-        }
+        self.refresh_with_selection(conn, true);
     }
 
     fn refresh_search(&mut self, conn: &Connection) {
+        self.refresh_with_selection(conn, false);
+    }
+
+    fn refresh_with_selection(&mut self, conn: &Connection, keep_selection: bool) {
         let search = if self.search_query.is_empty() {
             None
         } else {
             Some(self.search_query.as_str())
         };
+        let prev_idx = self.table_state.selected().unwrap_or(0);
         self.articles = db::list_articles(conn, search).unwrap_or_default();
         if self.articles.is_empty() {
             self.table_state.select(None);
+        } else if keep_selection {
+            let idx = prev_idx.min(self.articles.len().saturating_sub(1));
+            self.table_state.select(Some(idx));
         } else {
             self.table_state.select(Some(0));
         }

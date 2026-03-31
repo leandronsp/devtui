@@ -124,19 +124,11 @@ fn load_html_preview_config(cfg: &BlogConfig, blog_dir: &Path) -> Option<HtmlPre
         }
     }
 
-    let blog_config = match BlogConfig::from_file(&blog_dir.join("blog.toml")) {
-        Ok(c) => c,
-        Err(e) => {
-            log::warn!("Failed to load blog.toml for preview: {}", e);
-            return None;
-        }
-    };
-
     log::info!("HTML preview config loaded (theme={}, css={}B, template={}B)", theme, css.len(), article_tpl.len());
     Some(HtmlPreviewConfig {
         css,
         article_tpl,
-        blog_config,
+        blog_config: cfg.clone(),
     })
 }
 

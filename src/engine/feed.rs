@@ -32,12 +32,7 @@ pub fn generate(cfg: &BlogConfig, dist_dir: &Path, posts: &[Post], articles_pref
     for post in posts.iter().take(20) {
         let body = config::post_body(&post.content);
         let html_body = markdown::markdown_to_html(&body);
-        let prefix_segment = if articles_prefix.is_empty() {
-            String::new()
-        } else {
-            format!("{}/", articles_prefix)
-        };
-        let article_url = format!("{}/{}{}.html", cfg.url, prefix_segment, post.slug);
+        let article_url = format!("{}/{}", cfg.url, config::article_href(articles_prefix, &post.slug));
         feed.push_str(&rss_item(&post.title, &article_url, &html_body, &post.date));
     }
     feed.push_str("</channel></rss>\n");

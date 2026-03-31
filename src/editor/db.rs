@@ -88,8 +88,7 @@ impl From<std::io::Error> for CmsError {
 
 // --- Database operations ---
 
-pub fn init_db(path: &Path) -> Result<Connection, CmsError> {
-    let conn = Connection::open(path)?;
+fn create_schema(conn: &Connection) -> Result<(), CmsError> {
     conn.execute_batch(
         "CREATE TABLE IF NOT EXISTS articles (
             id INTEGER PRIMARY KEY AUTOINCREMENT,
@@ -105,27 +104,19 @@ pub fn init_db(path: &Path) -> Result<Connection, CmsError> {
             updated_at TEXT NOT NULL DEFAULT (datetime('now'))
         );",
     )?;
+    Ok(())
+}
+
+pub fn init_db(path: &Path) -> Result<Connection, CmsError> {
+    let conn = Connection::open(path)?;
+    create_schema(&conn)?;
     Ok(conn)
 }
 
 #[cfg(test)]
 pub fn init_db_memory() -> Result<Connection, CmsError> {
     let conn = Connection::open_in_memory()?;
-    conn.execute_batch(
-        "CREATE TABLE IF NOT EXISTS articles (
-            id INTEGER PRIMARY KEY AUTOINCREMENT,
-            title TEXT NOT NULL,
-            slug TEXT NOT NULL UNIQUE,
-            content TEXT NOT NULL DEFAULT '',
-            status TEXT NOT NULL DEFAULT 'draft',
-            language TEXT NOT NULL DEFAULT 'en',
-            pinned INTEGER NOT NULL DEFAULT 0,
-            tags TEXT NOT NULL DEFAULT '',
-            published_at TEXT,
-            created_at TEXT NOT NULL DEFAULT (datetime('now')),
-            updated_at TEXT NOT NULL DEFAULT (datetime('now'))
-        );",
-    )?;
+    create_schema(&conn)?;
     Ok(conn)
 }
 
