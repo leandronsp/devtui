@@ -15,7 +15,7 @@ pub enum ChromeResult {
 }
 
 pub struct ChromeHandle {
-    cmd_tx: mpsc::Sender<String>,
+    cmd_tx: mpsc::Sender<(String, u32)>,
     result_rx: mpsc::Receiver<ChromeResult>,
     running: Arc<AtomicBool>,
 }
@@ -31,7 +31,7 @@ impl ChromeHandle {
         let running = Arc::new(AtomicBool::new(true));
         let running_thread = Arc::clone(&running);
 
-        let (cmd_tx, cmd_rx) = mpsc::channel::<String>();
+        let (cmd_tx, cmd_rx) = mpsc::channel::<(String, u32)>();
         let (result_tx, result_rx) = mpsc::channel::<ChromeResult>();
 
         thread::spawn(move || {
@@ -41,8 +41,8 @@ impl ChromeHandle {
         Some(Self { cmd_tx, result_rx, running })
     }
 
-    pub fn send_html(&self, html: String) {
-        let _ = self.cmd_tx.send(html);
+    pub fn send_html(&self, html: String, viewport_width: u32) {
+        let _ = self.cmd_tx.send((html, viewport_width));
     }
 
     pub fn try_recv(&self) -> Option<ChromeResult> {
@@ -87,7 +87,7 @@ fn launch_browser(viewport_width: u32) -> Option<(Browser, Arc<Tab>)> {
 }
 
 fn chrome_thread(
-    cmd_rx: mpsc::Receiver<String>,
+    cmd_rx: mpsc::Receiver<(String, u32)>,
     result_tx: mpsc::Sender<ChromeResult>,
     running: Arc<AtomicBool>,
     viewport_width: u32,
@@ -101,9 +101,10 @@ fn chrome_thread(
             return;
         }
     };
+    let mut current_viewport = viewport_width;
 
     while running.load(Ordering::Relaxed) {
-        let mut html = match cmd_rx.recv_timeout(std::time::Duration::from_millis(100)) {
+        let (mut html, mut vw) = match cmd_rx.recv_timeout(std::time::Duration::from_millis(100)) {
             Ok(h) => h,
             Err(mpsc::RecvTimeoutError::Timeout) => continue,
             Err(mpsc::RecvTimeoutError::Disconnected) => break,
@@ -111,7 +112,17 @@ fn chrome_thread(
 
         // Drain to latest
         while let Ok(newer) = cmd_rx.try_recv() {
-            html = newer;
+            (html, vw) = newer;
+        }
+
+        // Relaunch browser if viewport changed
+        if vw != current_viewport {
+            log::info!("Chrome: viewport changed {}→{}, relaunching", current_viewport, vw);
+            if let Some((new_browser, new_tab)) = launch_browser(vw) {
+                browser = new_browser;
+                tab = new_tab;
+                current_viewport = vw;
+            }
         }
 
         log::debug!("Chrome: taking screenshot (html={}B, scale={})", html.len(), screenshot_scale);
@@ -127,7 +138,7 @@ fn chrome_thread(
         for attempt in 1..=3 {
             let _ = result_tx.send(ChromeResult::Error(format!("Restarting Chrome... ({attempt}/3)")));
             thread::sleep(std::time::Duration::from_millis(500));
-            if let Some((new_browser, new_tab)) = launch_browser(viewport_width) {
+            if let Some((new_browser, new_tab)) = launch_browser(current_viewport) {
                 browser = new_browser;
                 tab = new_tab;
                 if let Some(bytes) = full_page_screenshot(&tab, &html, screenshot_scale) {

@@ -382,7 +382,8 @@ fn run_loop(
             if preview_mode == PreviewMode::Html {
                 if let (Some(cfg), Some(ch)) = (html_config, chrome) {
                     let html = render_html_preview(&last_content, cfg);
-                    ch.send_html(html);
+                    let vw = viewport_width(terminal, picker);
+                    ch.send_html(html, vw);
                     html_rendering = true;
                 }
             }
@@ -559,8 +560,9 @@ fn run_loop(
                                 if kitty_image.is_none() {
                                     if let (Some(cfg), Some(ch)) = (html_config, chrome) {
                                         let html = render_html_preview(&last_content, cfg);
-                                        log::info!("Sending HTML to Chrome ({}B)", html.len());
-                                        ch.send_html(html);
+                                        let vw = viewport_width(terminal, picker);
+                                        log::info!("Sending HTML to Chrome ({}B, vw={})", html.len(), vw);
+                                        ch.send_html(html, vw);
                                         html_rendering = true;
                                     }
                                 }
@@ -731,6 +733,16 @@ fn render_preview(
 
 
 #[allow(clippy::borrowed_box)]
+/// Calculate Chrome viewport width in CSS pixels based on current terminal size.
+fn viewport_width(terminal: &ratatui::DefaultTerminal, picker: &ratatui_image::picker::Picker) -> u32 {
+    let term_width = terminal.size().map(|s| s.width).unwrap_or(120);
+    let font_w = picker.font_size().0 as u32;
+    let pane_cols = term_width as u32 / 2;
+    let physical = pane_cols * font_w;
+    let scale: f64 = if font_w > 12 { 2.0 } else { 1.0 };
+    (physical as f64 / scale) as u32
+}
+
 /// Calculate text preview scroll position to follow the cursor line.
 fn follow_editor_cursor(
     cursor_line: usize,
