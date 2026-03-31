@@ -4,6 +4,8 @@ use ratatui::layout::Rect;
 use std::fmt::Write as FmtWrite;
 use std::io::Write;
 
+use super::tmux;
+
 const CHUNK_SIZE: usize = 4096;
 const IMAGE_ID: u32 = 31;
 
@@ -69,11 +71,15 @@ pub struct KittyImage {
 
 impl KittyImage {
     /// Transmit a PNG image to the terminal via Kitty graphics protocol.
+    /// In tmux: transmit without virtual placement (U=1), use direct placement later.
+    /// Outside tmux: transmit with virtual placement, use Unicode placeholders.
     pub fn transmit(png_bytes: &[u8], img_width: u32, img_height: u32) -> std::io::Result<Self> {
+        let is_tmux = tmux::in_tmux();
+        log::info!("KittyImage::transmit: {}x{} px, {} bytes, tmux={}", img_width, img_height, png_bytes.len(), is_tmux);
         let mut stdout = std::io::stdout().lock();
 
         // Delete any previous image with this ID
-        write!(stdout, "\x1b_Ga=d,d=I,i={IMAGE_ID},q=2\x1b\\")?;
+        tmux::write_kitty_cmd(&mut stdout, &format!("a=d,d=I,i={IMAGE_ID},q=2"))?;
 
         // Base64 encode the PNG data
         let b64 = base64::engine::general_purpose::STANDARD.encode(png_bytes);
@@ -81,14 +87,17 @@ impl KittyImage {
 
         for (idx, chunk) in chunks.iter().enumerate() {
             let more = if idx == chunks.len() - 1 { 0 } else { 1 };
-            if idx == 0 {
-                // a=T = transmit only, U=1 = virtual placement (rendered via unicode placeholders)
-                write!(stdout, "\x1b_Gi={IMAGE_ID},a=T,U=1,f=100,t=d,m={more},q=2;")?;
+            let params = if idx == 0 {
+                // U=1 enables virtual placement (Unicode placeholders). Skip in tmux.
+                if is_tmux {
+                    format!("i={IMAGE_ID},a=T,f=100,t=d,m={more},q=2")
+                } else {
+                    format!("i={IMAGE_ID},a=T,U=1,f=100,t=d,m={more},q=2")
+                }
             } else {
-                write!(stdout, "\x1b_Gm={more};")?;
-            }
-            stdout.write_all(chunk)?;
-            write!(stdout, "\x1b\\")?;
+                format!("m={more}")
+            };
+            tmux::write_kitty_cmd_with_data(&mut stdout, &params, chunk)?;
         }
 
         stdout.flush()?;
@@ -108,8 +117,12 @@ impl KittyImage {
     }
 
     /// Render unicode placeholders into the ratatui buffer.
-    /// The Kitty terminal will render the image where these placeholders appear.
+    /// Only used outside tmux. Inside tmux, use `place_direct()` after `terminal.draw()`.
     pub fn render_placeholders(&self, area: Rect, buf: &mut Buffer) {
+        if tmux::in_tmux() {
+            return;
+        }
+
         let width = area.width;
         let row_placeholders: String = std::iter::repeat_n('\u{10EEEE}', (width as usize).saturating_sub(1)).collect();
 
@@ -159,7 +172,57 @@ impl KittyImage {
         }
     }
 
+    /// Place image directly via Kitty APC escape, bypassing ratatui buffer.
+    /// Used in tmux where Unicode placeholders don't survive.
+    /// Must be called AFTER `terminal.draw()` so it overlays the rendered frame.
+    /// Place image directly via Kitty APC escape, bypassing ratatui buffer.
+    /// Used in tmux where Unicode placeholders don't survive.
+    /// Must be called AFTER `terminal.draw()` so it overlays the rendered frame.
+    pub fn place_direct(&self, area: Rect, font_width: u32, font_height: u32) {
+        let mut stdout = std::io::stdout().lock();
+
+        // Delete previous placement before placing again
+        let _ = tmux::write_kitty_cmd(&mut stdout, &format!("a=d,d=i,i={IMAGE_ID},q=2"));
+
+        // Crop source image to the visible portion
+        let src_y = self.scroll_row as u32 * font_height;
+        let src_w = (area.width as u32 * font_width).min(self.width);
+        let src_h = (area.height as u32 * font_height).min(self.height.saturating_sub(src_y));
+
+        log::debug!(
+            "place_direct: area={}x{}+{}+{}, src_crop={}x{}@y={}, font={}x{}",
+            area.width, area.height, area.x, area.y,
+            src_w, src_h, src_y, font_width, font_height
+        );
+
+        // Move cursor + place image inside the same DCS passthrough,
+        // so the outer terminal (Ghostty) sees both the cursor move and the placement.
+        let row = area.top() + 1;
+        let col = area.left() + 1;
+
+        let params = format!(
+            "a=p,i={IMAGE_ID},x=0,y={src_y},w={src_w},h={src_h},c={},r={},C=1,q=2",
+            area.width, area.height
+        );
+
+        if tmux::in_tmux() {
+            // Cursor move + Kitty APC in one DCS passthrough sequence.
+            // All ESC bytes inside DCS must be doubled.
+            let _ = write!(
+                stdout,
+                "\x1bPtmux;\x1b\x1b[{row};{col}H\x1b\x1b_G{params}\x1b\x1b\\\x1b\\"
+            );
+        } else {
+            let _ = write!(stdout, "\x1b[{row};{col}H");
+            let _ = write!(stdout, "\x1b_G{params}\x1b\\");
+        }
+        let _ = stdout.flush();
+    }
+
     pub fn set_max_rows(&mut self, max_rows: u16) {
+        if max_rows > DIACRITICS.len() as u16 {
+            log::warn!("Image rows ({}) exceed diacritic limit ({}), display will be clipped", max_rows, DIACRITICS.len());
+        }
         self.max_rows = max_rows;
     }
 
@@ -168,9 +231,7 @@ impl KittyImage {
     }
 
     pub fn scroll_down(&mut self, rows: u16, visible_rows: u16) {
-        // Clamp by both image rows and diacritic limit
-        let displayable = self.max_rows.min(DIACRITICS.len() as u16);
-        let max_scroll = displayable.saturating_sub(visible_rows);
+        let max_scroll = self.max_rows.saturating_sub(visible_rows);
         self.scroll_row = (self.scroll_row + rows).min(max_scroll);
     }
 
@@ -180,7 +241,7 @@ impl KittyImage {
 
     pub fn delete(&self) {
         let mut stdout = std::io::stdout().lock();
-        let _ = write!(stdout, "\x1b_Ga=d,d=I,i={IMAGE_ID},q=2\x1b\\");
+        let _ = tmux::write_kitty_cmd(&mut stdout, &format!("a=d,d=I,i={IMAGE_ID},q=2"));
         let _ = stdout.flush();
     }
 }

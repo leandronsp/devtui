@@ -2,6 +2,18 @@ use std::io;
 use std::path::PathBuf;
 
 fn main() -> io::Result<()> {
+    // File-based logging. TUI apps can't log to stdout.
+    if let Ok(file) = std::fs::File::create("/tmp/devtui.log") {
+        let config = simplelog::ConfigBuilder::new()
+            .set_time_format_rfc3339()
+            .build();
+        let _ = simplelog::WriteLogger::init(
+            simplelog::LevelFilter::Debug,
+            config,
+            file,
+        );
+    }
+
     let args: Vec<String> = std::env::args().collect();
 
     // CMS mode: devtui --cms <blog_dir>

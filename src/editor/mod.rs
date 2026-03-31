@@ -3,6 +3,7 @@ pub mod db;
 pub mod kitty;
 pub mod list;
 pub mod preview;
+pub mod tmux;
 pub mod vim;
 
 use std::io;
@@ -34,10 +35,16 @@ pub fn run_cms(blog_dir: PathBuf) -> io::Result<()> {
 
     // Prepare HTML preview config (template + CSS)
     let html_config = load_html_preview_config(&cfg, &blog_dir);
+    if html_config.is_none() {
+        log::warn!("HTML preview config failed to load — ^P will be disabled");
+    }
 
     // Query terminal for font size and graphics protocol BEFORE entering raw mode.
     let picker = ratatui_image::picker::Picker::from_query_stdio()
-        .unwrap_or_else(|_| ratatui_image::picker::Picker::halfblocks());
+        .unwrap_or_else(|e| {
+            log::warn!("Picker query failed ({e}), falling back to halfblocks");
+            ratatui_image::picker::Picker::halfblocks()
+        });
 
     // Chrome viewport in CSS pixels, screenshot at device scale for crisp Retina rendering.
     // Retina displays report ~16-20 physical px/cell; non-Retina ~7-10. Threshold at 12.
@@ -47,7 +54,15 @@ pub fn run_cms(blog_dir: PathBuf) -> io::Result<()> {
     let physical_width = pane_cols as u32 * font_size.0 as u32;
     let scale: f64 = if font_size.0 > 12 { 2.0 } else { 1.0 };
     let viewport_css = (physical_width as f64 / scale) as u32;
+    log::info!(
+        "Terminal: {:?}, font_size: {:?}, pane_cols: {}, physical_width: {}, scale: {}, viewport_css: {}",
+        term_size, font_size, pane_cols, physical_width, scale, viewport_css
+    );
     let chrome = ChromeHandle::try_spawn(viewport_css, scale);
+    match &chrome {
+        Some(_) => log::info!("Chrome spawned (viewport={}px, scale={})", viewport_css, scale),
+        None => log::warn!("Chrome not available — HTML preview disabled"),
+    }
 
     let mut terminal = ratatui::init();
     let result = cms_loop(&mut terminal, &conn, &cfg, &blog_dir, html_config.as_ref(), chrome.as_ref(), &picker);
@@ -75,20 +90,54 @@ fn load_html_preview_config(cfg: &BlogConfig, blog_dir: &Path) -> Option<HtmlPre
         &blog_dir.join("templates"),
         &theme_dir.join("templates"),
         &engine_dir.join("templates"),
-    )?;
-    let article_tpl = std::fs::read_to_string(&article_tpl_path).ok()?;
-    let mut css = minify::compile_css(blog_dir, &theme_dir).ok()?;
+    );
+    if article_tpl_path.is_none() {
+        log::warn!("Article template not found in blog, theme, or engine dirs");
+        return None;
+    }
+    let article_tpl_path = article_tpl_path.unwrap();
+
+    let article_tpl = match std::fs::read_to_string(&article_tpl_path) {
+        Ok(tpl) => tpl,
+        Err(e) => {
+            log::warn!("Failed to read article template {:?}: {}", article_tpl_path, e);
+            return None;
+        }
+    };
+
+    let mut css = match minify::compile_css(blog_dir, &theme_dir) {
+        Ok(c) => c,
+        Err(e) => {
+            log::warn!("CSS compile failed: {}", e);
+            return None;
+        }
+    };
     if css.is_empty() {
         let style_path = theme_dir.join("style.css");
         if style_path.exists() {
-            css = std::fs::read_to_string(&style_path).ok()?;
+            css = match std::fs::read_to_string(&style_path) {
+                Ok(c) => c,
+                Err(e) => {
+                    log::warn!("Failed to read style.css: {}", e);
+                    return None;
+                }
+            };
         }
     }
 
+    let blog_config = match BlogConfig::from_file(&blog_dir.join("blog.toml")) {
+        Ok(c) => c,
+        Err(e) => {
+            log::warn!("Failed to load blog.toml for preview: {}", e);
+            return None;
+        }
+    };
+
+    log::info!("HTML preview config loaded (theme={}, css={}B, template={}B)", theme, css.len(), article_tpl.len());
     Some(HtmlPreviewConfig {
         css,
         article_tpl,
-        blog_config: BlogConfig::from_file(&blog_dir.join("blog.toml")).ok()?,
+        blog_config,
     })
 }
 

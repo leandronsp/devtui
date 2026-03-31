@@ -8,7 +8,7 @@ use std::time::Duration;
 use crossterm::event::{self, Event, KeyCode, KeyModifiers};
 use portable_pty::{CommandBuilder, NativePtySystem, PtySize, PtySystem};
 use ratatui::{
-    layout::{Constraint, Layout},
+    layout::{Constraint, Layout, Rect},
     style::{Color, Style},
     text::{Line, Span},
     widgets::{Block, Borders, Paragraph, Wrap},
@@ -18,11 +18,12 @@ use tui_term::widget::PseudoTerminal;
 use super::chrome::{ChromeHandle, ChromeResult};
 use super::kitty::KittyImage;
 use super::preview;
+use super::tmux;
 
 const DRAFT_PATH: &str = "draft.md";
 const CONTENT_TMP: &str = "/tmp/devtui-content";
 
-#[derive(Clone, Copy, PartialEq)]
+#[derive(Clone, Copy, Debug, PartialEq)]
 enum PreviewMode {
     Text,
     Html,
@@ -323,28 +324,35 @@ fn run_loop(
                 if let Some(result) = ch.try_recv() {
                     match result {
                         ChromeResult::Image(png_bytes) => {
-                            if let Ok(img) = image::load_from_memory(&png_bytes) {
-                                let font_h = picker.font_size().1 as u32;
-                                let w = img.width();
-                                let h = img.height();
-                                drop(img);
-                                // Preserve scroll position across refreshes.
-                                let prev_scroll = kitty_image.as_ref().map(|k| k.scroll_row).unwrap_or(0);
-                                // Drop old image BEFORE transmitting new one (same ID).
-                                drop(kitty_image.take());
-                                match KittyImage::transmit(&png_bytes, w, h) {
-                                    Ok(mut ki) => {
-                                        let image_rows = (h / font_h.max(1)) as u16;
-                                        ki.set_max_rows(image_rows);
-                                        ki.scroll_row = prev_scroll;
-                                        kitty_image = Some(ki);
-                                        html_rendering = false;
-                                        chrome_error = None;
+                            match image::load_from_memory(&png_bytes) {
+                                Ok(img) => {
+                                    let font_h = picker.font_size().1 as u32;
+                                    let w = img.width();
+                                    let h = img.height();
+                                    drop(img);
+                                    let image_rows = (h / font_h.max(1)) as u16;
+                                    log::debug!("Chrome image: {}x{} px, font_h={}, image_rows={}", w, h, font_h, image_rows);
+                                    // Preserve scroll position across refreshes.
+                                    let prev_scroll = kitty_image.as_ref().map(|k| k.scroll_row).unwrap_or(0);
+                                    // Drop old image BEFORE transmitting new one (same ID).
+                                    drop(kitty_image.take());
+                                    match KittyImage::transmit(&png_bytes, w, h) {
+                                        Ok(mut ki) => {
+                                            ki.set_max_rows(image_rows);
+                                            ki.scroll_row = prev_scroll;
+                                            kitty_image = Some(ki);
+                                            html_rendering = false;
+                                            chrome_error = None;
+                                        }
+                                        Err(e) => {
+                                            log::error!("Kitty transmit failed: {}", e);
+                                            chrome_error = Some(format!("Kitty transmit failed: {e}"));
+                                            html_rendering = false;
+                                        }
                                     }
-                                    Err(e) => {
-                                        chrome_error = Some(format!("Kitty transmit failed: {e}"));
-                                        html_rendering = false;
-                                    }
+                                }
+                                Err(e) => {
+                                    log::error!("Failed to decode Chrome PNG: {}", e);
                                 }
                             }
                         }
@@ -405,8 +413,10 @@ fn run_loop(
             PreviewMode::Html => "HTML",
         };
 
+        let mut preview_area = Rect::default();
         terminal.draw(|frame| {
             let area = frame.area();
+            log::debug!("frame.area: {:?}", area);
             let status_split = Layout::vertical([
                 Constraint::Min(1),
                 Constraint::Length(1),
@@ -429,6 +439,7 @@ fn run_loop(
                         preview_mode_label, &kitty_image,
                         html_rendering, &chrome_error, panes[1],
                     );
+                    preview_area = panes[1];
                 }
                 SplitLayout::EditorOnly => {
                     render_editor(frame, parser, mode_label, mode_st, &title_message, main_area);
@@ -452,6 +463,22 @@ fn run_loop(
             ));
             frame.render_widget(Paragraph::new(status), status_area);
         })?;
+
+        // Direct placement for tmux (after frame is drawn, so it overlays)
+        if preview_mode == PreviewMode::Html && split_layout != SplitLayout::EditorOnly {
+            if let Some(ref ki) = kitty_image {
+                if tmux::in_tmux() {
+                    let inner = Rect {
+                        x: preview_area.x + 1,
+                        y: preview_area.y + 1,
+                        width: preview_area.width.saturating_sub(2),
+                        height: preview_area.height.saturating_sub(2),
+                    };
+                    let (font_w, font_h) = picker.font_size();
+                    ki.place_direct(inner, font_w as u32, font_h as u32);
+                }
+            }
+        }
 
 
         if event::poll(Duration::from_millis(30))? {
@@ -514,12 +541,16 @@ fn run_loop(
 
                     // Ctrl+P: toggle preview mode (text/html)
                     if key.code == KeyCode::Char('p') && ctrl && chrome_available {
+                        log::info!("Ctrl+P: toggling preview mode (current={:?})", preview_mode);
                         preview_mode = match preview_mode {
                             PreviewMode::Text => {
                                 if let (Some(cfg), Some(ch)) = (html_config, chrome) {
                                     let html = render_html_preview(&last_content, cfg);
+                                    log::info!("Sending HTML to Chrome ({}B)", html.len());
                                     ch.send_html(html);
                                     html_rendering = true;
+                                } else {
+                                    log::warn!("Ctrl+P: html_config={}, chrome={}", html_config.is_some(), chrome.is_some());
                                 }
                                 PreviewMode::Html
                             }
