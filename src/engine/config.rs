@@ -227,47 +227,15 @@ lang = "en"
     // --- BlogConfig ---
 
     #[test]
-    fn cfg_reads_title_from_toml() {
+    fn cfg_reads_all_required_fields_from_toml() {
         let tmp = tempdir();
         let path = tmp.join("blog.toml");
         fs::write(&path, blog_toml()).unwrap();
         let config = BlogConfig::from_file(&path).unwrap();
         assert_eq!(config.title, "Test Blog");
-    }
-
-    #[test]
-    fn cfg_reads_subtitle_from_toml() {
-        let tmp = tempdir();
-        let path = tmp.join("blog.toml");
-        fs::write(&path, blog_toml()).unwrap();
-        let config = BlogConfig::from_file(&path).unwrap();
         assert_eq!(config.subtitle.unwrap(), "a test subtitle");
-    }
-
-    #[test]
-    fn cfg_reads_url_from_toml() {
-        let tmp = tempdir();
-        let path = tmp.join("blog.toml");
-        fs::write(&path, blog_toml()).unwrap();
-        let config = BlogConfig::from_file(&path).unwrap();
         assert_eq!(config.url, "https://test.com");
-    }
-
-    #[test]
-    fn cfg_reads_author_from_toml() {
-        let tmp = tempdir();
-        let path = tmp.join("blog.toml");
-        fs::write(&path, blog_toml()).unwrap();
-        let config = BlogConfig::from_file(&path).unwrap();
         assert_eq!(config.author, "Test Author");
-    }
-
-    #[test]
-    fn cfg_reads_lang_from_toml() {
-        let tmp = tempdir();
-        let path = tmp.join("blog.toml");
-        fs::write(&path, blog_toml()).unwrap();
-        let config = BlogConfig::from_file(&path).unwrap();
         assert_eq!(config.lang, "en");
     }
 

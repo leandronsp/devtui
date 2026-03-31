@@ -458,23 +458,7 @@ mod tests {
     #[test]
     fn init_db_is_idempotent() {
         let conn = test_db();
-        // Second init on same connection should not fail
-        conn.execute_batch(
-            "CREATE TABLE IF NOT EXISTS articles (
-                id INTEGER PRIMARY KEY AUTOINCREMENT,
-                title TEXT NOT NULL,
-                slug TEXT NOT NULL UNIQUE,
-                content TEXT NOT NULL DEFAULT '',
-                status TEXT NOT NULL DEFAULT 'draft',
-                language TEXT NOT NULL DEFAULT 'en',
-                pinned INTEGER NOT NULL DEFAULT 0,
-                tags TEXT NOT NULL DEFAULT '',
-                published_at TEXT,
-                created_at TEXT NOT NULL DEFAULT (datetime('now')),
-                updated_at TEXT NOT NULL DEFAULT (datetime('now'))
-            );",
-        )
-        .unwrap();
+        create_schema(&conn).unwrap();
     }
 
     // --- create_article ---
