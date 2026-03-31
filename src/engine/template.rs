@@ -52,20 +52,8 @@ fn substitute_vars(template: &str, vars: &HashMap<&str, &str>) -> String {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::testutil::tempdir;
     use std::fs;
-
-    fn tempdir() -> PathBuf {
-        use std::sync::atomic::{AtomicU64, Ordering};
-        static COUNTER: AtomicU64 = AtomicU64::new(0);
-        let id = COUNTER.fetch_add(1, Ordering::Relaxed);
-        let dir = std::env::temp_dir().join(format!(
-            "devtui-tpl-{}-{}",
-            std::process::id(),
-            id
-        ));
-        fs::create_dir_all(&dir).unwrap();
-        dir
-    }
 
     // --- resolve_file ---
 

@@ -56,6 +56,7 @@ pub fn generate_files(
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::testutil::tempdir;
 
     // --- xml_escape ---
 
@@ -173,16 +174,4 @@ mod tests {
         assert!(content.contains("<loc>https://test.com/</loc>"));
     }
 
-    fn tempdir() -> std::path::PathBuf {
-        use std::sync::atomic::{AtomicU64, Ordering};
-        static COUNTER: AtomicU64 = AtomicU64::new(0);
-        let id = COUNTER.fetch_add(1, Ordering::Relaxed);
-        let dir = std::env::temp_dir().join(format!(
-            "devtui-seo-{}-{}",
-            std::process::id(),
-            id
-        ));
-        std::fs::create_dir_all(&dir).unwrap();
-        dir
-    }
 }

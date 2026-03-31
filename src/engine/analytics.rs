@@ -29,6 +29,7 @@ pub fn ga_script_tag(analytics_id: &str) -> String {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::testutil::tempdir;
 
     #[test]
     fn ga_script_tag_returns_empty_for_empty_id() {
@@ -106,16 +107,4 @@ mod tests {
         assert!(content.ends_with("</body></html>"));
     }
 
-    fn tempdir() -> std::path::PathBuf {
-        use std::sync::atomic::{AtomicU64, Ordering};
-        static COUNTER: AtomicU64 = AtomicU64::new(0);
-        let id = COUNTER.fetch_add(1, Ordering::Relaxed);
-        let dir = std::env::temp_dir().join(format!(
-            "devtui-ga-{}-{}",
-            std::process::id(),
-            id
-        ));
-        std::fs::create_dir_all(&dir).unwrap();
-        dir
-    }
 }

@@ -441,6 +441,7 @@ fn row_to_article(row: &rusqlite::Row) -> rusqlite::Result<Article> {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::testutil::tempdir;
     use std::fs;
 
     fn test_db() -> Connection {
@@ -920,12 +921,4 @@ mod tests {
         assert!(!md.contains("language:"));
     }
 
-    fn tempdir() -> std::path::PathBuf {
-        use std::sync::atomic::{AtomicU64, Ordering};
-        static COUNTER: AtomicU64 = AtomicU64::new(0);
-        let id = COUNTER.fetch_add(1, Ordering::Relaxed);
-        let dir = std::env::temp_dir().join(format!("devtui-db-test-{}-{}", std::process::id(), id));
-        std::fs::create_dir_all(&dir).unwrap();
-        dir
-    }
 }
