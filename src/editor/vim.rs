@@ -327,27 +327,14 @@ fn run_loop(
                         ChromeResult::Image(png_bytes) => {
                             if let Ok(img) = image::load_from_memory(&png_bytes) {
                                 let font_h = picker.font_size().1 as u32;
-                                let max_px = super::kitty::max_rows() as u32 * font_h;
-                                let (tx_bytes, w, h) = if img.height() > max_px {
-                                    // Resize to fit within 285 rows, preserving width
-                                    let new_h = max_px;
-                                    let scale = new_h as f64 / img.height() as f64;
-                                    let new_w = (img.width() as f64 * scale) as u32;
-                                    let resized = img.resize_exact(new_w, new_h, image::imageops::FilterType::Lanczos3);
-                                    let mut buf = std::io::Cursor::new(Vec::new());
-                                    resized.write_to(&mut buf, image::ImageFormat::Png).unwrap();
-                                    (buf.into_inner(), new_w, new_h)
-                                } else {
-                                    let w = img.width();
-                                    let h = img.height();
-                                    drop(img);
-                                    (png_bytes, w, h)
-                                };
+                                let w = img.width();
+                                let h = img.height();
+                                drop(img);
                                 // Preserve scroll position across refreshes.
                                 let prev_scroll = kitty_image.as_ref().map(|k| k.scroll_row).unwrap_or(0);
                                 // Drop old image BEFORE transmitting new one (same ID).
                                 drop(kitty_image.take());
-                                match KittyImage::transmit(&tx_bytes, w, h) {
+                                match KittyImage::transmit(&png_bytes, w, h) {
                                     Ok(mut ki) => {
                                         let image_rows = (h / font_h.max(1)) as u16;
                                         ki.set_max_rows(image_rows);

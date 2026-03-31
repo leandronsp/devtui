@@ -168,7 +168,9 @@ impl KittyImage {
     }
 
     pub fn scroll_down(&mut self, rows: u16, visible_rows: u16) {
-        let max_scroll = self.max_rows.saturating_sub(visible_rows);
+        // Clamp by both image rows and diacritic limit
+        let displayable = self.max_rows.min(DIACRITICS.len() as u16);
+        let max_scroll = displayable.saturating_sub(visible_rows);
         self.scroll_row = (self.scroll_row + rows).min(max_scroll);
     }
 
