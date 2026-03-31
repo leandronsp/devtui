@@ -352,17 +352,18 @@ pub fn import_from_filesystem(
 
 /// Build frontmatter + content for writing a published .md file.
 pub fn build_markdown(article: &Article, date_field: &str) -> String {
+    use std::fmt::Write;
     let mut md = String::from("---\n");
-    md.push_str(&format!("title: {}\n", article.title));
+    let _ = writeln!(md, "title: {}", article.title);
     if let Some(ref date) = article.published_at {
-        md.push_str(&format!("{date_field}: {date}\n"));
+        let _ = writeln!(md, "{date_field}: {date}");
     }
     if !article.tags.is_empty() {
         let tags_yaml: Vec<String> = article.tags.iter().map(|t| format!("\"{t}\"")).collect();
-        md.push_str(&format!("tags: [{}]\n", tags_yaml.join(", ")));
+        let _ = writeln!(md, "tags: [{}]", tags_yaml.join(", "));
     }
     if article.language != "en" {
-        md.push_str(&format!("language: {}\n", article.language));
+        let _ = writeln!(md, "language: {}", article.language);
     }
     md.push_str("---\n\n");
     md.push_str(&article.content);
