@@ -53,6 +53,10 @@ fn diacritic(val: u16) -> char {
     DIACRITICS.get(val as usize).copied().unwrap_or(DIACRITICS[0])
 }
 
+pub fn max_rows() -> u16 {
+    DIACRITICS.len() as u16
+}
+
 /// A Kitty graphics protocol image stored in terminal memory.
 pub struct KittyImage {
     pub width: u32,

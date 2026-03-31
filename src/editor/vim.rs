@@ -261,6 +261,7 @@ fn run_loop(
 ) -> io::Result<()> {
     let mut last_content = String::new();
     let mut cached_lines: Vec<Line<'static>> = Vec::new();
+    let mut cached_offsets: Vec<u16> = Vec::new();
     let mut preview_mode = PreviewMode::Text;
     let mut kitty_image: Option<KittyImage> = None;
     let mut split_layout = SplitLayout::Vertical;
@@ -301,7 +302,8 @@ fn run_loop(
                     content_changed_at = None;
 
                     if split_layout != SplitLayout::EditorOnly {
-                        let (lines, _) = preview::render_with_offsets(&last_content);
+                        let (lines, offsets) = preview::render_with_offsets(&last_content);
+                        cached_offsets = offsets;
                         cached_lines = lines;
                     }
 
@@ -324,17 +326,31 @@ fn run_loop(
                     match result {
                         ChromeResult::Image(png_bytes) => {
                             if let Ok(img) = image::load_from_memory(&png_bytes) {
-                                let w = img.width();
-                                let h = img.height();
-                                drop(img);
+                                let font_h = picker.font_size().1 as u32;
+                                let max_px = super::kitty::max_rows() as u32 * font_h;
+                                let (tx_bytes, w, h) = if img.height() > max_px {
+                                    // Resize to fit within 285 rows, preserving width
+                                    let new_h = max_px;
+                                    let scale = new_h as f64 / img.height() as f64;
+                                    let new_w = (img.width() as f64 * scale) as u32;
+                                    let resized = img.resize_exact(new_w, new_h, image::imageops::FilterType::Lanczos3);
+                                    let mut buf = std::io::Cursor::new(Vec::new());
+                                    resized.write_to(&mut buf, image::ImageFormat::Png).unwrap();
+                                    (buf.into_inner(), new_w, new_h)
+                                } else {
+                                    let w = img.width();
+                                    let h = img.height();
+                                    drop(img);
+                                    (png_bytes, w, h)
+                                };
                                 // Preserve scroll position across refreshes.
                                 let prev_scroll = kitty_image.as_ref().map(|k| k.scroll_row).unwrap_or(0);
                                 // Drop old image BEFORE transmitting new one (same ID).
                                 drop(kitty_image.take());
-                                match KittyImage::transmit(&png_bytes, w, h) {
+                                match KittyImage::transmit(&tx_bytes, w, h) {
                                     Ok(mut ki) => {
-                                        let font_h = picker.font_size().1 as u32;
-                                        ki.set_max_rows((h / font_h.max(1)) as u16);
+                                        let image_rows = (h / font_h.max(1)) as u16;
+                                        ki.set_max_rows(image_rows);
                                         ki.scroll_row = prev_scroll;
                                         kitty_image = Some(ki);
                                         html_rendering = false;
@@ -381,7 +397,18 @@ fn run_loop(
             String::new()
         };
 
-        let max_scroll = cached_lines.len().saturating_sub(1) as u16;
+        // Calculate actual visual lines after word-wrap based on pane width.
+        let pane_width = match split_layout {
+            SplitLayout::Vertical => (terminal.size()?.width / 2).saturating_sub(2),
+            SplitLayout::Horizontal => terminal.size()?.width.saturating_sub(2),
+            SplitLayout::EditorOnly => 1,
+        } as usize;
+        let visual_lines: usize = cached_lines.iter().map(|line| {
+            let w = line.width();
+            if w == 0 { 1 } else { w.div_ceil(pane_width) }
+        }).sum();
+        let visible_rows = terminal.size()?.height.saturating_sub(4) as usize;
+        let max_scroll = visual_lines.saturating_sub(visible_rows) as u16;
         let clamped_scroll = preview_scroll.min(max_scroll);
 
         let layout_label = match split_layout {
@@ -472,7 +499,8 @@ fn run_loop(
                         resize_pty(split_layout, terminal, pty_master, parser)?;
                         // Re-render preview content when coming back from EditorOnly
                         if split_layout != SplitLayout::EditorOnly && cached_lines.is_empty() {
-                            let (lines, _) = preview::render_with_offsets(&last_content);
+                            let (lines, offsets) = preview::render_with_offsets(&last_content);
+                        cached_offsets = offsets;
                             cached_lines = lines;
                         }
                         continue;
@@ -495,17 +523,23 @@ fn run_loop(
                             continue;
                         }
 
-                        let total_rendered = cached_lines.len().max(1);
-                        let target = (ratio * total_rendered as f64) as u16;
-
-                        let term_size = terminal.size()?;
-                        let visible_height = match split_layout {
-                            SplitLayout::Vertical => term_size.height.saturating_sub(4),
-                            SplitLayout::Horizontal => term_size.height / 2,
-                            SplitLayout::EditorOnly => 0,
+                        // Map source line -> rendered line via offset map,
+                        // then convert rendered line to visual line (accounting for wrap).
+                        let target = if !cached_offsets.is_empty() {
+                            let idx = vim_state.cursor_line.min(cached_offsets.len().saturating_sub(1));
+                            let rendered_line = cached_offsets[idx] as usize;
+                            // Sum visual lines of all rendered lines before target
+                            cached_lines[..rendered_line.min(cached_lines.len())]
+                                .iter()
+                                .map(|line| {
+                                    let w = line.width();
+                                    if w == 0 { 1u16 } else { w.div_ceil(pane_width) as u16 }
+                                })
+                                .sum::<u16>()
+                        } else {
+                            (ratio * visual_lines as f64) as u16
                         };
-
-                        preview_scroll = target.saturating_sub(visible_height / 2);
+                        preview_scroll = target.saturating_sub(visible_rows as u16 / 2).min(max_scroll);
                         continue;
                     }
 
