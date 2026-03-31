@@ -56,7 +56,7 @@ pub fn generate_files(
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::testutil::tempdir;
+    use crate::testutil::{tempdir, test_blog_config};
 
     // --- xml_escape ---
 
@@ -121,23 +121,7 @@ mod tests {
     #[test]
     fn sitemap_writes_valid_xml() {
         let tmp = tempdir();
-        let cfg = BlogConfig {
-            title: "Test".to_string(),
-            subtitle: None,
-            url: "https://test.com".to_string(),
-            author: "A".to_string(),
-            date_field: "date".to_string(),
-            lang: "en".to_string(),
-            articles_path: None,
-            theme: None,
-            analytics_id: None,
-            license: None,
-            license_url: None,
-            og_image: None,
-            tags: None,
-            links: None,
-            guides: None,
-        };
+        let cfg = test_blog_config();
         let entries = sitemap_entry("https://test.com/post.html", "2026-03-29");
         sitemap(&cfg, &tmp, &entries).unwrap();
 
@@ -151,23 +135,7 @@ mod tests {
     #[test]
     fn sitemap_with_empty_entries() {
         let tmp = tempdir();
-        let cfg = BlogConfig {
-            title: "Test".to_string(),
-            subtitle: None,
-            url: "https://test.com".to_string(),
-            author: "A".to_string(),
-            date_field: "date".to_string(),
-            lang: "en".to_string(),
-            articles_path: None,
-            theme: None,
-            analytics_id: None,
-            license: None,
-            license_url: None,
-            og_image: None,
-            tags: None,
-            links: None,
-            guides: None,
-        };
+        let cfg = test_blog_config();
         sitemap(&cfg, &tmp, "").unwrap();
 
         let content = std::fs::read_to_string(tmp.join("sitemap.xml")).unwrap();

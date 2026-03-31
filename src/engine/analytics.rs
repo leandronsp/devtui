@@ -29,7 +29,7 @@ pub fn ga_script_tag(analytics_id: &str) -> String {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::testutil::tempdir;
+    use crate::testutil::{tempdir, test_blog_config};
 
     #[test]
     fn ga_script_tag_returns_empty_for_empty_id() {
@@ -55,23 +55,7 @@ mod tests {
 
     #[test]
     fn inject_skips_when_no_analytics_id() {
-        let cfg = BlogConfig {
-            title: "Test".to_string(),
-            subtitle: None,
-            url: "https://test.com".to_string(),
-            author: "A".to_string(),
-            date_field: "date".to_string(),
-            lang: "en".to_string(),
-            articles_path: None,
-            theme: None,
-            analytics_id: None,
-            license: None,
-            license_url: None,
-            og_image: None,
-            tags: None,
-            links: None,
-            guides: None,
-        };
+        let cfg = test_blog_config();
         inject(&cfg, &[]).unwrap();
     }
 
@@ -82,21 +66,8 @@ mod tests {
         std::fs::write(&html_path, "<html><body><p>hi</p></body></html>").unwrap();
 
         let cfg = BlogConfig {
-            title: "Test".to_string(),
-            subtitle: None,
-            url: "https://test.com".to_string(),
-            author: "A".to_string(),
-            date_field: "date".to_string(),
-            lang: "en".to_string(),
-            articles_path: None,
-            theme: None,
             analytics_id: Some("G-TEST123".to_string()),
-            license: None,
-            license_url: None,
-            og_image: None,
-            tags: None,
-            links: None,
-            guides: None,
+            ..test_blog_config()
         };
 
         inject(&cfg, &[html_path.to_string_lossy().to_string()]).unwrap();

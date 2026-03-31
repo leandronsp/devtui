@@ -47,7 +47,7 @@ pub fn generate(cfg: &BlogConfig, dist_dir: &Path, posts: &[Post], articles_pref
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::testutil::tempdir;
+    use crate::testutil::{tempdir, test_blog_config};
 
     // --- rss_header ---
 
@@ -130,19 +130,8 @@ mod tests {
         let cfg = BlogConfig {
             title: "Test Blog".to_string(),
             subtitle: Some("A subtitle".to_string()),
-            url: "https://test.com".to_string(),
             author: "Author".to_string(),
-            date_field: "date".to_string(),
-            lang: "en".to_string(),
-            articles_path: None,
-            theme: None,
-            analytics_id: None,
-            license: None,
-            license_url: None,
-            og_image: None,
-            tags: None,
-            links: None,
-            guides: None,
+            ..test_blog_config()
         };
         let posts = vec![Post {
             slug: "hello".to_string(),
@@ -169,20 +158,7 @@ mod tests {
         let tmp = tempdir();
         let cfg = BlogConfig {
             title: "Blog".to_string(),
-            subtitle: None,
-            url: "https://test.com".to_string(),
-            author: "A".to_string(),
-            date_field: "date".to_string(),
-            lang: "en".to_string(),
-            articles_path: None,
-            theme: None,
-            analytics_id: None,
-            license: None,
-            license_url: None,
-            og_image: None,
-            tags: None,
-            links: None,
-            guides: None,
+            ..test_blog_config()
         };
         let posts: Vec<Post> = (0..25)
             .map(|i| Post {
@@ -209,20 +185,7 @@ mod tests {
         let tmp = tempdir();
         let cfg = BlogConfig {
             title: "Blog".to_string(),
-            subtitle: None,
-            url: "https://test.com".to_string(),
-            author: "A".to_string(),
-            date_field: "date".to_string(),
-            lang: "en".to_string(),
-            articles_path: None,
-            theme: None,
-            analytics_id: None,
-            license: None,
-            license_url: None,
-            og_image: None,
-            tags: None,
-            links: None,
-            guides: None,
+            ..test_blog_config()
         };
         let posts = vec![Post {
             slug: "hello".to_string(),
