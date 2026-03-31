@@ -18,7 +18,7 @@ use tui_term::widget::PseudoTerminal;
 use super::chrome::{ChromeHandle, ChromeResult};
 use super::kitty::KittyImage;
 use super::preview;
-use super::tmux;
+
 
 const DRAFT_PATH: &str = "draft.md";
 const CONTENT_TMP: &str = "/tmp/devtui-content";
@@ -777,6 +777,7 @@ fn follow_editor_cursor(
     target.saturating_sub(visible_rows as u16 / 2).min(max_scroll)
 }
 
+#[allow(clippy::borrowed_box)]
 fn resize_pty(
     layout: SplitLayout,
     terminal: &mut ratatui::DefaultTerminal,

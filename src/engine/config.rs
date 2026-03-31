@@ -368,6 +368,133 @@ lang = "en"
         assert!(body.contains("Some text\n\n> a quote"));
     }
 
+    // --- resolve_og_image ---
+
+    #[test]
+    fn resolve_og_image_prefers_post_image() {
+        assert_eq!(
+            resolve_og_image(Some("post.jpg"), Some("site.jpg")),
+            "post.jpg"
+        );
+    }
+
+    #[test]
+    fn resolve_og_image_falls_back_to_site() {
+        assert_eq!(resolve_og_image(None, Some("site.jpg")), "site.jpg");
+    }
+
+    #[test]
+    fn resolve_og_image_returns_empty_when_none() {
+        assert_eq!(resolve_og_image(None, None), "");
+    }
+
+    // --- twitter_card ---
+
+    #[test]
+    fn twitter_card_summary_when_no_image() {
+        assert_eq!(twitter_card(""), "summary");
+    }
+
+    #[test]
+    fn twitter_card_large_image_when_image_present() {
+        assert_eq!(twitter_card("https://img.jpg"), "summary_large_image");
+    }
+
+    // --- extract_tags ---
+
+    #[test]
+    fn extract_tags_from_array_syntax() {
+        let content = "---\ntitle: Test\ntags: [\"rust\", \"tdd\"]\n---\n";
+        assert_eq!(extract_tags(content), "rust tdd");
+    }
+
+    #[test]
+    fn extract_tags_returns_empty_when_no_tags() {
+        let content = "---\ntitle: Test\n---\n";
+        assert_eq!(extract_tags(content), "");
+    }
+
+    #[test]
+    fn extract_tags_handles_unquoted_values() {
+        let content = "---\ntitle: Test\ntags: [rust, elixir, go]\n---\n";
+        assert_eq!(extract_tags(content), "rust elixir go");
+    }
+
+    // --- frontmatter edge cases ---
+
+    #[test]
+    fn frontmatter_returns_none_for_empty_value() {
+        let content = "---\ntitle: \n---\n";
+        assert!(frontmatter("title", content).is_none());
+    }
+
+    #[test]
+    fn frontmatter_returns_none_without_frontmatter() {
+        let content = "Just some text without frontmatter";
+        assert!(frontmatter("title", content).is_none());
+    }
+
+    #[test]
+    fn frontmatter_handles_unicode_values() {
+        let content = "---\ntitle: Programação funcional com Elixir\n---\n";
+        assert_eq!(
+            frontmatter("title", content).unwrap(),
+            "Programação funcional com Elixir"
+        );
+    }
+
+    // --- collect_posts ---
+
+    #[test]
+    fn collect_posts_returns_empty_for_nonexistent_dir() {
+        let dir = std::path::PathBuf::from("/tmp/devtui-no-such-dir-999");
+        let posts = collect_posts(&dir, "date").unwrap();
+        assert!(posts.is_empty());
+    }
+
+    #[test]
+    fn collect_posts_reads_markdown_files() {
+        let dir = tempdir();
+        fs::write(
+            dir.join("hello-world.md"),
+            "---\ntitle: Hello World\ndate: 2026-03-29\ndescription: A test\n---\n\nBody.\n",
+        )
+        .unwrap();
+        fs::write(dir.join("not-markdown.txt"), "skip me").unwrap();
+
+        let posts = collect_posts(&dir, "date").unwrap();
+        assert_eq!(posts.len(), 1);
+        assert_eq!(posts[0].title, "Hello World");
+        assert_eq!(posts[0].slug, "hello-world");
+        assert_eq!(posts[0].date, "2026-03-29");
+        assert_eq!(posts[0].description, "A test");
+    }
+
+    #[test]
+    fn collect_posts_handles_missing_optional_fields() {
+        let dir = tempdir();
+        fs::write(
+            dir.join("no-desc.md"),
+            "---\ntitle: No Desc\ndate: 2026-01-01\n---\n\nBody.\n",
+        )
+        .unwrap();
+
+        let posts = collect_posts(&dir, "date").unwrap();
+        assert_eq!(posts.len(), 1);
+        assert!(posts[0].description.is_empty());
+        assert!(posts[0].image.is_none());
+    }
+
+    // --- post_body edge cases ---
+
+    #[test]
+    fn post_body_no_blank_line_insert_after_empty_line() {
+        let content = "---\ntitle: Test\n---\n\n\n* item\n";
+        let body = post_body(content);
+        // After blank line, no extra blank line should be inserted
+        assert!(body.contains("* item"));
+    }
+
     fn tempdir() -> std::path::PathBuf {
         use std::sync::atomic::{AtomicU64, Ordering};
         static COUNTER: AtomicU64 = AtomicU64::new(0);

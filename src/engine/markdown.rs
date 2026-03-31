@@ -267,6 +267,64 @@ mod tests {
         assert!(result.contains("lá"));
     }
 
+    // --- markdown_to_html edge cases ---
+
+    #[test]
+    fn markdown_to_html_renders_empty_input() {
+        let result = markdown_to_html("");
+        assert!(result.is_empty());
+    }
+
+    #[test]
+    fn markdown_to_html_renders_table() {
+        let md = "| col1 | col2 |\n|------|------|\n| a    | b    |\n";
+        let result = markdown_to_html(md);
+        assert!(result.contains("<table>"));
+        assert!(result.contains("<td>a</td>"));
+    }
+
+    #[test]
+    fn markdown_to_html_renders_italic() {
+        let result = markdown_to_html("Some *italic* text\n");
+        assert!(result.contains("<em>italic</em>"));
+    }
+
+    #[test]
+    fn markdown_to_html_renders_inline_code() {
+        let result = markdown_to_html("Use `cargo build`\n");
+        assert!(result.contains("<code>cargo build</code>"));
+    }
+
+    #[test]
+    fn markdown_to_html_preserves_emoji_in_inline_code() {
+        let result = markdown_to_html("Use `:wave:` shortcode\n");
+        // Inside inline backticks, shortcodes should NOT be converted
+        assert!(result.contains(":wave:"));
+    }
+
+    #[test]
+    fn markdown_to_html_renders_nested_emphasis() {
+        let result = markdown_to_html("Some ***bold italic*** text\n");
+        assert!(result.contains("<em><strong>bold italic</strong></em>"));
+    }
+
+    // --- post_snippet edge cases ---
+
+    #[test]
+    fn post_snippet_empty_description_falls_back_to_body() {
+        let result = post_snippet("Body content here.", Some(""), 300);
+        assert!(result.contains("Body content here"));
+    }
+
+    #[test]
+    fn post_snippet_skips_code_blocks() {
+        let body = "Intro text\n\n```rust\nfn main() {}\n```\n\nAfter code.";
+        let result = post_snippet(body, None, 300);
+        assert!(result.contains("Intro text"));
+        assert!(result.contains("After code"));
+        assert!(!result.contains("fn main"));
+    }
+
     #[test]
     fn post_snippet_does_not_break_multibyte_at_boundary() {
         // UTF-8 boundary stress test

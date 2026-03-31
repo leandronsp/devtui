@@ -22,8 +22,6 @@ pulldown-cmark = "0.12"
 tui-term = "0.2.0"
 vt100 = "0.15"
 portable-pty = "0.9"
-nvim-rs = { version = "0.9", features = ["use_tokio"] }
-tokio = { version = "1", features = ["full"] }
 toml = "0.8"
 serde = { version = "1", features = ["derive"] }
 gh-emoji = "1.0"

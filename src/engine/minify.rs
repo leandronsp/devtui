@@ -254,4 +254,129 @@ mod tests {
         let result = minify_html(html);
         assert!(result.contains("<style>  body { color: red; }  </style>"));
     }
+
+    // --- minify_css edge cases ---
+
+    #[test]
+    fn minify_css_handles_empty_input() {
+        assert_eq!(minify_css(""), "");
+    }
+
+    #[test]
+    fn minify_css_handles_media_queries() {
+        let css = "@media (max-width: 768px) {\n  body { font-size: 14px; }\n}";
+        let result = minify_css(css);
+        assert!(result.contains("@media"));
+        assert!(result.contains("768px"));
+    }
+
+    #[test]
+    fn minify_css_strips_multiline_comments() {
+        let css = "/* first\n * comment\n */\nbody { color: red; }\n/* second */";
+        let result = minify_css(css);
+        assert!(!result.contains("comment"));
+        assert!(!result.contains("second"));
+        assert!(result.contains("body{color:red}"));
+    }
+
+    // --- inline_css edge cases ---
+
+    #[test]
+    fn inline_css_leaves_non_stylesheet_links() {
+        let html = r#"<link rel="icon" href="favicon.ico"><link rel="stylesheet" href="style.css">"#;
+        let result = inline_css(html, "body{}");
+        assert!(result.contains(r#"<link rel="icon" href="favicon.ico">"#));
+        assert!(result.contains("<style>body{}</style>"));
+    }
+
+    #[test]
+    fn inline_css_no_stylesheet_link_returns_unchanged() {
+        let html = r#"<link rel="icon" href="favicon.ico">"#;
+        let result = inline_css(html, "body{}");
+        assert_eq!(result, html);
+    }
+
+    // --- minify_html edge cases ---
+
+    #[test]
+    fn minify_html_handles_empty_input() {
+        assert_eq!(minify_html(""), "");
+    }
+
+    #[test]
+    fn minify_html_handles_multiple_preserved_blocks() {
+        let html = "<pre>code1</pre><p>  text  </p><pre>code2</pre>";
+        let result = minify_html(html);
+        assert!(result.contains("<pre>code1</pre>"));
+        assert!(result.contains("<pre>code2</pre>"));
+    }
+
+    #[test]
+    fn minify_html_strips_multiple_comments() {
+        let html = "<!-- first --><p>text</p><!-- second --><p>more</p>";
+        let result = minify_html(html);
+        assert!(!result.contains("first"));
+        assert!(!result.contains("second"));
+        assert!(result.contains("<p>text</p>"));
+        assert!(result.contains("<p>more</p>"));
+    }
+
+    // --- compile_css ---
+
+    #[test]
+    fn compile_css_concatenates_theme_files() {
+        let tmp = tempdir();
+        let theme = tmp.join("theme");
+        let blog = tmp.join("blog");
+        std::fs::create_dir_all(&theme).unwrap();
+        std::fs::create_dir_all(&blog).unwrap();
+
+        std::fs::write(theme.join("base.css"), "body { margin: 0; }\n").unwrap();
+        std::fs::write(theme.join("article.css"), "article { padding: 1rem; }\n").unwrap();
+
+        let css = compile_css(&blog, &theme).unwrap();
+        assert!(css.contains("body { margin: 0; }"));
+        assert!(css.contains("article { padding: 1rem; }"));
+    }
+
+    #[test]
+    fn compile_css_uses_blog_override_when_present() {
+        let tmp = tempdir();
+        let theme = tmp.join("theme");
+        let blog = tmp.join("blog");
+        std::fs::create_dir_all(&theme).unwrap();
+        std::fs::create_dir_all(&blog).unwrap();
+
+        std::fs::write(theme.join("base.css"), "theme-base").unwrap();
+        std::fs::write(blog.join("base.css"), "blog-base").unwrap();
+
+        let css = compile_css(&blog, &theme).unwrap();
+        assert!(css.contains("blog-base"));
+        assert!(!css.contains("theme-base"));
+    }
+
+    #[test]
+    fn compile_css_returns_empty_for_no_css_files() {
+        let tmp = tempdir();
+        let theme = tmp.join("theme");
+        let blog = tmp.join("blog");
+        std::fs::create_dir_all(&theme).unwrap();
+        std::fs::create_dir_all(&blog).unwrap();
+
+        let css = compile_css(&blog, &theme).unwrap();
+        assert!(css.is_empty());
+    }
+
+    fn tempdir() -> std::path::PathBuf {
+        use std::sync::atomic::{AtomicU64, Ordering};
+        static COUNTER: AtomicU64 = AtomicU64::new(0);
+        let id = COUNTER.fetch_add(1, Ordering::Relaxed);
+        let dir = std::env::temp_dir().join(format!(
+            "devtui-min-{}-{}",
+            std::process::id(),
+            id
+        ));
+        std::fs::create_dir_all(&dir).unwrap();
+        dir
+    }
 }

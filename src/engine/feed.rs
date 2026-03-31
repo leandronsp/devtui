@@ -105,4 +105,150 @@ mod tests {
         );
         assert!(result.contains(r#"<description><![CDATA[A <b>bold</b> & "quoted"]]></description>"#));
     }
+
+    // --- rss_header edge cases ---
+
+    #[test]
+    fn rss_header_contains_xml_declaration() {
+        let result = rss_header("Blog", "https://test.com", "desc");
+        assert!(result.starts_with(r#"<?xml version="1.0" encoding="UTF-8"?>"#));
+    }
+
+    #[test]
+    fn rss_header_contains_description() {
+        let result = rss_header("Blog", "https://test.com", "My awesome blog");
+        assert!(result.contains("<description>My awesome blog</description>"));
+    }
+
+    // --- generate ---
+
+    #[test]
+    fn generate_writes_feed_xml() {
+        use std::path::PathBuf;
+        let tmp = tempdir();
+        let cfg = BlogConfig {
+            title: "Test Blog".to_string(),
+            subtitle: Some("A subtitle".to_string()),
+            url: "https://test.com".to_string(),
+            author: "Author".to_string(),
+            date_field: "date".to_string(),
+            lang: "en".to_string(),
+            articles_path: None,
+            theme: None,
+            analytics_id: None,
+            license: None,
+            license_url: None,
+            og_image: None,
+            tags: None,
+            links: None,
+            guides: None,
+        };
+        let posts = vec![Post {
+            slug: "hello".to_string(),
+            title: "Hello World".to_string(),
+            date: "2026-03-29".to_string(),
+            description: "A test post".to_string(),
+            image: None,
+            content: "---\ntitle: Hello World\ndate: 2026-03-29\n---\n\nSome **bold** content.\n".to_string(),
+            path: PathBuf::from("hello.md"),
+        }];
+
+        generate(&cfg, &tmp, &posts, "articles").unwrap();
+
+        let feed = std::fs::read_to_string(tmp.join("feed.xml")).unwrap();
+        assert!(feed.contains("<title>Test Blog</title>"));
+        assert!(feed.contains("<title>Hello World</title>"));
+        assert!(feed.contains("articles/hello.html"));
+        assert!(feed.contains("</channel></rss>"));
+    }
+
+    #[test]
+    fn generate_limits_to_20_posts() {
+        use std::path::PathBuf;
+        let tmp = tempdir();
+        let cfg = BlogConfig {
+            title: "Blog".to_string(),
+            subtitle: None,
+            url: "https://test.com".to_string(),
+            author: "A".to_string(),
+            date_field: "date".to_string(),
+            lang: "en".to_string(),
+            articles_path: None,
+            theme: None,
+            analytics_id: None,
+            license: None,
+            license_url: None,
+            og_image: None,
+            tags: None,
+            links: None,
+            guides: None,
+        };
+        let posts: Vec<Post> = (0..25)
+            .map(|i| Post {
+                slug: format!("post-{i}"),
+                title: format!("Post {i}"),
+                date: "2026-03-29".to_string(),
+                description: String::new(),
+                image: None,
+                content: format!("---\ntitle: Post {i}\ndate: 2026-03-29\n---\n\nBody {i}.\n"),
+                path: PathBuf::from(format!("post-{i}.md")),
+            })
+            .collect();
+
+        generate(&cfg, &tmp, &posts, "").unwrap();
+
+        let feed = std::fs::read_to_string(tmp.join("feed.xml")).unwrap();
+        let item_count = feed.matches("<item>").count();
+        assert_eq!(item_count, 20);
+    }
+
+    #[test]
+    fn generate_empty_articles_prefix() {
+        use std::path::PathBuf;
+        let tmp = tempdir();
+        let cfg = BlogConfig {
+            title: "Blog".to_string(),
+            subtitle: None,
+            url: "https://test.com".to_string(),
+            author: "A".to_string(),
+            date_field: "date".to_string(),
+            lang: "en".to_string(),
+            articles_path: None,
+            theme: None,
+            analytics_id: None,
+            license: None,
+            license_url: None,
+            og_image: None,
+            tags: None,
+            links: None,
+            guides: None,
+        };
+        let posts = vec![Post {
+            slug: "hello".to_string(),
+            title: "Hello".to_string(),
+            date: "2026-03-29".to_string(),
+            description: String::new(),
+            image: None,
+            content: "---\ntitle: Hello\ndate: 2026-03-29\n---\n\nBody.\n".to_string(),
+            path: PathBuf::from("hello.md"),
+        }];
+
+        generate(&cfg, &tmp, &posts, "").unwrap();
+
+        let feed = std::fs::read_to_string(tmp.join("feed.xml")).unwrap();
+        assert!(feed.contains("https://test.com/hello.html"));
+    }
+
+    fn tempdir() -> std::path::PathBuf {
+        use std::sync::atomic::{AtomicU64, Ordering};
+        static COUNTER: AtomicU64 = AtomicU64::new(0);
+        let id = COUNTER.fetch_add(1, Ordering::Relaxed);
+        let dir = std::env::temp_dir().join(format!(
+            "devtui-feed-{}-{}",
+            std::process::id(),
+            id
+        ));
+        std::fs::create_dir_all(&dir).unwrap();
+        dir
+    }
 }

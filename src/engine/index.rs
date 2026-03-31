@@ -148,6 +148,97 @@ fn inject_footer(cfg: &BlogConfig, index_html: &mut String) {
     ));
 }
 
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use crate::engine::config::Post;
+    use std::path::PathBuf;
+
+    fn test_post(slug: &str, title: &str, date: &str) -> Post {
+        Post {
+            slug: slug.to_string(),
+            title: title.to_string(),
+            date: date.to_string(),
+            description: String::new(),
+            image: None,
+            content: format!(
+                "---\ntitle: {title}\ndate: {date}\nlanguage: en\ntags: [\"rust\"]\n---\n\nBody.\n"
+            ),
+            path: PathBuf::from(format!("{slug}.md")),
+        }
+    }
+
+    // --- normalize_lang ---
+
+    #[test]
+    fn normalize_lang_maps_pt_br_to_pt() {
+        let content = "---\ntitle: Test\nlanguage: pt-BR\n---\n";
+        assert_eq!(normalize_lang(content), "pt");
+    }
+
+    #[test]
+    fn normalize_lang_maps_pt_lowercase_to_pt() {
+        let content = "---\ntitle: Test\nlanguage: pt\n---\n";
+        assert_eq!(normalize_lang(content), "pt");
+    }
+
+    #[test]
+    fn normalize_lang_passes_through_en() {
+        let content = "---\ntitle: Test\nlanguage: en\n---\n";
+        assert_eq!(normalize_lang(content), "en");
+    }
+
+    #[test]
+    fn normalize_lang_returns_empty_when_no_language() {
+        let content = "---\ntitle: Test\n---\n";
+        assert_eq!(normalize_lang(content), "");
+    }
+
+    // --- post_list_item ---
+
+    #[test]
+    fn post_list_item_generates_li_with_data_attributes() {
+        let post = test_post("hello", "Hello World", "2026-03-29");
+        let html = post_list_item(&post, "articles");
+        assert!(html.contains(r#"<li data-lang="en""#));
+        assert!(html.contains(r#"data-tags="rust""#));
+        assert!(html.contains(r#"href="articles/hello.html""#));
+        assert!(html.contains("Hello World"));
+        assert!(html.contains(r#"datetime="2026-03-29""#));
+    }
+
+    #[test]
+    fn post_list_item_no_prefix() {
+        let post = test_post("hello", "Hello", "2026-03-29");
+        let html = post_list_item(&post, "");
+        assert!(html.contains(r#"href="hello.html""#));
+    }
+
+    // --- inject_post_list ---
+
+    #[test]
+    fn inject_post_list_skips_duplicate_titles() {
+        let posts = vec![
+            test_post("hello-1", "Same Title", "2026-03-29"),
+            test_post("hello-2", "Same Title", "2026-03-28"),
+            test_post("unique", "Unique Title", "2026-03-27"),
+        ];
+        let mut html = String::new();
+        inject_post_list(&posts, "articles", &mut html);
+
+        let same_count = html.matches("Same Title").count();
+        assert_eq!(same_count, 1);
+        assert!(html.contains("Unique Title"));
+    }
+
+    #[test]
+    fn inject_post_list_empty_posts() {
+        let mut html = String::new();
+        inject_post_list(&[], "articles", &mut html);
+        assert!(html.is_empty());
+    }
+}
+
 /// JavaScript for tag/lang filtering and search on the index page.
 const FILTER_SCRIPT: &str = r#"<script>
 var activeLang='all',activeTag='all';

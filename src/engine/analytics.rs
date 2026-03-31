@@ -42,4 +42,80 @@ mod tests {
         assert!(result.contains("<script>"));
         assert!(result.contains("gtag"));
     }
+
+    #[test]
+    fn ga_script_tag_contains_lazy_load_pattern() {
+        let result = ga_script_tag("G-XYZ");
+        assert!(result.contains("addEventListener('load'"));
+        assert!(result.contains("setTimeout"));
+    }
+
+    // --- inject ---
+
+    #[test]
+    fn inject_skips_when_no_analytics_id() {
+        let cfg = BlogConfig {
+            title: "Test".to_string(),
+            subtitle: None,
+            url: "https://test.com".to_string(),
+            author: "A".to_string(),
+            date_field: "date".to_string(),
+            lang: "en".to_string(),
+            articles_path: None,
+            theme: None,
+            analytics_id: None,
+            license: None,
+            license_url: None,
+            og_image: None,
+            tags: None,
+            links: None,
+            guides: None,
+        };
+        inject(&cfg, &[]).unwrap();
+    }
+
+    #[test]
+    fn inject_inserts_script_before_body_close() {
+        let tmp = tempdir();
+        let html_path = tmp.join("test.html");
+        std::fs::write(&html_path, "<html><body><p>hi</p></body></html>").unwrap();
+
+        let cfg = BlogConfig {
+            title: "Test".to_string(),
+            subtitle: None,
+            url: "https://test.com".to_string(),
+            author: "A".to_string(),
+            date_field: "date".to_string(),
+            lang: "en".to_string(),
+            articles_path: None,
+            theme: None,
+            analytics_id: Some("G-TEST123".to_string()),
+            license: None,
+            license_url: None,
+            og_image: None,
+            tags: None,
+            links: None,
+            guides: None,
+        };
+
+        inject(&cfg, &[html_path.to_string_lossy().to_string()]).unwrap();
+
+        let content = std::fs::read_to_string(&html_path).unwrap();
+        assert!(content.contains("G-TEST123"));
+        assert!(content.contains("<script>"));
+        assert!(content.ends_with("</body></html>"));
+    }
+
+    fn tempdir() -> std::path::PathBuf {
+        use std::sync::atomic::{AtomicU64, Ordering};
+        static COUNTER: AtomicU64 = AtomicU64::new(0);
+        let id = COUNTER.fetch_add(1, Ordering::Relaxed);
+        let dir = std::env::temp_dir().join(format!(
+            "devtui-ga-{}-{}",
+            std::process::id(),
+            id
+        ));
+        std::fs::create_dir_all(&dir).unwrap();
+        dir
+    }
 }

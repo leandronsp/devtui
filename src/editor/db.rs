@@ -772,6 +772,118 @@ mod tests {
         assert_eq!(before, after);
     }
 
+    // --- update_title ---
+
+    #[test]
+    fn update_title_persists() {
+        let conn = test_db();
+        let article = create_article(&conn, "Old Title").unwrap();
+        update_title(&conn, article.id, "New Title").unwrap();
+        let fetched = get_article(&conn, article.id).unwrap();
+        assert_eq!(fetched.title, "New Title");
+    }
+
+    #[test]
+    fn update_title_nonexistent_returns_not_found() {
+        let conn = test_db();
+        assert!(matches!(
+            update_title(&conn, 999, "Title"),
+            Err(CmsError::ArticleNotFound(999))
+        ));
+    }
+
+    // --- update_tags edge cases ---
+
+    #[test]
+    fn update_tags_with_empty_array_clears_tags() {
+        let conn = test_db();
+        let article = create_article(&conn, "Tagged").unwrap();
+        update_tags(&conn, article.id, &["rust".to_string()]).unwrap();
+        update_tags(&conn, article.id, &[]).unwrap();
+        let fetched = get_article(&conn, article.id).unwrap();
+        assert!(fetched.tags.is_empty());
+    }
+
+    #[test]
+    fn update_tags_strips_whitespace() {
+        let conn = test_db();
+        let article = create_article(&conn, "Tagged").unwrap();
+        update_tags(&conn, article.id, &["  rust  ".to_string(), " tdd ".to_string()]).unwrap();
+        let fetched = get_article(&conn, article.id).unwrap();
+        assert_eq!(fetched.tags, vec!["rust", "tdd"]);
+    }
+
+    // --- build_markdown edge cases ---
+
+    #[test]
+    fn build_markdown_draft_without_date() {
+        let article = Article {
+            id: 1,
+            title: "Draft Post".to_string(),
+            slug: "draft-post".to_string(),
+            content: "Work in progress.".to_string(),
+            status: Status::Draft,
+            language: "en".to_string(),
+            pinned: false,
+            tags: vec![],
+            published_at: None,
+            created_at: "2026-03-29".to_string(),
+            updated_at: "2026-03-29".to_string(),
+        };
+        let md = build_markdown(&article, "date");
+        assert!(md.starts_with("---\n"));
+        assert!(md.contains("title: Draft Post"));
+        assert!(!md.contains("date:"));
+        assert!(!md.contains("tags:"));
+        assert!(!md.contains("language:"));
+        assert!(md.contains("Work in progress."));
+    }
+
+    #[test]
+    fn build_markdown_non_english_includes_language() {
+        let article = Article {
+            id: 1,
+            title: "Post".to_string(),
+            slug: "post".to_string(),
+            content: "Body.".to_string(),
+            status: Status::Published,
+            language: "pt".to_string(),
+            pinned: false,
+            tags: vec![],
+            published_at: Some("2026-03-29".to_string()),
+            created_at: "2026-03-29".to_string(),
+            updated_at: "2026-03-29".to_string(),
+        };
+        let md = build_markdown(&article, "date");
+        assert!(md.contains("language: pt"));
+    }
+
+    // --- create_article edge cases ---
+
+    #[test]
+    fn create_article_with_special_chars_slugifies() {
+        let conn = test_db();
+        let article = create_article(&conn, "C++ & Rust: A Comparison!").unwrap();
+        assert_eq!(article.slug, "c-rust-a-comparison");
+    }
+
+    // --- list_articles edge cases ---
+
+    #[test]
+    fn list_articles_search_returns_empty_on_no_match() {
+        let conn = test_db();
+        create_article(&conn, "Rust Guide").unwrap();
+        let results = list_articles(&conn, Some("Python")).unwrap();
+        assert!(results.is_empty());
+    }
+
+    #[test]
+    fn list_articles_empty_db() {
+        let conn = test_db();
+        let results = list_articles(&conn, None).unwrap();
+        assert!(results.is_empty());
+    }
+
     // --- slugify ---
 
     #[test]
