@@ -269,6 +269,7 @@ fn run_loop(
     let chrome_available = chrome.is_some();
     let mut html_rendering = false;
     let mut chrome_error: Option<String> = None;
+    let mut html_stale = true; // content changed since last HTML render
 
     // Debounce preview re-render
     let mut content_changed_at: Option<std::time::Instant> = None;
@@ -291,6 +292,7 @@ fn run_loop(
                     last_content = new_content;
                     content_changed_at = Some(std::time::Instant::now());
                     preview_stale = true;
+                    html_stale = true;
                 }
             }
         }
@@ -313,6 +315,8 @@ fn run_loop(
             }
         }
 
+        let vim_state = parse_title(parser);
+
         // Pick up Chrome result (non-blocking)
         if preview_mode == PreviewMode::Html {
             if let Some(ch) = chrome {
@@ -327,14 +331,21 @@ fn run_loop(
                                     drop(img);
                                     let image_rows = (h / font_h.max(1)) as u16;
                                     log::debug!("Chrome image: {}x{} px, font_h={}, image_rows={}", w, h, font_h, image_rows);
-                                    // Preserve scroll position across refreshes.
-                                    let prev_scroll = kitty_image.as_ref().map(|k| k.scroll_row).unwrap_or(0);
-                                    // Drop old image BEFORE transmitting new one (same ID).
                                     drop(kitty_image.take());
                                     match KittyImage::transmit(&png_bytes, w, h) {
                                         Ok(mut ki) => {
                                             ki.set_max_rows(image_rows);
-                                            ki.scroll_row = prev_scroll;
+                                            // Follow cursor to new image position
+                                            let visible = terminal.size()
+                                                .map(|s| s.height.saturating_sub(4))
+                                                .unwrap_or(30);
+                                            let ratio = vim_state.cursor_line as f64
+                                                / vim_state.total_lines.max(1) as f64;
+                                            let target = (ratio * ki.max_rows() as f64) as u16;
+                                            ki.scroll_row = target.saturating_sub(visible / 2);
+                                            ki.scroll_row = ki.scroll_row.min(
+                                                ki.max_rows().saturating_sub(visible),
+                                            );
                                             kitty_image = Some(ki);
                                             html_rendering = false;
                                             chrome_error = None;
@@ -360,7 +371,6 @@ fn run_loop(
             }
         }
 
-        let vim_state = parse_title(parser);
         let (mode_label, mode_st) = mode_style(vim_state.mode);
 
         // Detect :w (modified transitions from true to false)
@@ -385,20 +395,14 @@ fn run_loop(
                     let vw = viewport_width(terminal, picker);
                     ch.send_html(html, vw);
                     html_rendering = true;
+                    html_stale = false;
                 }
             }
 
-            // Follow cursor in preview
-            let pw = (terminal.size()?.width / 2).saturating_sub(2) as usize;
-            let vr = terminal.size()?.height.saturating_sub(4) as usize;
-            if preview_mode == PreviewMode::Html {
-                if let Some(ref mut ki) = kitty_image {
-                    let ratio = vim_state.cursor_line as f64 / vim_state.total_lines.max(1) as f64;
-                    let target_row = (ratio * ki.max_rows() as f64) as u16;
-                    ki.scroll_row = target_row.saturating_sub(vr as u16 / 2);
-                    ki.scroll_row = ki.scroll_row.min(ki.max_rows().saturating_sub(vr as u16));
-                }
-            } else {
+            // Follow cursor in text preview (HTML follows when new image arrives)
+            if preview_mode != PreviewMode::Html {
+                let pw = (terminal.size()?.width / 2).saturating_sub(2) as usize;
+                let vr = terminal.size()?.height.saturating_sub(4) as usize;
                 preview_scroll = follow_editor_cursor(
                     vim_state.cursor_line, vim_state.total_lines,
                     &cached_lines, &cached_offsets, pw, vr,
@@ -556,14 +560,13 @@ fn run_loop(
                         log::info!("Ctrl+P: toggling preview mode (current={:?})", preview_mode);
                         preview_mode = match preview_mode {
                             PreviewMode::Text => {
-                                // Only render if no image exists yet
-                                if kitty_image.is_none() {
+                                if html_stale {
                                     if let (Some(cfg), Some(ch)) = (html_config, chrome) {
                                         let html = render_html_preview(&last_content, cfg);
                                         let vw = viewport_width(terminal, picker);
-                                        log::info!("Sending HTML to Chrome ({}B, vw={})", html.len(), vw);
                                         ch.send_html(html, vw);
                                         html_rendering = true;
+                                        html_stale = false;
                                     }
                                 }
                                 PreviewMode::Html
