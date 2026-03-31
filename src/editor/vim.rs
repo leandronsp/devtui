@@ -305,15 +305,6 @@ fn run_loop(
                         cached_offsets = offsets;
                         cached_lines = lines;
                     }
-
-                    // Send to Chrome if in HTML mode
-                    if preview_mode == PreviewMode::Html {
-                        if let (Some(cfg), Some(ch)) = (html_config, chrome) {
-                            let html = render_html_preview(&last_content, cfg);
-                            ch.send_html(html);
-                            html_rendering = true;
-                        }
-                    }
                 }
             }
         }
@@ -447,7 +438,13 @@ fn run_loop(
             }
 
             // Status bar
-            let chrome_hint = if chrome_available { " ^P:html" } else { "" };
+            let chrome_hint = if !chrome_available {
+                ""
+            } else if preview_mode == PreviewMode::Html {
+                " ^P:text"
+            } else {
+                " ^P:html"
+            };
             let browser_hint = if html_config.is_some() { " ^O:browser" } else { "" };
             let scroll_hint = if split_layout != SplitLayout::EditorOnly {
                 " ^T:sync ^J/^K:scroll"
@@ -532,13 +529,10 @@ fn run_loop(
                                     log::info!("Sending HTML to Chrome ({}B)", html.len());
                                     ch.send_html(html);
                                     html_rendering = true;
-                                } else {
-                                    log::warn!("Ctrl+P: html_config={}, chrome={}", html_config.is_some(), chrome.is_some());
                                 }
                                 PreviewMode::Html
                             }
                             PreviewMode::Html => {
-                                // Delete Kitty image from terminal
                                 if let Some(ki) = kitty_image.take() {
                                     ki.delete();
                                 }
