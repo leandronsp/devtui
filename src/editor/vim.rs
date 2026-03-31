@@ -246,214 +246,269 @@ fn vim_size(layout: SplitLayout, width: u16, height: u16) -> (u16, u16) {
     }
 }
 
-#[allow(clippy::too_many_arguments, clippy::borrowed_box)]
-fn run_loop(
-    terminal: &mut ratatui::DefaultTerminal,
-    parser: &Arc<RwLock<vt100::Parser>>,
-    pty_writer: &mut Box<dyn Write + Send>,
-    pty_master: &Box<dyn portable_pty::MasterPty + Send>,
-    vim_exited: &Arc<AtomicBool>,
-    file_display: &str,
-    content_swap: &Arc<Mutex<Option<String>>>,
-    html_config: Option<&HtmlPreviewConfig>,
-    chrome: Option<&ChromeHandle>,
-    picker: &ratatui_image::picker::Picker,
-) -> io::Result<()> {
-    let mut last_content = String::new();
-    let mut cached_lines: Vec<Line<'static>> = Vec::new();
-    let mut cached_offsets: Vec<u16> = Vec::new();
-    let mut preview_mode = PreviewMode::Text;
-    let mut kitty_image: Option<KittyImage> = None;
-    let mut split_layout = SplitLayout::Vertical;
-    let mut preview_scroll: u16 = 0;
-    let chrome_available = chrome.is_some();
-    let mut html_rendering = false;
-    let mut chrome_error: Option<String> = None;
-    let mut html_stale = true; // content changed since last HTML render
+/// All mutable state owned by the run loop. Extracted to allow splitting the loop body
+/// into focused methods without passing a dozen locals through each call.
+struct RunLoopState {
+    last_content: String,
+    cached_lines: Vec<Line<'static>>,
+    cached_offsets: Vec<u16>,
+    preview_mode: PreviewMode,
+    kitty_image: Option<KittyImage>,
+    split_layout: SplitLayout,
+    preview_scroll: u16,
+    chrome_available: bool,
+    html_rendering: bool,
+    chrome_error: Option<String>,
+    /// True when content changed since last HTML render was dispatched.
+    html_stale: bool,
+    /// Set when content changes; cleared after 100ms debounce fires.
+    content_changed_at: Option<std::time::Instant>,
+    preview_stale: bool,
+    flash: Option<(&'static str, std::time::Instant)>,
+    /// Tracks modified state across frames to detect :w saves.
+    was_modified: bool,
+}
 
-    // Debounce preview re-render
-    let mut content_changed_at: Option<std::time::Instant> = None;
-    let mut preview_stale = false;
-
-    // Flash message (e.g. "saved") with auto-dismiss
-    let mut flash: Option<(&'static str, std::time::Instant)> = None;
-    let mut was_modified = false; // track modified state transitions
-
-
-    loop {
-        if vim_exited.load(Ordering::Relaxed) {
-            break;
+impl RunLoopState {
+    fn new(chrome_available: bool) -> Self {
+        Self {
+            last_content: String::new(),
+            cached_lines: Vec::new(),
+            cached_offsets: Vec::new(),
+            preview_mode: PreviewMode::Text,
+            kitty_image: None,
+            split_layout: SplitLayout::Vertical,
+            preview_scroll: 0,
+            chrome_available,
+            html_rendering: false,
+            chrome_error: None,
+            html_stale: true,
+            content_changed_at: None,
+            preview_stale: false,
+            flash: None,
+            was_modified: false,
         }
+    }
 
-        // Pick up new content from swap buffer (non-blocking)
+    /// Pick up new content from the swap buffer (non-blocking). Marks preview and HTML
+    /// as stale when content changes so the debounce timer starts.
+    fn poll_content_swap(&mut self, content_swap: &Arc<Mutex<Option<String>>>) {
         if let Ok(mut slot) = content_swap.try_lock() {
             if let Some(new_content) = slot.take() {
-                if new_content != last_content {
-                    last_content = new_content;
-                    content_changed_at = Some(std::time::Instant::now());
-                    preview_stale = true;
-                    html_stale = true;
+                if new_content != self.last_content {
+                    self.last_content = new_content;
+                    self.content_changed_at = Some(std::time::Instant::now());
+                    self.preview_stale = true;
+                    self.html_stale = true;
                 }
             }
         }
+    }
 
-        // Debounced preview re-render: wait 100ms after last change
-        let mut content_updated = false;
-        if preview_stale {
-            if let Some(changed_at) = content_changed_at {
-                if changed_at.elapsed() >= std::time::Duration::from_millis(100) {
-                    preview_stale = false;
-                    content_changed_at = None;
-                    content_updated = true;
-
-                    if split_layout != SplitLayout::EditorOnly {
-                        let (lines, offsets) = preview::render_with_offsets(&last_content);
-                        cached_offsets = offsets;
-                        cached_lines = lines;
-                    }
-                }
-            }
+    /// Debounced preview re-render: waits 100ms after the last content change before
+    /// rebuilding the ratatui line cache, avoiding re-renders on every keystroke.
+    fn poll_preview_render(&mut self) -> bool {
+        if !self.preview_stale {
+            return false;
+        }
+        let Some(changed_at) = self.content_changed_at else { return false };
+        if changed_at.elapsed() < std::time::Duration::from_millis(100) {
+            return false;
         }
 
-        let vim_state = parse_title(parser);
+        self.preview_stale = false;
+        self.content_changed_at = None;
 
-        // Pick up Chrome result (non-blocking)
-        if preview_mode == PreviewMode::Html {
-            if let Some(ch) = chrome {
-                if let Some(result) = ch.try_recv() {
-                    match result {
-                        ChromeResult::Image(png_bytes) => {
-                            match image::load_from_memory(&png_bytes) {
-                                Ok(img) => {
-                                    let font_h = picker.font_size().1 as u32;
-                                    let w = img.width();
-                                    let h = img.height();
-                                    drop(img);
-                                    let image_rows = (h / font_h.max(1)) as u16;
-                                    log::debug!("Chrome image: {}x{} px, font_h={}, image_rows={}", w, h, font_h, image_rows);
-                                    drop(kitty_image.take());
-                                    match KittyImage::transmit(&png_bytes, w, h) {
-                                        Ok(mut ki) => {
-                                            ki.set_max_rows(image_rows);
-                                            // Follow cursor to new image position
-                                            let visible = terminal.size()
-                                                .map(|s| s.height.saturating_sub(4))
-                                                .unwrap_or(30);
-                                            let ratio = vim_state.cursor_line as f64
-                                                / vim_state.total_lines.max(1) as f64;
-                                            let target = (ratio * ki.max_rows() as f64) as u16;
-                                            ki.scroll_row = target.saturating_sub(visible / 2);
-                                            ki.scroll_row = ki.scroll_row.min(
-                                                ki.max_rows().saturating_sub(visible),
-                                            );
-                                            kitty_image = Some(ki);
-                                            html_rendering = false;
-                                            chrome_error = None;
-                                        }
-                                        Err(e) => {
-                                            log::error!("Kitty transmit failed: {}", e);
-                                            chrome_error = Some(format!("Kitty transmit failed: {e}"));
-                                            html_rendering = false;
-                                        }
-                                    }
-                                }
-                                Err(e) => {
-                                    log::error!("Failed to decode Chrome PNG: {}", e);
-                                }
+        if self.split_layout != SplitLayout::EditorOnly {
+            let (lines, offsets) = preview::render_with_offsets(&self.last_content);
+            self.cached_offsets = offsets;
+            self.cached_lines = lines;
+        }
+        true
+    }
+
+    /// Pick up a pending Chrome screenshot result (non-blocking). On success, stores the
+    /// new KittyImage and positions the scroll to follow the current cursor. On error,
+    /// stores the error message for display in the preview pane.
+    fn poll_chrome_result(
+        &mut self,
+        vim_state: &VimState,
+        terminal: &ratatui::DefaultTerminal,
+        chrome: Option<&ChromeHandle>,
+        picker: &ratatui_image::picker::Picker,
+    ) {
+        if self.preview_mode != PreviewMode::Html {
+            return;
+        }
+        let Some(ch) = chrome else { return };
+        let Some(result) = ch.try_recv() else { return };
+
+        match result {
+            ChromeResult::Image(png_bytes) => {
+                match image::load_from_memory(&png_bytes) {
+                    Ok(img) => {
+                        let font_h = picker.font_size().1 as u32;
+                        let w = img.width();
+                        let h = img.height();
+                        drop(img);
+                        let image_rows = (h / font_h.max(1)) as u16;
+                        log::debug!("Chrome image: {}x{} px, font_h={}, image_rows={}", w, h, font_h, image_rows);
+                        drop(self.kitty_image.take());
+                        match KittyImage::transmit(&png_bytes, w, h) {
+                            Ok(mut ki) => {
+                                ki.set_max_rows(image_rows);
+                                // Follow cursor to new image position
+                                let visible = terminal.size()
+                                    .map(|s| s.height.saturating_sub(4))
+                                    .unwrap_or(30);
+                                let ratio = vim_state.cursor_line as f64
+                                    / vim_state.total_lines.max(1) as f64;
+                                let target = (ratio * ki.max_rows() as f64) as u16;
+                                ki.scroll_row = target.saturating_sub(visible / 2);
+                                ki.scroll_row = ki.scroll_row.min(ki.max_rows().saturating_sub(visible));
+                                self.kitty_image = Some(ki);
+                                self.html_rendering = false;
+                                self.chrome_error = None;
+                            }
+                            Err(e) => {
+                                log::error!("Kitty transmit failed: {}", e);
+                                self.chrome_error = Some(format!("Kitty transmit failed: {e}"));
+                                self.html_rendering = false;
                             }
                         }
-                        ChromeResult::Error(msg) => {
-                            chrome_error = Some(msg);
-                            html_rendering = false;
-                        }
+                    }
+                    Err(e) => {
+                        log::error!("Failed to decode Chrome PNG: {}", e);
                     }
                 }
             }
+            ChromeResult::Error(msg) => {
+                self.chrome_error = Some(msg);
+                self.html_rendering = false;
+            }
         }
+    }
 
-        let (mode_label, mode_st) = mode_style(vim_state.mode);
-
-        // Detect :w (modified transitions from true to false)
-        if was_modified && !vim_state.modified {
-            flash = Some(("saved", std::time::Instant::now()));
+    /// Detect a `:w` save (modified flag transitions true -> false). Shows "saved" flash,
+    /// reopens the preview pane if it was hidden, and triggers a preview refresh.
+    #[allow(clippy::borrowed_box, clippy::too_many_arguments)]
+    fn handle_save_detected(
+        &mut self,
+        vim_state: &VimState,
+        terminal: &mut ratatui::DefaultTerminal,
+        pty_master: &Box<dyn portable_pty::MasterPty + Send>,
+        parser: &Arc<RwLock<vt100::Parser>>,
+        html_config: Option<&HtmlPreviewConfig>,
+        chrome: Option<&ChromeHandle>,
+        picker: &ratatui_image::picker::Picker,
+    ) -> io::Result<()> {
+        if self.was_modified && !vim_state.modified {
+            self.flash = Some(("saved", std::time::Instant::now()));
 
             // Open preview if hidden
-            if split_layout == SplitLayout::EditorOnly {
-                split_layout = SplitLayout::Vertical;
-                resize_pty(split_layout, terminal, pty_master, parser)?;
+            if self.split_layout == SplitLayout::EditorOnly {
+                self.split_layout = SplitLayout::Vertical;
+                resize_pty(self.split_layout, terminal, pty_master, parser)?;
             }
 
             // Refresh text preview
-            let (lines, offsets) = preview::render_with_offsets(&last_content);
-            cached_offsets = offsets;
-            cached_lines = lines;
+            let (lines, offsets) = preview::render_with_offsets(&self.last_content);
+            self.cached_offsets = offsets;
+            self.cached_lines = lines;
 
             // Refresh HTML preview
-            if preview_mode == PreviewMode::Html {
+            if self.preview_mode == PreviewMode::Html {
                 if let (Some(cfg), Some(ch)) = (html_config, chrome) {
-                    let html = render_html_preview(&last_content, cfg);
+                    let html = render_html_preview(&self.last_content, cfg);
                     let vw = viewport_width(terminal, picker);
                     ch.send_html(html, vw);
-                    html_rendering = true;
-                    html_stale = false;
+                    self.html_rendering = true;
+                    self.html_stale = false;
                 }
             }
 
             // Follow cursor in text preview (HTML follows when new image arrives)
-            if preview_mode != PreviewMode::Html {
-                let pw = (terminal.size()?.width / 2).saturating_sub(2) as usize;
-                let vr = terminal.size()?.height.saturating_sub(4) as usize;
-                preview_scroll = follow_editor_cursor(
+            if self.preview_mode != PreviewMode::Html {
+                let size = terminal.size()?;
+                let pw = (size.width / 2).saturating_sub(2) as usize;
+                let vr = size.height.saturating_sub(4) as usize;
+                self.preview_scroll = follow_editor_cursor(
                     vim_state.cursor_line, vim_state.total_lines,
-                    &cached_lines, &cached_offsets, pw, vr,
+                    &self.cached_lines, &self.cached_offsets, pw, vr,
                 );
             }
         }
-        was_modified = vim_state.modified;
+        self.was_modified = vim_state.modified;
+        Ok(())
+    }
 
-        // Auto-dismiss flash after 2s
-        if let Some((_, at)) = &flash {
+    /// Auto-dismiss the "saved" flash after 2 seconds.
+    fn manage_flash(&mut self) {
+        if let Some((_, at)) = &self.flash {
             if at.elapsed() > std::time::Duration::from_secs(2) {
-                flash = None;
+                self.flash = None;
             }
         }
+    }
 
-        // Build title message from flash or modified state
-        let title_message = if let Some((msg, _)) = &flash {
-            *msg
+    /// Return the text shown in the editor title bar: flash message, modified marker, or empty.
+    fn title_message(&self, vim_state: &VimState) -> &'static str {
+        if let Some((msg, _)) = &self.flash {
+            msg
         } else if vim_state.modified {
             "[+]"
         } else {
             ""
-        };
+        }
+    }
 
-
-        // Calculate actual visual lines after word-wrap based on pane width.
-        let pane_width = match split_layout {
+    /// Compute scroll info needed for rendering: pane width, visible rows, max scroll,
+    /// and clamped scroll. Also auto-follows the cursor when content just updated.
+    fn calculate_scroll(
+        &mut self,
+        terminal: &ratatui::DefaultTerminal,
+        vim_state: &VimState,
+        content_updated: bool,
+    ) -> io::Result<ScrollInfo> {
+        let pane_width = match self.split_layout {
             SplitLayout::Vertical => (terminal.size()?.width / 2).saturating_sub(2),
             SplitLayout::EditorOnly => 1,
         } as usize;
-        let visual_lines: usize = cached_lines.iter().map(|line| {
+        let visual_lines: usize = self.cached_lines.iter().map(|line| {
             let w = line.width();
             if w == 0 { 1 } else { w.div_ceil(pane_width) }
         }).sum();
         let visible_rows = terminal.size()?.height.saturating_sub(4) as usize;
         let max_scroll = visual_lines.saturating_sub(visible_rows) as u16;
+
         // Auto-follow cursor in text preview when content changes
-        if content_updated && preview_mode == PreviewMode::Text && split_layout == SplitLayout::Vertical {
-            preview_scroll = follow_editor_cursor(
+        if content_updated && self.preview_mode == PreviewMode::Text && self.split_layout == SplitLayout::Vertical {
+            self.preview_scroll = follow_editor_cursor(
                 vim_state.cursor_line, vim_state.total_lines,
-                &cached_lines, &cached_offsets, pane_width, visible_rows,
+                &self.cached_lines, &self.cached_offsets, pane_width, visible_rows,
             );
         }
-        let clamped_scroll = preview_scroll.min(max_scroll);
 
-        let layout_label = match split_layout {
+        Ok(ScrollInfo { pane_width, visible_rows, max_scroll, clamped_scroll: self.preview_scroll.min(max_scroll) })
+    }
+
+    /// Draw one frame: editor pane, optional preview pane, and the status bar.
+    fn draw_frame(
+        &self,
+        terminal: &mut ratatui::DefaultTerminal,
+        parser: &Arc<RwLock<vt100::Parser>>,
+        vim_state: &VimState,
+        scroll: &ScrollInfo,
+        file_display: &str,
+        html_config: Option<&HtmlPreviewConfig>,
+    ) -> io::Result<Rect> {
+        let (mode_label, mode_st) = mode_style(vim_state.mode);
+        let title_message = self.title_message(vim_state);
+        let layout_label = match self.split_layout {
             SplitLayout::Vertical => "|",
             SplitLayout::EditorOnly => "[]",
         };
-
-        let preview_mode_label = match preview_mode {
+        let preview_mode_label = match self.preview_mode {
             PreviewMode::Text => "TEXT",
             PreviewMode::Html => "HTML",
         };
@@ -471,7 +526,7 @@ fn run_loop(
             let main_area = status_split[0];
             let status_area = status_split[1];
 
-            match split_layout {
+            match self.split_layout {
                 SplitLayout::Vertical => {
                     let panes = Layout::horizontal([
                         Constraint::Percentage(50),
@@ -480,9 +535,9 @@ fn run_loop(
                     .split(main_area);
                     render_editor(frame, parser, mode_label, mode_st, title_message, panes[0]);
                     render_preview(
-                        frame, &cached_lines, clamped_scroll, preview_mode,
-                        preview_mode_label, &kitty_image,
-                        html_rendering, &chrome_error, panes[1],
+                        frame, &self.cached_lines, scroll.clamped_scroll, self.preview_mode,
+                        preview_mode_label, &self.kitty_image,
+                        self.html_rendering, &self.chrome_error, panes[1],
                     );
                     preview_area = panes[1];
                 }
@@ -492,15 +547,15 @@ fn run_loop(
             }
 
             // Status bar
-            let chrome_hint = if !chrome_available {
+            let chrome_hint = if !self.chrome_available {
                 ""
-            } else if preview_mode == PreviewMode::Html {
+            } else if self.preview_mode == PreviewMode::Html {
                 " ^P:text"
             } else {
                 " ^P:html"
             };
             let browser_hint = if html_config.is_some() { " ^O:browser" } else { "" };
-            let scroll_hint = if split_layout != SplitLayout::EditorOnly {
+            let scroll_hint = if self.split_layout != SplitLayout::EditorOnly {
                 " ^T:follow-cursor ^J/^K:scroll"
             } else {
                 ""
@@ -515,123 +570,176 @@ fn run_loop(
             frame.render_widget(Paragraph::new(status), status_area);
         })?;
 
+        Ok(preview_area)
+    }
+
+    /// Handle a single key event. Returns `true` if the loop should break (vim exited via write failure).
+    #[allow(clippy::borrowed_box, clippy::too_many_arguments)]
+    fn dispatch_key(
+        &mut self,
+        key: crossterm::event::KeyEvent,
+        terminal: &mut ratatui::DefaultTerminal,
+        pty_writer: &mut Box<dyn Write + Send>,
+        pty_master: &Box<dyn portable_pty::MasterPty + Send>,
+        parser: &Arc<RwLock<vt100::Parser>>,
+        vim_state: &VimState,
+        scroll: &ScrollInfo,
+        html_config: Option<&HtmlPreviewConfig>,
+        chrome: Option<&ChromeHandle>,
+        picker: &ratatui_image::picker::Picker,
+    ) -> io::Result<bool> {
+        let ctrl = key.modifiers.contains(KeyModifiers::CONTROL);
+
+        // Ctrl+G: toggle layout
+        if key.code == KeyCode::Char('g') && ctrl {
+            self.split_layout = match self.split_layout {
+                SplitLayout::Vertical => SplitLayout::EditorOnly,
+                SplitLayout::EditorOnly => SplitLayout::Vertical,
+            };
+            resize_pty(self.split_layout, terminal, pty_master, parser)?;
+            // Re-render preview content when coming back from EditorOnly
+            if self.split_layout != SplitLayout::EditorOnly && self.cached_lines.is_empty() {
+                let (lines, offsets) = preview::render_with_offsets(&self.last_content);
+                self.cached_offsets = offsets;
+                self.cached_lines = lines;
+            }
+            return Ok(false);
+        }
+
+        // Ctrl+T: follow editor cursor in preview
+        if key.code == KeyCode::Char('t') && ctrl && self.split_layout != SplitLayout::EditorOnly {
+            if self.preview_mode == PreviewMode::Html {
+                if let Some(ref mut ki) = self.kitty_image {
+                    let visible = terminal.size()?.height.saturating_sub(4);
+                    let ratio = vim_state.cursor_line as f64 / vim_state.total_lines.max(1) as f64;
+                    let target_row = (ratio * ki.max_rows() as f64) as u16;
+                    ki.scroll_row = target_row.saturating_sub(visible / 2);
+                    ki.scroll_row = ki.scroll_row.min(ki.max_rows().saturating_sub(visible));
+                }
+            } else {
+                self.preview_scroll = follow_editor_cursor(
+                    vim_state.cursor_line, vim_state.total_lines,
+                    &self.cached_lines, &self.cached_offsets, scroll.pane_width, scroll.visible_rows,
+                );
+            }
+            return Ok(false);
+        }
+
+        // Ctrl+P: toggle preview mode (text/html)
+        if key.code == KeyCode::Char('p') && ctrl && self.chrome_available {
+            log::info!("Ctrl+P: toggling preview mode (current={:?})", self.preview_mode);
+            self.preview_mode = match self.preview_mode {
+                PreviewMode::Text => {
+                    if self.html_stale {
+                        if let (Some(cfg), Some(ch)) = (html_config, chrome) {
+                            let html = render_html_preview(&self.last_content, cfg);
+                            let vw = viewport_width(terminal, picker);
+                            ch.send_html(html, vw);
+                            self.html_rendering = true;
+                            self.html_stale = false;
+                        }
+                    }
+                    PreviewMode::Html
+                }
+                PreviewMode::Html => PreviewMode::Text,
+            };
+            return Ok(false);
+        }
+
+        // Ctrl+O: open in browser
+        if key.code == KeyCode::Char('o') && ctrl {
+            if let Some(cfg) = html_config {
+                let html = render_html_preview(&self.last_content, cfg);
+                let tmp_html = std::env::temp_dir().join("devtui-preview.html");
+                let _ = std::fs::write(&tmp_html, &html);
+                let _ = std::process::Command::new("open").arg(&tmp_html).spawn();
+            }
+            return Ok(false);
+        }
+
+        // Ctrl+J: scroll preview down
+        if key.code == KeyCode::Char('j') && ctrl && self.split_layout != SplitLayout::EditorOnly {
+            if self.preview_mode == PreviewMode::Html {
+                if let Some(ref mut ki) = self.kitty_image {
+                    let visible = terminal.size()?.height.saturating_sub(4);
+                    ki.scroll_down(5, visible);
+                }
+            } else {
+                self.preview_scroll = self.preview_scroll.saturating_add(3).min(scroll.max_scroll);
+            }
+            return Ok(false);
+        }
+
+        // Ctrl+K: scroll preview up
+        if key.code == KeyCode::Char('k') && ctrl && self.split_layout != SplitLayout::EditorOnly {
+            if self.preview_mode == PreviewMode::Html {
+                if let Some(ref mut ki) = self.kitty_image {
+                    ki.scroll_up(5);
+                }
+            } else {
+                self.preview_scroll = self.preview_scroll.saturating_sub(3);
+            }
+            return Ok(false);
+        }
+
+        // Pass everything else to vim
+        if let Some(bytes) = key_to_bytes(key.code, key.modifiers) {
+            if pty_writer.write_all(&bytes).is_err() {
+                return Ok(true); // signal break
+            }
+            let _ = pty_writer.flush();
+        }
+        Ok(false)
+    }
+}
+
+/// Scroll info computed once per frame and shared across draw and key handling.
+struct ScrollInfo {
+    pane_width: usize,
+    visible_rows: usize,
+    max_scroll: u16,
+    clamped_scroll: u16,
+}
+
+#[allow(clippy::too_many_arguments, clippy::borrowed_box)]
+fn run_loop(
+    terminal: &mut ratatui::DefaultTerminal,
+    parser: &Arc<RwLock<vt100::Parser>>,
+    pty_writer: &mut Box<dyn Write + Send>,
+    pty_master: &Box<dyn portable_pty::MasterPty + Send>,
+    vim_exited: &Arc<AtomicBool>,
+    file_display: &str,
+    content_swap: &Arc<Mutex<Option<String>>>,
+    html_config: Option<&HtmlPreviewConfig>,
+    chrome: Option<&ChromeHandle>,
+    picker: &ratatui_image::picker::Picker,
+) -> io::Result<()> {
+    let mut state = RunLoopState::new(chrome.is_some());
+
+    loop {
+        if vim_exited.load(Ordering::Relaxed) {
+            break;
+        }
+
+        state.poll_content_swap(content_swap);
+        let content_updated = state.poll_preview_render();
+        let vim_state = parse_title(parser);
+        state.poll_chrome_result(&vim_state, terminal, chrome, picker);
+        state.handle_save_detected(&vim_state, terminal, pty_master, parser, html_config, chrome, picker)?;
+        state.manage_flash();
+        let scroll = state.calculate_scroll(terminal, &vim_state, content_updated)?;
+        state.draw_frame(terminal, parser, &vim_state, &scroll, file_display, html_config)?;
+
         if event::poll(Duration::from_millis(30))? {
             match event::read()? {
                 Event::Key(key) => {
-                    let ctrl = key.modifiers.contains(KeyModifiers::CONTROL);
-
-                    // Ctrl+G: toggle preview
-                    if key.code == KeyCode::Char('g') && ctrl {
-                        split_layout = match split_layout {
-                            SplitLayout::Vertical => SplitLayout::EditorOnly,
-                            SplitLayout::EditorOnly => SplitLayout::Vertical,
-                        };
-                        resize_pty(split_layout, terminal, pty_master, parser)?;
-                        // Re-render preview content when coming back from EditorOnly
-                        if split_layout != SplitLayout::EditorOnly && cached_lines.is_empty() {
-                            let (lines, offsets) = preview::render_with_offsets(&last_content);
-                        cached_offsets = offsets;
-                            cached_lines = lines;
-                        }
-                        continue;
-                    }
-
-                    // Ctrl+T: follow editor cursor in preview
-                    if key.code == KeyCode::Char('t') && ctrl && split_layout != SplitLayout::EditorOnly {
-                        if preview_mode == PreviewMode::Html {
-                            if let Some(ref mut ki) = kitty_image {
-                                let visible = terminal.size()?.height.saturating_sub(4);
-                                let ratio = vim_state.cursor_line as f64 / vim_state.total_lines.max(1) as f64;
-                                let target_row = (ratio * ki.max_rows() as f64) as u16;
-                                ki.scroll_row = target_row.saturating_sub(visible / 2);
-                                ki.scroll_row = ki.scroll_row.min(ki.max_rows().saturating_sub(visible));
-                            }
-                        } else {
-                            preview_scroll = follow_editor_cursor(
-                                vim_state.cursor_line, vim_state.total_lines,
-                                &cached_lines, &cached_offsets, pane_width, visible_rows,
-                            );
-                        }
-                        continue;
-                    }
-
-                    // Ctrl+P: toggle preview mode (text/html)
-                    if key.code == KeyCode::Char('p') && ctrl && chrome_available {
-                        log::info!("Ctrl+P: toggling preview mode (current={:?})", preview_mode);
-                        preview_mode = match preview_mode {
-                            PreviewMode::Text => {
-                                if html_stale {
-                                    if let (Some(cfg), Some(ch)) = (html_config, chrome) {
-                                        let html = render_html_preview(&last_content, cfg);
-                                        let vw = viewport_width(terminal, picker);
-                                        ch.send_html(html, vw);
-                                        html_rendering = true;
-                                        html_stale = false;
-                                    }
-                                }
-                                PreviewMode::Html
-                            }
-                            PreviewMode::Html => {
-                                PreviewMode::Text
-                            }
-                        };
-                        continue;
-                    }
-
-                    // Ctrl+O: open in browser
-                    if key.code == KeyCode::Char('o') && ctrl {
-                        if let Some(cfg) = html_config {
-                            let html = render_html_preview(&last_content, cfg);
-                            let tmp_html = std::env::temp_dir().join("devtui-preview.html");
-                            let _ = std::fs::write(&tmp_html, &html);
-                            let _ = std::process::Command::new("open")
-                                .arg(&tmp_html)
-                                .spawn();
-                        }
-                        continue;
-                    }
-
-                    // Ctrl+J: scroll preview down
-                    if key.code == KeyCode::Char('j') && ctrl && split_layout != SplitLayout::EditorOnly {
-                        if preview_mode == PreviewMode::Html {
-                            if let Some(ref mut ki) = kitty_image {
-                                let visible = terminal.size()?.height.saturating_sub(4);
-                                ki.scroll_down(5, visible);
-                            }
-                        } else {
-                            preview_scroll = preview_scroll.saturating_add(3).min(max_scroll);
-                        }
-                        continue;
-                    }
-
-                    // Ctrl+K: scroll preview up
-                    if key.code == KeyCode::Char('k') && ctrl && split_layout != SplitLayout::EditorOnly {
-                        if preview_mode == PreviewMode::Html {
-                            if let Some(ref mut ki) = kitty_image {
-                                ki.scroll_up(5);
-                            }
-                        } else {
-                            preview_scroll = preview_scroll.saturating_sub(3);
-                        }
-                        continue;
-                    }
-
-                    // Pass everything else to vim
-                    if let Some(bytes) = key_to_bytes(key.code, key.modifiers) {
-                        if pty_writer.write_all(&bytes).is_err() {
-                            break;
-                        }
-                        let _ = pty_writer.flush();
+                    if state.dispatch_key(key, terminal, pty_writer, pty_master, parser, &vim_state, &scroll, html_config, chrome, picker)? {
+                        break;
                     }
                 }
                 Event::Resize(width, height) => {
-                    let (cols, rows) = vim_size(split_layout, width, height);
-                    let _ = pty_master.resize(PtySize {
-                        rows,
-                        cols,
-                        pixel_width: 0,
-                        pixel_height: 0,
-                    });
+                    let (cols, rows) = vim_size(state.split_layout, width, height);
+                    let _ = pty_master.resize(PtySize { rows, cols, pixel_width: 0, pixel_height: 0 });
                     if let Ok(mut p) = parser.write() {
                         p.set_size(rows, cols);
                     }
