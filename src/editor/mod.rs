@@ -39,13 +39,15 @@ pub fn run_cms(blog_dir: PathBuf) -> io::Result<()> {
     let picker = ratatui_image::picker::Picker::from_query_stdio()
         .unwrap_or_else(|_| ratatui_image::picker::Picker::halfblocks());
 
-    // Chrome viewport width matches the preview pane pixel width.
-    // Height doesn't matter: we capture full-page and crop client-side.
+    // Chrome viewport in CSS pixels, screenshot at device scale for crisp Retina rendering.
+    // Retina displays report ~16-20 physical px/cell; non-Retina ~7-10. Threshold at 12.
     let term_size = crossterm::terminal::size().unwrap_or((120, 40));
     let font_size = picker.font_size();
     let pane_cols = term_size.0 / 2;
-    let viewport_width = pane_cols as u32 * font_size.0 as u32;
-    let chrome = ChromeHandle::try_spawn(viewport_width);
+    let physical_width = pane_cols as u32 * font_size.0 as u32;
+    let scale: f64 = if font_size.0 > 12 { 2.0 } else { 1.0 };
+    let viewport_css = (physical_width as f64 / scale) as u32;
+    let chrome = ChromeHandle::try_spawn(viewport_css, scale);
 
     let mut terminal = ratatui::init();
     let result = cms_loop(&mut terminal, &conn, &cfg, &blog_dir, html_config.as_ref(), chrome.as_ref(), &picker);

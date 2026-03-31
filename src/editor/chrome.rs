@@ -21,7 +21,7 @@ pub struct ChromeHandle {
 }
 
 impl ChromeHandle {
-    pub fn try_spawn(viewport_width: u32) -> Option<Self> {
+    pub fn try_spawn(viewport_width: u32, screenshot_scale: f64) -> Option<Self> {
         find_chrome()?;
 
         let running = Arc::new(AtomicBool::new(true));
@@ -31,7 +31,7 @@ impl ChromeHandle {
         let (result_tx, result_rx) = mpsc::channel::<ChromeResult>();
 
         thread::spawn(move || {
-            chrome_thread(cmd_rx, result_tx, running_thread, viewport_width);
+            chrome_thread(cmd_rx, result_tx, running_thread, viewport_width, screenshot_scale);
         });
 
         Some(Self { cmd_tx, result_rx, running })
@@ -74,6 +74,7 @@ fn chrome_thread(
     result_tx: mpsc::Sender<ChromeResult>,
     running: Arc<AtomicBool>,
     viewport_width: u32,
+    screenshot_scale: f64,
 ) {
     let (mut browser, mut tab) = match launch_browser(viewport_width) {
         Some(bt) => bt,
@@ -95,7 +96,7 @@ fn chrome_thread(
             html = newer;
         }
 
-        if let Some(bytes) = full_page_screenshot(&tab, &html) {
+        if let Some(bytes) = full_page_screenshot(&tab, &html, screenshot_scale) {
             let _ = result_tx.send(ChromeResult::Image(bytes));
             continue;
         }
@@ -108,7 +109,7 @@ fn chrome_thread(
             if let Some((new_browser, new_tab)) = launch_browser(viewport_width) {
                 browser = new_browser;
                 tab = new_tab;
-                if let Some(bytes) = full_page_screenshot(&tab, &html) {
+                if let Some(bytes) = full_page_screenshot(&tab, &html, screenshot_scale) {
                     let _ = result_tx.send(ChromeResult::Image(bytes));
                     recovered = true;
                     break;
@@ -123,7 +124,7 @@ fn chrome_thread(
     drop(browser);
 }
 
-fn full_page_screenshot(tab: &Arc<Tab>, html: &str) -> Option<Vec<u8>> {
+fn full_page_screenshot(tab: &Arc<Tab>, html: &str, scale: f64) -> Option<Vec<u8>> {
     let id = FILE_COUNTER.fetch_add(1, Ordering::Relaxed);
     let tmp_path = std::env::temp_dir().join(format!("devtui-chrome-{id}.html"));
     std::fs::write(&tmp_path, html).ok()?;
@@ -133,9 +134,9 @@ fn full_page_screenshot(tab: &Arc<Tab>, html: &str) -> Option<Vec<u8>> {
     tab.wait_until_navigated().ok()?;
     thread::sleep(std::time::Duration::from_millis(200));
 
-    // Get maximum content height from all possible sources
+    // Get actual content height (body only, not viewport-inflated documentElement)
     let height = tab
-        .evaluate("Math.max(document.body.scrollHeight, document.body.offsetHeight, document.documentElement.scrollHeight, document.documentElement.offsetHeight)", false)
+        .evaluate("Math.max(document.body.scrollHeight, document.body.offsetHeight)", false)
         .ok()
         .and_then(|r| r.value)
         .and_then(|v| v.as_f64())
@@ -153,7 +154,7 @@ fn full_page_screenshot(tab: &Arc<Tab>, html: &str) -> Option<Vec<u8>> {
         y: 0.0,
         width,
         height,
-        scale: 1.0,
+        scale,
     };
 
     let result = tab
