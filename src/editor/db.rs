@@ -340,7 +340,7 @@ pub fn import_from_filesystem(
                 Some(id) => {
                     conn.execute(
                         "UPDATE articles SET title = ?1, content = ?2, language = ?3, tags = ?4,
-                         status = 'published', published_at = COALESCE(?5, published_at),
+                         status = 'published', published_at = COALESCE(published_at, ?5),
                          updated_at = datetime('now')
                          WHERE id = ?6",
                         params![title, body, language, tags_str.replace(' ', ","), date, id],
@@ -810,6 +810,34 @@ mod tests {
         let after = list_articles(&conn, None).unwrap();
         assert_eq!(after.len(), 1);
         assert_eq!(after[0].status, Status::Draft);
+    }
+
+    #[test]
+    fn import_does_not_override_existing_published_at() {
+        let conn = test_db();
+        let dir = tempdir();
+        // First import: DB has no row, file date wins.
+        fs::write(
+            dir.join("post.md"),
+            "---\ntitle: Post\ndate: 2024-01-15\n---\n\nv1.\n",
+        )
+        .unwrap();
+        import_from_filesystem(&conn, &dir, "date").unwrap();
+
+        // User edits the file with a different (wrong) date.
+        fs::write(
+            dir.join("post.md"),
+            "---\ntitle: Post\ndate: 2099-12-31\n---\n\nv2.\n",
+        )
+        .unwrap();
+        import_from_filesystem(&conn, &dir, "date").unwrap();
+
+        let articles = list_articles(&conn, None).unwrap();
+        assert_eq!(articles.len(), 1);
+        // Immutable: the DB date from the first import must win.
+        assert_eq!(articles[0].published_at.as_deref(), Some("2024-01-15"));
+        // Content still updates.
+        assert_eq!(articles[0].content, "v2.\n");
     }
 
     #[test]
