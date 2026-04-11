@@ -320,7 +320,7 @@ impl RunLoopState {
         self.content_changed_at = None;
 
         if self.split_layout != SplitLayout::EditorOnly {
-            let (lines, offsets) = preview::render_with_offsets(&self.last_content);
+            let (lines, offsets) = preview::render_with_offsets(&self.last_content, None);
             self.cached_offsets = offsets;
             self.cached_lines = lines;
         }
@@ -412,7 +412,7 @@ impl RunLoopState {
             }
 
             // Refresh text preview
-            let (lines, offsets) = preview::render_with_offsets(&self.last_content);
+            let (lines, offsets) = preview::render_with_offsets(&self.last_content, None);
             self.cached_offsets = offsets;
             self.cached_lines = lines;
 
@@ -599,7 +599,7 @@ impl RunLoopState {
             resize_pty(self.split_layout, terminal, pty_master, parser)?;
             // Re-render preview content when coming back from EditorOnly
             if self.split_layout != SplitLayout::EditorOnly && self.cached_lines.is_empty() {
-                let (lines, offsets) = preview::render_with_offsets(&self.last_content);
+                let (lines, offsets) = preview::render_with_offsets(&self.last_content, None);
                 self.cached_offsets = offsets;
                 self.cached_lines = lines;
             }

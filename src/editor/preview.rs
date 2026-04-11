@@ -33,7 +33,11 @@ fn frontmatter_field(content: &str, field: &str) -> Option<String> {
 
 /// Returns (rendered_lines, source_to_rendered_offset).
 /// source_to_rendered_offset[i] = how many rendered lines exist before source line i.
-pub fn render_with_offsets(content: &str) -> (Vec<Line<'static>>, Vec<u16>) {
+pub fn render_with_offsets(
+    content: &str,
+    author: Option<&str>,
+) -> (Vec<Line<'static>>, Vec<u16>) {
+    let _ = author;
     let title = frontmatter_field(content, "title");
     let subtitle = frontmatter_field(content, "subtitle");
     let original_line_count = content.lines().count().max(1);
@@ -320,7 +324,7 @@ mod tests {
     #[test]
     fn frontmatter_title_rendered_as_header_at_top() {
         let md = "---\ntitle: Hello World\n---\n\nBody.";
-        let (lines, _) = render_with_offsets(md);
+        let (lines, _) = render_with_offsets(md, None);
         assert_eq!(line_text(&lines[0]), "Hello World");
         assert_eq!(line_text(&lines[1]), "");
     }
@@ -328,7 +332,7 @@ mod tests {
     #[test]
     fn frontmatter_subtitle_rendered_under_title() {
         let md = "---\ntitle: Hello\nsubtitle: A short tagline\n---\n\nBody.";
-        let (lines, _) = render_with_offsets(md);
+        let (lines, _) = render_with_offsets(md, None);
         assert_eq!(line_text(&lines[0]), "Hello");
         assert_eq!(line_text(&lines[1]), "A short tagline");
         assert_eq!(line_text(&lines[2]), "");
@@ -346,7 +350,7 @@ mod tests {
         // The offset map must therefore be indexed by original lines, not
         // post-strip body lines.
         let md = "---\ntitle: Hello\n---\n\nBody paragraph";
-        let (_, offsets) = render_with_offsets(md);
+        let (_, offsets) = render_with_offsets(md, None);
         assert!(offsets.len() >= 6, "offset map too short: {}", offsets.len());
         assert_eq!(offsets[1], 0, "frontmatter line maps to header");
         assert!(offsets[4] >= 2, "body line must skip header: {}", offsets[4]);
@@ -355,7 +359,7 @@ mod tests {
     #[test]
     fn frontmatter_no_subtitle_keeps_blank_after_title() {
         let md = "---\ntitle: Hello\n---\n\nBody.";
-        let (lines, _) = render_with_offsets(md);
+        let (lines, _) = render_with_offsets(md, None);
         assert_eq!(line_text(&lines[0]), "Hello");
         assert_eq!(line_text(&lines[1]), "");
     }
@@ -363,21 +367,21 @@ mod tests {
     #[test]
     fn frontmatter_title_quoted_value_is_unquoted() {
         let md = "---\ntitle: \"Hello World\"\n---\n\nBody.";
-        let (lines, _) = render_with_offsets(md);
+        let (lines, _) = render_with_offsets(md, None);
         assert_eq!(line_text(&lines[0]), "Hello World");
     }
 
     #[test]
     fn no_title_header_when_no_frontmatter() {
         let md = "Just a plain body.";
-        let (lines, _) = render_with_offsets(md);
+        let (lines, _) = render_with_offsets(md, None);
         assert_eq!(line_text(&lines[0]), "Just a plain body.");
     }
 
     #[test]
     fn frontmatter_block_is_not_rendered_as_body() {
         let md = "---\ntitle: Hello\nsubtitle: World\n---\n\nReal body paragraph.";
-        let (lines, _) = render_with_offsets(md);
+        let (lines, _) = render_with_offsets(md, None);
         let combined: String = all_text(&lines).join("\n");
         assert!(!combined.contains("title: Hello"), "frontmatter leaked: {}", combined);
         assert!(!combined.contains("subtitle: World"), "subtitle leaked: {}", combined);
@@ -396,13 +400,13 @@ mod tests {
 
     #[test]
     fn empty_content_shows_placeholder() {
-        let (lines, _) = render_with_offsets("");
+        let (lines, _) = render_with_offsets("", None);
         assert_eq!(line_text(&lines[0]), "Start typing...");
     }
 
     #[test]
     fn plain_text_renders_as_paragraph() {
-        let (lines, _) = render_with_offsets("Hello world");
+        let (lines, _) = render_with_offsets("Hello world", None);
         assert_eq!(line_text(&lines[0]), "Hello world");
     }
 
@@ -410,7 +414,7 @@ mod tests {
 
     #[test]
     fn heading_h1() {
-        let (lines, _) = render_with_offsets("# Title");
+        let (lines, _) = render_with_offsets("# Title", None);
         let text = line_text(&lines[0]);
         assert!(text.contains("# "), "H1 prefix");
         assert!(text.contains("Title"));
@@ -419,19 +423,19 @@ mod tests {
 
     #[test]
     fn heading_h2() {
-        let (lines, _) = render_with_offsets("## Subtitle");
+        let (lines, _) = render_with_offsets("## Subtitle", None);
         assert!(line_text(&lines[0]).contains("## "));
     }
 
     #[test]
     fn heading_h3() {
-        let (lines, _) = render_with_offsets("### Section");
+        let (lines, _) = render_with_offsets("### Section", None);
         assert!(line_text(&lines[0]).contains("### "));
     }
 
     #[test]
     fn heading_h4() {
-        let (lines, _) = render_with_offsets("#### Deep");
+        let (lines, _) = render_with_offsets("#### Deep", None);
         assert!(line_text(&lines[0]).contains("#### "));
     }
 
@@ -439,35 +443,35 @@ mod tests {
 
     #[test]
     fn bold_text() {
-        let (lines, _) = render_with_offsets("Some **bold** here");
+        let (lines, _) = render_with_offsets("Some **bold** here", None);
         let text = line_text(&lines[0]);
         assert!(text.contains("bold"));
     }
 
     #[test]
     fn italic_text() {
-        let (lines, _) = render_with_offsets("Some *italic* here");
+        let (lines, _) = render_with_offsets("Some *italic* here", None);
         let text = line_text(&lines[0]);
         assert!(text.contains("italic"));
     }
 
     #[test]
     fn strikethrough_text() {
-        let (lines, _) = render_with_offsets("Some ~~deleted~~ here");
+        let (lines, _) = render_with_offsets("Some ~~deleted~~ here", None);
         let text = line_text(&lines[0]);
         assert!(text.contains("deleted"));
     }
 
     #[test]
     fn inline_code() {
-        let (lines, _) = render_with_offsets("Use `mix test` to run");
+        let (lines, _) = render_with_offsets("Use `mix test` to run", None);
         let text = line_text(&lines[0]);
         assert!(text.contains("`mix test`"));
     }
 
     #[test]
     fn mixed_formatting() {
-        let (lines, _) = render_with_offsets("**bold** and *italic* and `code`");
+        let (lines, _) = render_with_offsets("**bold** and *italic* and `code`", None);
         let text = line_text(&lines[0]);
         assert!(text.contains("bold"));
         assert!(text.contains("italic"));
@@ -478,7 +482,7 @@ mod tests {
 
     #[test]
     fn simple_list() {
-        let (lines, _) = render_with_offsets("- One\n- Two\n- Three");
+        let (lines, _) = render_with_offsets("- One\n- Two\n- Three", None);
         let texts = all_text(&lines);
         assert!(texts[0].contains("- ") && texts[0].contains("One"));
         assert!(texts[1].contains("- ") && texts[1].contains("Two"));
@@ -487,7 +491,7 @@ mod tests {
 
     #[test]
     fn nested_list_two_levels() {
-        let (lines, _) = render_with_offsets("- Parent\n  - Child A\n  - Child B");
+        let (lines, _) = render_with_offsets("- Parent\n  - Child A\n  - Child B", None);
         let texts = all_text(&lines);
         assert!(texts[0].contains("Parent"), "parent item");
         assert!(texts[1].contains("Child A"), "first child");
@@ -501,7 +505,7 @@ mod tests {
     #[test]
     fn nested_list_three_levels() {
         let md = "- L1\n  - L2\n    - L3";
-        let (lines, _) = render_with_offsets(md);
+        let (lines, _) = render_with_offsets(md, None);
         let texts = all_text(&lines);
         assert!(texts[0].contains("L1"));
         assert!(texts[1].contains("L2"));
@@ -515,7 +519,7 @@ mod tests {
     #[test]
     fn list_items_each_on_own_line() {
         let md = "- Alpha\n- Beta\n  - Gamma\n  - Delta\n- Epsilon";
-        let (lines, _) = render_with_offsets(md);
+        let (lines, _) = render_with_offsets(md, None);
         let texts = all_text(&lines);
         // No line should contain two item markers
         for text in &texts {
@@ -527,7 +531,7 @@ mod tests {
     #[test]
     fn nested_list_no_consecutive_blanks() {
         let md = "- Parent\n  - Child A\n  - Child B\n- Another\n  - Sub";
-        let (lines, _) = render_with_offsets(md);
+        let (lines, _) = render_with_offsets(md, None);
         let texts = all_text(&lines);
         for i in 1..texts.len() {
             if texts[i].is_empty() && texts[i - 1].is_empty() {
@@ -540,7 +544,7 @@ mod tests {
 
     #[test]
     fn blockquote_single_line() {
-        let (lines, _) = render_with_offsets("> Hello");
+        let (lines, _) = render_with_offsets("> Hello", None);
         let text = line_text(&lines[0]);
         assert!(text.contains(">"), "quote marker");
         assert!(text.contains("Hello"));
@@ -548,7 +552,7 @@ mod tests {
 
     #[test]
     fn blockquote_multiline() {
-        let (lines, _) = render_with_offsets("> Line one\n> Line two");
+        let (lines, _) = render_with_offsets("> Line one\n> Line two", None);
         let texts = all_text(&lines);
         assert!(texts[0].contains(">") && texts[0].contains("Line one"));
         assert!(texts[1].contains(">") && texts[1].contains("Line two"));
@@ -565,7 +569,7 @@ mod tests {
     #[test]
     fn fenced_code_block() {
         let md = "```\nlet x = 1;\nlet y = 2;\n```";
-        let (lines, _) = render_with_offsets(md);
+        let (lines, _) = render_with_offsets(md, None);
         let texts = all_text(&lines);
         // Each code line must be on its own rendered line
         assert!(texts.iter().any(|t| t == "let x = 1;"), "x on own line");
@@ -575,7 +579,7 @@ mod tests {
     #[test]
     fn code_block_with_language() {
         let md = "```rust\nfn main() {}\n```";
-        let (lines, _) = render_with_offsets(md);
+        let (lines, _) = render_with_offsets(md, None);
         let combined: String = all_text(&lines).join("\n");
         assert!(combined.contains("fn main()"));
     }
@@ -585,7 +589,7 @@ mod tests {
     #[test]
     fn horizontal_rule() {
         let md = "Above\n\n---\n\nBelow";
-        let (lines, _) = render_with_offsets(md);
+        let (lines, _) = render_with_offsets(md, None);
         let combined: String = all_text(&lines).join("\n");
         assert!(combined.contains("────"), "rule line");
         assert!(combined.contains("Above"));
@@ -597,7 +601,7 @@ mod tests {
     #[test]
     fn inline_link() {
         let md = "Visit [my site](https://example.com) today";
-        let (lines, _) = render_with_offsets(md);
+        let (lines, _) = render_with_offsets(md, None);
         let text = line_text(&lines[0]);
         assert!(text.contains("["), "link opening bracket");
         assert!(text.contains("my site"));
@@ -612,7 +616,7 @@ mod tests {
         // the source's vertical rhythm so vim and preview stay aligned while
         // scrolling, even though markdown semantically collapses whitespace.
         let md = "First\n\n\n\nSecond";
-        let (lines, _) = render_with_offsets(md);
+        let (lines, _) = render_with_offsets(md, None);
         let texts = all_text(&lines);
         assert!(texts[0].contains("First"));
         assert_eq!(texts[1], "");
@@ -624,7 +628,7 @@ mod tests {
     #[test]
     fn paragraphs_separated_by_blank_line() {
         let md = "First paragraph.\n\nSecond paragraph.";
-        let (lines, _) = render_with_offsets(md);
+        let (lines, _) = render_with_offsets(md, None);
         let texts = all_text(&lines);
         assert!(texts[0].contains("First"));
         assert_eq!(texts[1], "", "blank separator");
@@ -636,7 +640,7 @@ mod tests {
     #[test]
     fn offset_mapping_plain_lines() {
         let md = "line one\nline two\nline three";
-        let (_, offsets) = render_with_offsets(md);
+        let (_, offsets) = render_with_offsets(md, None);
         // Source line 0 -> rendered line 0
         assert_eq!(offsets[0], 0);
     }
@@ -644,7 +648,7 @@ mod tests {
     #[test]
     fn offset_mapping_with_heading() {
         let md = "# Title\n\nParagraph here";
-        let (lines, offsets) = render_with_offsets(md);
+        let (lines, offsets) = render_with_offsets(md, None);
         // Title renders to line 0, blank line at 1, paragraph at 2
         // Source line 2 ("Paragraph here") should map to rendered line 2
         assert!(offsets[2] >= 2, "paragraph offset after heading: {}", offsets[2]);
@@ -657,7 +661,7 @@ mod tests {
     #[test]
     fn full_article_renders_all_sections() {
         let md = std::fs::read_to_string("test-article.md").unwrap();
-        let (lines, offsets) = render_with_offsets(&md);
+        let (lines, offsets) = render_with_offsets(&md, None);
         let combined: String = all_text(&lines).join("\n");
 
         // All headings present
