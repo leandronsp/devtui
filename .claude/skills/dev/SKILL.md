@@ -96,6 +96,8 @@ git checkout -b feat/<short-name>
 
 ### The Loop
 
+**Invariant:** at any moment, there is at most ONE test in flight. The loop below is atomic per test. Do not start the next test until the current one has been committed.
+
 For each test case (one at a time):
 
 **Driver turn (you):** Write the failing test. Run `cargo test`. Confirm RED.
@@ -206,6 +208,8 @@ After the initial 2-3 tests, propose more as implementation reveals needs. Ask b
 
 You write code. The user thinks, questions, directs. Dojo style — the user is the sensei.
 
+**Critical:** In this mode, Iron Rule #11 ("Talk, don't ask") is INVERTED. You MUST ask and wait at every step. The user is your navigator, not a spectator. Never advance without explicit go-ahead. Never batch steps. Never write more than one test before the current one is committed. If you catch yourself writing code without an explicit "go" from the user, STOP and revert.
+
 ### Loop
 
 **Step 1: Propose test**
@@ -242,16 +246,21 @@ Write the minimum code agreed on. `cargo test`. Show GREEN.
 
 ### Driver Rules
 
-- Never advance without navigator input
-- Explain what you're doing and why
-- One test at a time
+- **Never advance without explicit navigator input.** Silence is not consent. A "yes", "go", "ok", "do it" is required between every step. If the user's last message doesn't contain go-ahead for the CURRENT step, STOP and ask.
+- **One test at a time. No batching, ever.** Do not write the next test until the previous one is RED → approved → GREEN → approved → committed.
+- **No combined steps.** Do not write test + implementation in the same turn. Do not write implementation + refactor in the same turn. Each step is its own turn and requires its own approval.
+- **Never "save time" by skipping approval.** Even if the next step seems obvious, ask. The point of the dojo is the conversation, not the code.
+- Explain what you're doing and why. Keep explanations short.
 - Navigator can ask for rename, move, refactor
+- If you realize mid-turn you already started writing multiple things, STOP, revert what's beyond the current step, and ask.
 
 ---
 
 ## Mode 5: User Driver + Agent Navigator
 
 The user writes code. You watch, question, provoke thinking, coach. You never write code unless explicitly asked.
+
+**Critical:** In this mode you NEVER touch production code. No Edit, no Write, no patches "to help". If the user asks "what should this look like?", answer with a question, not code. The only exception is an explicit "write it for me" or "give me the snippet". Even then, the smallest possible snippet. You also never run `/commit` or stage files. The driver drives. Full stop.
 
 ### Setup
 
@@ -283,7 +292,9 @@ On trigger: run `cargo test`, report RED/GREEN, restart watcher.
 
 ### Navigator Rules
 
-- Never write code unless asked
+- **Never write code unless the driver explicitly asks.** "What do you think?" is not asking for code. "Can you fix this?" IS. When in doubt, assume it's not an ask and respond with a question.
+- **Never use Edit or Write on source files.** Not even "just to illustrate". If you need to show code, paste it in a message as a snippet.
+- **Never run `/commit`, `git add`, or any mutating command on the driver's behalf.**
 - Don't suggest next steps unless asked
 - Don't explain what the code does (the driver wrote it)
 - Don't recap what changed
@@ -303,12 +314,13 @@ After each GREEN + refactor:
 2. **Baby steps.** One test, one behavior, one increment
 3. **Run `cargo test` after every change**
 4. **Refactor only when GREEN**
-5. **One test at a time.** No batching
-6. **Small commits.** After each RED-GREEN-REFACTOR cycle. Use `/commit`
-7. **Escalate, don't spin.** Ask the user when stuck after 5 attempts
-8. **No BDUF.** Let tests drive the design. The plan is the next test, not the whole feature
-9. **Feedback loop.** After initial tests, propose more as code reveals needs
-10. **Talk, don't ask.** After plan approval, go. Default to Mode 1. Narrate every baby step: what test, why, decisions, what's next. NEVER stop to wait for permission. No "Start with these?", "Your take?", "Should I proceed?". The user sees your narration and will interrupt if needed. Only stop if genuinely blocked (test won't pass after 5 attempts, contradictory requirements, missing critical info)
+5. **One test at a time. No batching.** Writing a second test before the previous one is RED → GREEN → REFACTOR → COMMITTED is a protocol violation. If you catch yourself writing `#[test] fn a()` and `#[test] fn b()` in the same edit, STOP and delete one.
+6. **Never skip the navigator.** In Mode 1 and Mode 2, every RED and every GREEN requires a navigator turn before advancing. No "I'll batch the review at the end". No "this is obvious, skipping review". The navigator is not optional.
+7. **Small commits.** After each RED-GREEN-REFACTOR cycle. Use `/commit`. The next test does not get written until the previous cycle is committed.
+8. **Escalate, don't spin.** Ask the user when stuck after 5 attempts
+9. **No BDUF.** Let tests drive the design. The plan is the next test, not the whole feature
+10. **Feedback loop.** After initial tests, propose more as code reveals needs
+11. **Talk, don't ask (Modes 1, 2, 3 ONLY).** After plan approval, go. Narrate every baby step: what test, why, decisions, what's next. NEVER stop to wait for permission on procedural questions ("Start with these?", "Your take?", "Should I proceed?"). BUT narration is not a license to skip the loop. Narrate AND run RED → navigator → GREEN → navigator → commit for each single test. Only stop if genuinely blocked (test won't pass after 5 attempts, contradictory requirements, missing critical info). **This rule DOES NOT apply to Modes 4 and 5.** Mode 4 requires explicit user approval at every step. Mode 5 forbids you from writing code at all unless explicitly asked.
 
 ## Pipeline
 
