@@ -363,6 +363,41 @@ mod tests {
     }
 
     #[test]
+    fn header_author_from_param_rendered_above_title() {
+        let md = "---\ntitle: Hello\n---\n\nBody.";
+        let (lines, _) = render_with_offsets(md, Some("Leandro"));
+        assert_eq!(line_text(&lines[0]), "Leandro");
+        assert_eq!(line_text(&lines[1]), "Hello");
+        assert_eq!(line_text(&lines[2]), "");
+    }
+
+    #[test]
+    fn header_author_from_frontmatter_overrides_param() {
+        let md = "---\ntitle: Hello\nauthor: Jane\n---\n\nBody.";
+        let (lines, _) = render_with_offsets(md, Some("Bob"));
+        assert_eq!(line_text(&lines[0]), "Jane");
+        assert_eq!(line_text(&lines[1]), "Hello");
+    }
+
+    #[test]
+    fn header_date_falls_back_to_date_field() {
+        let md = "---\ntitle: Hello\ndate: 2024-03-05\n---\n\nBody.";
+        let (lines, _) = render_with_offsets(md, None);
+        assert_eq!(line_text(&lines[0]), "Hello");
+        assert_eq!(line_text(&lines[1]), "2024-03-05");
+    }
+
+    #[test]
+    fn header_full_order_author_title_date() {
+        let md = "---\ntitle: Hello\npublished_at: \"2022-07-12\"\n---\n\nBody.";
+        let (lines, _) = render_with_offsets(md, Some("Leandro"));
+        assert_eq!(line_text(&lines[0]), "Leandro");
+        assert_eq!(line_text(&lines[1]), "Hello");
+        assert_eq!(line_text(&lines[2]), "2022-07-12");
+        assert_eq!(line_text(&lines[3]), "");
+    }
+
+    #[test]
     fn frontmatter_published_at_rendered_as_date_under_title() {
         let md = "---\ntitle: Hello\npublished_at: \"2022-07-12 06:11:29Z\"\n---\n\nBody.";
         let (lines, _) = render_with_offsets(md, None);
