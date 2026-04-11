@@ -326,7 +326,6 @@ pub fn import_from_filesystem(
             let date = config::frontmatter_date(date_field, &content);
             let language = config::frontmatter("language", &content).unwrap_or_else(|| "en".to_string());
             let tags_str = config::extract_tags(&content);
-            let body = config::post_body(&content).trim_start().to_string();
 
             let existing: Option<i64> = conn
                 .query_row(
@@ -343,7 +342,7 @@ pub fn import_from_filesystem(
                          status = 'published', published_at = COALESCE(published_at, ?5),
                          updated_at = datetime('now')
                          WHERE id = ?6",
-                        params![title, body, language, tags_str.replace(' ', ","), date, id],
+                        params![title, content, language, tags_str.replace(' ', ","), date, id],
                     )?;
                 }
                 None => {
@@ -353,7 +352,7 @@ pub fn import_from_filesystem(
                         params![
                             title,
                             slug,
-                            body,
+                            content,
                             language,
                             tags_str.replace(' ', ","),
                             date,
@@ -845,6 +844,22 @@ mod tests {
     }
 
     #[test]
+    fn import_stores_full_markdown_in_content() {
+        let conn = test_db();
+        let dir = tempdir();
+        fs::write(
+            dir.join("hello.md"),
+            "---\ntitle: Hello\ndate: 2026-04-11\n---\n\nBody text.\n",
+        )
+        .unwrap();
+        import_from_filesystem(&conn, &dir, "date").unwrap();
+        let articles = list_articles(&conn, None).unwrap();
+        assert!(articles[0].content.starts_with("---\n"), "{}", articles[0].content);
+        assert!(articles[0].content.contains("title: Hello"));
+        assert!(articles[0].content.contains("Body text."));
+    }
+
+    #[test]
     fn import_if_empty_skips_when_db_has_articles() {
         let conn = test_db();
         let dir = tempdir();
@@ -893,8 +908,9 @@ mod tests {
         assert_eq!(articles.len(), 1);
         // Immutable: the DB date from the first import must win.
         assert_eq!(articles[0].published_at.as_deref(), Some("2024-01-15"));
-        // Content still updates.
-        assert_eq!(articles[0].content, "v2.\n");
+        // Content still updates, stored verbatim including frontmatter.
+        assert!(articles[0].content.contains("v2.\n"));
+        assert!(articles[0].content.starts_with("---\n"));
     }
 
     #[test]
