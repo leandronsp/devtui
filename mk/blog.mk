@@ -20,6 +20,12 @@ blog.serve.%: blog.build.% ## Build and serve a blog on localhost:8000
 	@echo "  serving $* at http://localhost:8000"
 	@cargo run --release --bin devtui-engine -- serve dist/$*
 
+blog.theme.%: ## Set a blog theme (usage: make blog.theme.<name> THEME=terminal)
+	@test -n "$(THEME)" || (echo "usage: make blog.theme.$* THEME=paper|newspaper|terminal" && exit 1)
+	@test -d src/engine/themes/$(THEME) || (echo "unknown theme: $(THEME)" && exit 1)
+	@sed -i.bak -E 's/^theme = ".*"/theme = "$(THEME)"/' blogs/$*/blog.toml && rm blogs/$*/blog.toml.bak
+	@echo "  $* -> $(THEME)"
+
 blog.clean: ## Remove all generated files
 	@rm -rf dist
 

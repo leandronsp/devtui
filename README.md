@@ -7,9 +7,15 @@ Terminal markdown editor with live preview + multi-site static blog engine.
 Embeds vim via PTY with real-time markdown preview. Left pane is full vim. Right pane renders the markdown as you type.
 
 ```bash
-make editor.build
-./target/release/devtui mypost.md
+make editor.cms.<name>                                   # CMS list view for a blog (k9s-style)
+make editor.cms.acme-alchemist                           # example
+make editor.cms.leandronsp.com                           # example
+make editor.run FILE=mypost.md                           # edit a single markdown file
+make editor.build                                        # release build only
+make editor.test                                         # editor tests
 ```
+
+Run `make blog.list` to see available blog names.
 
 Position sync uses vim's `titlestring` (zero file I/O). Content sync debounced via `CursorHold`. Mode detected from the terminal title.
 
@@ -18,6 +24,16 @@ All vim keybindings work. `Ctrl+D`/`Ctrl+U` for half-page scroll, `G`/`gg` for t
 ## Blog Engine
 
 Multi-site static blog generator. See [docs/BLOG_ENGINE.md](docs/BLOG_ENGINE.md) for full documentation.
+
+```bash
+make blog.list            # list available blogs
+make blog.build           # build all blogs
+make blog.build.<name>    # build one blog
+make blog.serve.<name>    # build and serve on localhost:8000
+make blog.clean           # remove dist/
+make blog.theme.<name> THEME=paper|newspaper|terminal   # switch theme
+make deploy.cp.<name>     # build and rsync to blog repo
+```
 
 ### Showcase
 
@@ -28,7 +44,8 @@ Multi-site static blog generator. See [docs/BLOG_ENGINE.md](docs/BLOG_ENGINE.md)
 ## Development
 
 ```bash
-make test                     # all tests (149 tests, ~1s) + lint
+make help                     # list all targets
+make test                     # all tests + lint
 make editor.test              # editor tests only
 make blog.test                # engine tests only
 make lint                     # clippy
