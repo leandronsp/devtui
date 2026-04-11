@@ -20,6 +20,17 @@ fn strip_frontmatter(content: &str) -> &str {
     &rest[end + "\n---\n".len()..]
 }
 
+fn frontmatter_date(content: &str) -> Option<String> {
+    let raw = frontmatter_field(content, "published_at")
+        .or_else(|| frontmatter_field(content, "date"))?;
+    let head = raw.get(..10)?;
+    if head.chars().all(|c| c.is_ascii_digit() || c == '-') {
+        Some(head.to_string())
+    } else {
+        Some(raw)
+    }
+}
+
 fn frontmatter_field(content: &str, field: &str) -> Option<String> {
     let rest = content.strip_prefix("---\n")?;
     let end = rest.find("\n---\n")?;
@@ -37,14 +48,20 @@ pub fn render_with_offsets(
     content: &str,
     author: Option<&str>,
 ) -> (Vec<Line<'static>>, Vec<u16>) {
-    let _ = author;
+    let frontmatter_author = frontmatter_field(content, "author");
+    let header_author = frontmatter_author.as_deref().or(author);
     let title = frontmatter_field(content, "title");
+    let date = frontmatter_date(content);
     let original_line_count = content.lines().count().max(1);
     let body = strip_frontmatter(content);
     let frontmatter_line_count = original_line_count - body.lines().count().max(1);
     let content = body;
     let source_line_count = content.lines().count().max(1);
-    let header_len: u16 = if title.is_some() { 2 } else { 0 };
+    let has_header = header_author.is_some() || title.is_some() || date.is_some();
+    let header_len: u16 = header_author.is_some() as u16
+        + title.is_some() as u16
+        + date.is_some() as u16
+        + has_header as u16;
     let mut source_to_rendered: Vec<u16> = vec![header_len; source_line_count + 1];
 
     let options =
@@ -52,8 +69,17 @@ pub fn render_with_offsets(
 
     let parser = Parser::new_ext(content, options).into_offset_iter();
     let mut lines: Vec<Line<'static>> = Vec::new();
-    if let Some(title) = title {
-        lines.push(Line::from(Span::styled(title, h1_style())));
+    if has_header {
+        let dim = Style::default().fg(Color::DarkGray);
+        if let Some(author) = header_author {
+            lines.push(Line::from(Span::styled(author.to_string(), dim)));
+        }
+        if let Some(title) = title {
+            lines.push(Line::from(Span::styled(title, h1_style())));
+        }
+        if let Some(date) = date {
+            lines.push(Line::from(Span::styled(date, dim)));
+        }
         lines.push(Line::from(""));
     }
     let mut spans: Vec<Span<'static>> = Vec::new();
@@ -334,6 +360,15 @@ mod tests {
         assert!(offsets.len() >= 6, "offset map too short: {}", offsets.len());
         assert_eq!(offsets[1], 0, "frontmatter line maps to header");
         assert!(offsets[4] >= 2, "body line must skip header: {}", offsets[4]);
+    }
+
+    #[test]
+    fn frontmatter_published_at_rendered_as_date_under_title() {
+        let md = "---\ntitle: Hello\npublished_at: \"2022-07-12 06:11:29Z\"\n---\n\nBody.";
+        let (lines, _) = render_with_offsets(md, None);
+        assert_eq!(line_text(&lines[0]), "Hello");
+        assert_eq!(line_text(&lines[1]), "2022-07-12");
+        assert_eq!(line_text(&lines[2]), "");
     }
 
     #[test]
