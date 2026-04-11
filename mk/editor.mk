@@ -11,5 +11,8 @@ editor.run: ## Run editor (usage: make editor.run FILE=mypost.md)
 editor.cms.%: ## Run CMS list view for a blog (usage: make editor.cms.<name>)
 	@cargo run --bin devtui -- --cms blogs/$*
 
+cms.import.%: ## Re-import .md files into the CMS DB (usage: make cms.import.<name>)
+	@cargo run --bin devtui -- --import blogs/$*
+
 editor.test: ## Run editor tests
 	@cargo test editor::

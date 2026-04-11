@@ -240,6 +240,22 @@ fn write_published_md(article: &db::Article, cfg: &BlogConfig, blog_dir: &Path) 
     std::fs::write(path, md)
 }
 
+/// Force re-import `.md` files into the DB. Unlike `import_if_empty`, this
+/// runs unconditionally; existing rows are updated in place. Intended for the
+/// `make cms.import.<blog>` target, used when `.md` files are edited outside
+/// the CMS and the user wants to pull changes in. Draft/pin state on
+/// unaffected articles is preserved.
+pub fn import_blog(blog_dir: &Path) -> io::Result<()> {
+    let cfg = BlogConfig::from_file(&blog_dir.join("blog.toml"))
+        .map_err(io::Error::other)?;
+    let conn = db::init_db(&blog_dir.join("devtui.db"))
+        .map_err(|e| io::Error::other(e.to_string()))?;
+    let posts_dir = blog_dir.join("posts");
+    db::import_from_filesystem(&conn, &posts_dir, &cfg.date_field)
+        .map_err(|e| io::Error::other(e.to_string()))?;
+    Ok(())
+}
+
 /// Sync DB → `.md` for a DevTUI-managed blog. No-op when `devtui.db` is absent
 /// (the blog is not managed by DevTUI and the engine already reads `.md`
 /// directly). Intended to run once before `engine::build` at the binary entry
@@ -278,6 +294,26 @@ mod tests {
         let blog_dir = tempdir();
         sync_managed_blog(&blog_dir).unwrap();
         assert!(!blog_dir.join("posts").exists());
+    }
+
+    #[test]
+    fn import_blog_populates_db_from_md_files() {
+        let blog_dir = tempdir();
+        write_blog_toml(&blog_dir);
+        let posts_dir = blog_dir.join("posts");
+        std::fs::create_dir_all(&posts_dir).unwrap();
+        std::fs::write(
+            posts_dir.join("hello.md"),
+            "---\ntitle: Hello\ndate: 2026-04-01\n---\n\nBody.\n",
+        )
+        .unwrap();
+
+        import_blog(&blog_dir).unwrap();
+
+        let conn = db::init_db(&blog_dir.join("devtui.db")).unwrap();
+        let articles = db::list_articles(&conn, None).unwrap();
+        assert_eq!(articles.len(), 1);
+        assert_eq!(articles[0].title, "Hello");
     }
 
     #[test]
