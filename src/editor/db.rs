@@ -177,7 +177,11 @@ pub fn update_title(conn: &Connection, id: i64, title: &str) -> Result<(), CmsEr
 
 pub fn publish(conn: &Connection, id: i64) -> Result<(), CmsError> {
     let changed = conn.execute(
-        "UPDATE articles SET status = 'published', published_at = datetime('now'), updated_at = datetime('now') WHERE id = ?1",
+        "UPDATE articles
+         SET status = 'published',
+             published_at = COALESCE(published_at, datetime('now')),
+             updated_at = datetime('now')
+         WHERE id = ?1",
         params![id],
     )?;
     if changed == 0 {
@@ -188,7 +192,7 @@ pub fn publish(conn: &Connection, id: i64) -> Result<(), CmsError> {
 
 pub fn unpublish(conn: &Connection, id: i64) -> Result<(), CmsError> {
     let changed = conn.execute(
-        "UPDATE articles SET status = 'draft', published_at = NULL, updated_at = datetime('now') WHERE id = ?1",
+        "UPDATE articles SET status = 'draft', updated_at = datetime('now') WHERE id = ?1",
         params![id],
     )?;
     if changed == 0 {
@@ -591,15 +595,38 @@ mod tests {
     }
 
     #[test]
-    fn unpublish_clears_status_and_date() {
+    fn publish_preserves_existing_published_at() {
         let conn = test_db();
-        let article = create_article(&conn, "To Unpublish").unwrap();
+        let article = create_article(&conn, "Imported").unwrap();
+        // Simulate an imported article with an original frontmatter date.
+        conn.execute(
+            "UPDATE articles SET published_at = '2024-01-15' WHERE id = ?1",
+            params![article.id],
+        )
+        .unwrap();
+
+        publish(&conn, article.id).unwrap();
+
+        let fetched = get_article(&conn, article.id).unwrap();
+        assert_eq!(fetched.status, Status::Published);
+        assert_eq!(fetched.published_at.as_deref(), Some("2024-01-15"));
+    }
+
+    #[test]
+    fn unpublish_preserves_published_at() {
+        let conn = test_db();
+        let article = create_article(&conn, "Round Trip").unwrap();
+        conn.execute(
+            "UPDATE articles SET published_at = '2024-01-15' WHERE id = ?1",
+            params![article.id],
+        )
+        .unwrap();
         publish(&conn, article.id).unwrap();
         unpublish(&conn, article.id).unwrap();
 
         let fetched = get_article(&conn, article.id).unwrap();
         assert_eq!(fetched.status, Status::Draft);
-        assert!(fetched.published_at.is_none());
+        assert_eq!(fetched.published_at.as_deref(), Some("2024-01-15"));
     }
 
     // --- pin / unpin ---
