@@ -1,301 +1,179 @@
 ---
 name: review
-description: Deep code review - Rust idioms, correctness, safety, architecture. Launches 3 parallel reviewers + plan-reviewer gate. Use when: review, review this, code review, check this code, review my changes, is this good, what do you think.
+description: "[DevTUI] Multi-agent code review. Spawns parallel security, performance, and quality reviewers for Rust editor + blog engine, then a red team auditor, then presents findings for the user to judge. Accepts a prompt, GitHub issue URL, PRD file, or no args. Use when: review, code review, review this, check my changes, security review, quality check."
 ---
 
-# Code Review - Parallel Agents + Plan-Reviewer Gate
+# Review
 
-**Reviews current changes for correctness, idioms, safety, and architecture. Three parallel code-reviewer agents with focused scopes, aggregated findings, and a plan-reviewer critique before presenting fixes.**
+Multi-agent code review pipeline with three parallel specialized reviewers, red team audit, and user judgment. Rust-specialized for the DevTUI editor + blog engine.
+
+## Usage
+
+- `/review` - asks what to review
+- `/review <prompt>` - review current changes against the prompt
+- `/review <url>` - review against a GitHub issue/PR
+- `/review <path>` - review against a PRD/spec file
 
 ## Workflow
 
-### Phase 1: Diff
+### Phase 1: Understand the review target
 
-Get the full diff and diff stat against main:
+**No arguments:** Ask: "What should I review? Describe it, paste an issue URL, or point me to a spec file."
+
+**Prompt:** Use directly as review context.
+
+**URL:** Fetch:
+- `gh issue view <number> --json title,body --jq '.title + "\n\n" + .body'`
+- `gh pr view <number> --json title,body --jq '.title + "\n\n" + .body'`
+
+**File path:** Read it.
+
+Store as `{review_context}`.
+
+### Phase 2: Get the diff
 
 ```bash
 git diff main...HEAD
 git diff main...HEAD --stat
 ```
 
-### Phase 2: Parallel Review
+If empty, try `git diff HEAD~1`. If still empty, tell the user there's nothing to review and stop.
 
-Launch **3 `code-reviewer` agents in parallel** (single message, 3 Agent tool calls). Each gets the full diff but a focused mandate.
+Store as `{diff}` and `{diff_stat}`.
 
-**CRITICAL**: Launch all 3 agents in the **same message** so they run concurrently. Do NOT launch them sequentially.
+### Phase 3: Scout
 
-#### Agent 1: Correctness & Safety
+Launch the `scout` agent:
 
-```
-subagent_type: code-reviewer
-prompt: |
-  You are reviewing a Rust codebase with a terminal editor and a static blog engine. Focus ONLY on correctness and safety.
+> Map the DevTUI areas touched by these changed files. Return: architecture (editor vs engine boundary), patterns, conventions, test structure, error handling, project rules from CLAUDE.md and .claude/rules/*.md.
+>
+> Changed files:
+> {diff_stat}
 
-  ## Your scope
+Store as `{scout_context}`.
 
-  ### Correctness
-  - Logic errors, wrong string handling, template rendering bugs
-  - Markdown parsing edge cases (nested formatting, code blocks, frontmatter)
-  - HTML generation errors (unclosed tags, wrong escaping, broken SEO tags)
-  - Edge cases: empty input, missing config fields, malformed frontmatter
+### Phase 4: Parallel review
 
-  ### Safety
-  - `unwrap()` in production code - must use `?`, `if let`, `match`
-  - Integer overflow - use `checked_*` or `saturating_*`
-  - Panics on invalid input - return `Result` instead
-  - `unsafe` without justification
-  - Input validation at system boundaries (CLI args, file paths, config parsing)
+Launch **3 agents in parallel** (single message, 3 Agent tool calls):
 
-  ## Output format
+- **`security-reviewer`**: "Review this PR for security issues.\n\n## Review Context\n{review_context}\n\n## Codebase Context\n{scout_context}\n\n## Diff\n{diff}"
+- **`performance-reviewer`**: "Review this PR for performance issues.\n\n## Review Context\n{review_context}\n\n## Codebase Context\n{scout_context}\n\n## Diff\n{diff}"
+- **`quality-reviewer`**: "Review this PR for quality issues (design, testing, DDD, SOLID, Rust idioms, minimalism).\n\n## Review Context\n{review_context}\n\n## Codebase Context\n{scout_context}\n\n## Diff\n{diff}"
 
-  Return findings as a markdown list, grouped by severity:
+**CRITICAL**: All 3 in the **same message** so they run concurrently.
 
-  ### Critical
-  1) **Issue**: description
-     **Location**: `file:line`
-     **Fix**: solution
+Store as `{security_report}`, `{performance_report}`, `{quality_report}`.
 
-  ### Important
-  A) **Issue**: description
-     **Location**: `file:line`
-     **Suggestion**: approach
+### Phase 5: Establish the main review
 
-  ### Minor
-  * Nitpick or suggestion
+Synthesize the three reports (you, not a subagent):
 
-  ### Positive
-  - What's done well
-
-  If no findings in a tier, omit that section. Be specific - cite file:line for every finding.
-
-  ## Diff to review
-
-  <diff>
-  {PASTE FULL DIFF HERE}
-  </diff>
-```
-
-#### Agent 2: Idioms & Architecture
-
-```
-subagent_type: code-reviewer
-prompt: |
-  You are reviewing a Rust codebase with a terminal editor and a static blog engine. Focus ONLY on idioms and architecture.
-
-  ## Your scope
-
-  ### Rust idioms
-  - `.clone()` to work around borrow checker - restructure instead
-  - `mut` when immutability would work - default to immutable
-  - Wildcard `_ =>` on own enums - must list all variants
-  - Boolean parameters - use enums for self-documenting call sites
-  - Getter naming: `fn name()` not `fn get_name()`
-  - Conversion naming: `as_` (free), `to_` (may allocate), `into_` (consumes)
-  - Single-letter vars (except iterators) - descriptive names
-  - Magic numbers - extract to named constants
-
-  ### Architecture
-  - God modules >300 lines - extract submodules
-  - DRY violations (same pattern 3+ times) - extract helper
-  - Editor doing engine work or vice versa - maintain separation
-  - `main.rs` doing too much - should be thin
-  - Separation of concerns: engine owns blog generation, editor owns TUI
-  - Unnecessary abstractions (single-use wrappers)
-
-  ## Output format
-
-  Return findings as a markdown list, grouped by severity:
-
-  ### Critical
-  1) **Issue**: description
-     **Location**: `file:line`
-     **Fix**: solution
-
-  ### Important
-  A) **Issue**: description
-     **Location**: `file:line`
-     **Suggestion**: approach
-
-  ### Minor
-  * Nitpick or suggestion
-
-  ### Positive
-  - What's done well
-
-  If no findings in a tier, omit that section. Be specific - cite file:line for every finding.
-
-  ## Diff to review
-
-  <diff>
-  {PASTE FULL DIFF HERE}
-  </diff>
-```
-
-#### Agent 3: Completeness & Contracts
-
-```
-subagent_type: code-reviewer
-prompt: |
-  You are reviewing a Rust codebase with a terminal editor and a static blog engine. Focus ONLY on completeness and contracts.
-
-  ## Your scope
-
-  ### Documentation sync
-  - Does `CLAUDE.md` file structure match the actual `src/` layout?
-  - Are `///` doc comments on changed public types/functions accurate?
-  - New/removed/renamed modules reflected in docs?
-
-  ### Error handling contracts
-  - Specific error enums per module
-  - `Display` and `Error` impls on error types
-  - `From` for error conversion at module boundaries
-  - `?` propagation, not `unwrap()` chains
-
-  ### Test coverage
-  - New public behavior has corresponding tests
-  - Descriptive test names: `frontmatter_extracts_title` not `test_1`
-  - `assert_eq!` / `assert_ne!` over bare `assert!`
-  - Return `Result` from tests to use `?`
-  - Edge cases tested (empty input, missing fields, malformed markdown)
-  - `#[cfg(test)]` module in each file
-
-  ### Comments
-  - Non-obvious logic has WHY comments (not WHAT)
-  - No commenting obvious/self-documenting code
-
-  ## Output format
-
-  Return findings as a markdown list, grouped by severity:
-
-  ### Critical
-  1) **Issue**: description
-     **Location**: `file:line`
-     **Fix**: solution
-
-  ### Important
-  A) **Issue**: description
-     **Location**: `file:line`
-     **Suggestion**: approach
-
-  ### Minor
-  * Nitpick or suggestion
-
-  ### Positive
-  - What's done well
-
-  If no findings in a tier, omit that section. Be specific - cite file:line for every finding.
-
-  ## Diff to review
-
-  <diff>
-  {PASTE FULL DIFF HERE}
-  </diff>
-```
-
-### Phase 3: Aggregate
-
-After all 3 agents return, merge their findings:
-
-1. **Merge** all findings into unified tiers (Critical / Important / Minor / Positive)
-2. **Deduplicate** same file:line across agents
-3. **Tag** each finding with source: `[safety]`, `[idioms]`, `[completeness]`
-4. **Cap**: max 5 Critical, 7 Important, 3 Minor (drop lowest-impact excess)
-5. **Verdict**: any Critical or Important -> "Needs fixes"; only Minor/Positive -> "Clean with suggestions"
-
-### Phase 4: Plan + Critique
-
-**If Critical or Important findings exist:**
-
-1. Build a numbered fix plan:
-   ```
-   1. [severity] file:line - proposed fix
-   2. [severity] file:line - proposed fix
-   ...
-   ```
-
-2. Launch a **`plan-reviewer` agent** with the fix plan and diff stat:
-   ```
-   subagent_type: plan-reviewer
-   prompt: |
-     Review this fix plan for a Rust codebase.
-
-     ## Diff stat
-     {PASTE DIFF STAT}
-
-     ## Fix plan
-     {PASTE NUMBERED FIX PLAN}
-
-     Critique the plan:
-     - Are any fixes over-engineered for the actual problem?
-     - Are there gaps - issues in the diff that the plan misses?
-     - Are any fixes redundant or conflicting?
-     - Would any fix break existing behavior?
-     - Is the priority ordering correct?
-
-     Return:
-     1. Fixes to DROP (over-engineered or unnecessary) with reasoning
-     2. Fixes to ADD (gaps the plan missed) with file:line and description
-     3. Fixes to MODIFY (scope adjustment) with reasoning
-     4. Overall assessment: "Plan is solid" or "Plan needs adjustment"
-   ```
-
-3. **Incorporate critique**: drop over-engineered fixes, add missed gaps, adjust scope
-4. Present the **critique-adjusted plan** to the user
-
-**If only Minor findings**: skip plan-reviewer, present review directly.
-
-### Phase 5: Present
-
-Show the aggregated review to the user:
+1. Merge findings into unified tiers (Critical / High / Medium / Low / Positive)
+2. Deduplicate same `file:line` across reviewers
+3. Tag each finding: `[security]`, `[performance]`, `[quality]`
+4. Present the **main review** to the user before the red team audit
 
 ```markdown
-## Code Review - {branch name}
+## Code Review: {branch name}
 
-**Diff**: {files changed}, {insertions}+, {deletions}-
+**Diff:** {files changed}, {insertions}+, {deletions}-
+**Reviewers:** security, performance, quality
 
 ### Critical
-1) [safety] **Issue**: description
-   **Location**: `file:line`
-   **Fix**: solution
+- [{source}] **{title}** at `{file}:{line}`
+  {description}
+  **Test (RED first):** {failing test}
+  **Fix:** {minimal fix}
 
-### Important
-A) [idioms] **Issue**: description
-   **Location**: `file:line`
-   **Suggestion**: approach
+### High / ### Medium / ### Low
+- ...
 
-### Minor
-* [completeness] Nitpick or suggestion
-
-### Positive
-- What's done well
-
-### Verdict
-[ ] Clean - ready for `/pr`
-[x] Needs fixes - see plan below
-
----
-
-## Fix Plan (critique-adjusted)
-
-1. [Critical] `file:line` - fix description
-2. [Important] `file:line` - fix description
-...
-
-*Plan reviewed by plan-reviewer. Dropped N over-engineered fixes, added M gaps.*
+### Good patterns
+- ...
 ```
 
-### Phase 6: Implement
+### Phase 6: Red team audit
 
-After user approves the plan:
+Once the main review is established, launch the `review-auditor` agent to stress-test it:
 
-1. **Enter plan mode** with the fix plan
-2. Implement fixes in plan order
-3. Run verification:
-   ```bash
-   cargo test
-   cargo clippy -- -D warnings
-   ```
-4. Report results
+> Audit these three code review reports against the actual DevTUI codebase and project rules (CLAUDE.md, .claude/rules/*.md). Verify findings against actual code, check for false positives, blind spots, contradictions, severity miscalibration.
+>
+> ## Review Context
+> {review_context}
+>
+> ## Security Review
+> {security_report}
+>
+> ## Performance Review
+> {performance_report}
+>
+> ## Quality Review
+> {quality_report}
+
+Store as `{audit_report}`.
+
+### Phase 7: Apply the audit
+
+Refine the main review with the auditor's output:
+
+1. Drop findings flagged as false positives
+2. Apply severity adjustments
+3. Mark high-confidence findings verified
+4. Add blind spots as new findings
+5. Re-deduplicate
+
+Present the **audit-adjusted review**:
+
+```markdown
+## Code Review: {branch name} (audit-adjusted)
+
+**Diff:** {files changed}, {insertions}+, {deletions}-
+**Reviewers:** security, performance, quality + red team audit
+
+### Critical
+- [{source}] **{title}** at `{file}:{line}`
+  {description}
+  **Test (RED first):** {failing test}
+  **Fix:** {minimal fix}
+
+### High / ### Medium / ### Low
+- ...
+
+### Good patterns
+- ...
+
+### Audit notes
+- {false positives removed and why}
+- {severity adjustments made}
+- {blind spots added}
+
+**Verdict:** {Critical/High -> "Needs fixes" | Medium/Low only -> "Clean with suggestions" | Nothing -> "Ship it"}
+```
+
+### Phase 8: User choice
+
+If verdict is **not** "Ship it":
+
+> **What next?**
+>
+> **a)** Write full report to `docs/reviews/{branch-name}.md`
+> **b)** Address findings (TDD, RED first, baby steps)
+
+**Wait for the user to choose.**
+
+**Option a:** Write the report file.
+
+**Option b:** Prioritized fix list (critical → high → medium). One at a time. Every fix starts with a failing test. Run `cargo test` and `cargo clippy -- -D warnings` after each fix.
+
+If **"Ship it"**: congratulate and stop.
+
+## Principles
+
+- TDD strictly. Every fix starts with RED first
+- Baby steps. One fix at a time
+- Rust-aware. Reviewers specialize on editor (PTY, TUI, preview) and engine (pipeline, SEO, minify) concerns
+- Project-aware. Reviewers and auditor check `CLAUDE.md` and `.claude/rules/*.md`
+- Adversarial audit. Red team kills bad findings and finds blind spots, it doesn't add noise
 
 ## Pipeline
 
