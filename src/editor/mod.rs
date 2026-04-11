@@ -30,7 +30,7 @@ pub fn run_cms(blog_dir: PathBuf) -> io::Result<()> {
 
     let posts_dir = blog_dir.join("posts");
     if posts_dir.exists() {
-        let _ = db::import_from_filesystem(&conn, &posts_dir, &cfg.date_field);
+        let _ = db::import_if_empty(&conn, &posts_dir, &cfg.date_field);
     }
 
     // Prepare HTML preview config (template + CSS)

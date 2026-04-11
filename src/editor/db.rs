@@ -285,6 +285,21 @@ pub fn list_articles(conn: &Connection, search: Option<&str>) -> Result<Vec<Arti
     Ok(articles)
 }
 
+/// First-run import: populates the DB from `posts_dir` only when the `articles`
+/// table is empty. On subsequent runs the DB is the source of truth and this
+/// function is a no-op, preserving any draft/pin state from prior sessions.
+pub fn import_if_empty(
+    conn: &Connection,
+    posts_dir: &Path,
+    date_field: &str,
+) -> Result<usize, CmsError> {
+    let count: i64 = conn.query_row("SELECT COUNT(*) FROM articles", [], |row| row.get(0))?;
+    if count > 0 {
+        return Ok(0);
+    }
+    import_from_filesystem(conn, posts_dir, date_field)
+}
+
 /// Import existing .md files from posts directory into the database.
 /// Idempotent: matches by slug, updates existing entries instead of duplicating.
 pub fn import_from_filesystem(
@@ -665,6 +680,31 @@ mod tests {
         assert_eq!(articles.len(), 2);
         // All imported as published
         assert!(articles.iter().all(|a| a.status == Status::Published));
+    }
+
+    #[test]
+    fn import_if_empty_skips_when_db_has_articles() {
+        let conn = test_db();
+        let dir = tempdir();
+        fs::write(
+            dir.join("2026-03-29-post.md"),
+            "---\ntitle: Post\ndate: 2026-03-29\n---\n\nBody.\n",
+        )
+        .unwrap();
+
+        // First-run import populates the DB.
+        import_if_empty(&conn, &dir, "date").unwrap();
+        let articles = list_articles(&conn, None).unwrap();
+        assert_eq!(articles.len(), 1);
+
+        // User toggles the article to draft.
+        unpublish(&conn, articles[0].id).unwrap();
+
+        // Second-run must NOT re-import and must NOT overwrite the draft state.
+        import_if_empty(&conn, &dir, "date").unwrap();
+        let after = list_articles(&conn, None).unwrap();
+        assert_eq!(after.len(), 1);
+        assert_eq!(after[0].status, Status::Draft);
     }
 
     #[test]
