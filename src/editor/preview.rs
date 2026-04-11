@@ -39,17 +39,12 @@ pub fn render_with_offsets(
 ) -> (Vec<Line<'static>>, Vec<u16>) {
     let _ = author;
     let title = frontmatter_field(content, "title");
-    let subtitle = frontmatter_field(content, "subtitle");
     let original_line_count = content.lines().count().max(1);
     let body = strip_frontmatter(content);
     let frontmatter_line_count = original_line_count - body.lines().count().max(1);
     let content = body;
     let source_line_count = content.lines().count().max(1);
-    let header_len: u16 = match (&title, &subtitle) {
-        (Some(_), Some(_)) => 3,
-        (Some(_), None) => 2,
-        _ => 0,
-    };
+    let header_len: u16 = if title.is_some() { 2 } else { 0 };
     let mut source_to_rendered: Vec<u16> = vec![header_len; source_line_count + 1];
 
     let options =
@@ -59,12 +54,6 @@ pub fn render_with_offsets(
     let mut lines: Vec<Line<'static>> = Vec::new();
     if let Some(title) = title {
         lines.push(Line::from(Span::styled(title, h1_style())));
-        if let Some(subtitle) = subtitle {
-            lines.push(Line::from(Span::styled(
-                subtitle,
-                Style::default().fg(Color::DarkGray).add_modifier(Modifier::ITALIC),
-            )));
-        }
         lines.push(Line::from(""));
     }
     let mut spans: Vec<Span<'static>> = Vec::new();
@@ -330,15 +319,6 @@ mod tests {
     }
 
     #[test]
-    fn frontmatter_subtitle_rendered_under_title() {
-        let md = "---\ntitle: Hello\nsubtitle: A short tagline\n---\n\nBody.";
-        let (lines, _) = render_with_offsets(md, None);
-        assert_eq!(line_text(&lines[0]), "Hello");
-        assert_eq!(line_text(&lines[1]), "A short tagline");
-        assert_eq!(line_text(&lines[2]), "");
-    }
-
-    #[test]
     fn offset_map_indexed_by_original_content_lines_with_frontmatter() {
         // Original content: 5 lines
         //   line 0: ---
@@ -354,14 +334,6 @@ mod tests {
         assert!(offsets.len() >= 6, "offset map too short: {}", offsets.len());
         assert_eq!(offsets[1], 0, "frontmatter line maps to header");
         assert!(offsets[4] >= 2, "body line must skip header: {}", offsets[4]);
-    }
-
-    #[test]
-    fn frontmatter_no_subtitle_keeps_blank_after_title() {
-        let md = "---\ntitle: Hello\n---\n\nBody.";
-        let (lines, _) = render_with_offsets(md, None);
-        assert_eq!(line_text(&lines[0]), "Hello");
-        assert_eq!(line_text(&lines[1]), "");
     }
 
     #[test]
