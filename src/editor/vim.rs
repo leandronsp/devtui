@@ -51,6 +51,7 @@ pub fn run(
     html_config: Option<&HtmlPreviewConfig>,
     chrome: Option<&ChromeHandle>,
     picker: &ratatui_image::picker::Picker,
+    draft_state: Option<DraftState>,
 ) -> io::Result<(EditorResult, String)> {
     if !file_path.exists() {
         std::fs::write(&file_path, "")?;
@@ -161,6 +162,7 @@ pub fn run(
         html_config,
         chrome,
         picker,
+        draft_state,
     )?;
 
     // Read final content from the actual file vim was editing.
@@ -270,10 +272,16 @@ struct RunLoopState {
     /// Blog author from blog.toml; rendered in preview header when post has no
     /// `author:` frontmatter field.
     blog_author: Option<String>,
+    /// CMS draft/published state for the open article. None in legacy file mode.
+    draft_state: Option<DraftState>,
 }
 
 impl RunLoopState {
-    fn new(chrome_available: bool, blog_author: Option<String>) -> Self {
+    fn new(
+        chrome_available: bool,
+        blog_author: Option<String>,
+        draft_state: Option<DraftState>,
+    ) -> Self {
         Self {
             last_content: String::new(),
             cached_lines: Vec::new(),
@@ -291,6 +299,7 @@ impl RunLoopState {
             flash: None,
             was_modified: false,
             blog_author,
+            draft_state,
         }
     }
 
@@ -537,7 +546,7 @@ impl RunLoopState {
                         Constraint::Percentage(50),
                     ])
                     .split(main_area);
-                    render_editor(frame, parser, mode_label, mode_st, title_message, panes[0]);
+                    render_editor(frame, parser, mode_label, mode_st, title_message, self.draft_state, panes[0]);
                     render_preview(
                         frame, &self.cached_lines, scroll.clamped_scroll, self.preview_mode,
                         preview_mode_label, &self.kitty_image,
@@ -546,7 +555,7 @@ impl RunLoopState {
                     preview_area = panes[1];
                 }
                 SplitLayout::EditorOnly => {
-                    render_editor(frame, parser, mode_label, mode_st, title_message, main_area);
+                    render_editor(frame, parser, mode_label, mode_st, title_message, self.draft_state, main_area);
                 }
             }
 
@@ -717,9 +726,10 @@ fn run_loop(
     html_config: Option<&HtmlPreviewConfig>,
     chrome: Option<&ChromeHandle>,
     picker: &ratatui_image::picker::Picker,
+    draft_state: Option<DraftState>,
 ) -> io::Result<()> {
     let blog_author = html_config.map(|c| c.blog_config.author.clone());
-    let mut state = RunLoopState::new(chrome.is_some(), blog_author);
+    let mut state = RunLoopState::new(chrome.is_some(), blog_author, draft_state);
 
     loop {
         if vim_exited.load(Ordering::Relaxed) {
@@ -757,27 +767,52 @@ fn run_loop(
     Ok(())
 }
 
+#[derive(Clone, Copy, Debug, PartialEq)]
+pub enum DraftState {
+    Draft,
+    Published,
+}
+
+fn editor_title_spans(
+    mode_label: &str,
+    mode_st: Style,
+    title_message: &str,
+    draft_state: Option<DraftState>,
+) -> Vec<Span<'static>> {
+    let mut spans = vec![
+        Span::styled(mode_label.to_string(), mode_st),
+        Span::raw(" EDITOR"),
+    ];
+
+    if let Some(DraftState::Draft) = draft_state {
+        spans.push(Span::raw(" "));
+        spans.push(Span::styled(
+            "[DRAFT]",
+            Style::default().fg(Color::Yellow),
+        ));
+    }
+
+    if !title_message.is_empty() {
+        spans.push(Span::raw(" "));
+        spans.push(Span::styled(
+            title_message.to_string(),
+            Style::default().fg(Color::Yellow),
+        ));
+    }
+
+    spans
+}
+
 fn render_editor(
     frame: &mut ratatui::Frame,
     parser: &Arc<RwLock<vt100::Parser>>,
     mode_label: &str,
     mode_st: Style,
     title_message: &str,
+    draft_state: Option<DraftState>,
     area: ratatui::layout::Rect,
 ) {
-    let mut title_spans = vec![
-        Span::styled(mode_label, mode_st),
-        Span::raw(" EDITOR"),
-    ];
-
-    if !title_message.is_empty() {
-        title_spans.push(Span::raw(" "));
-        title_spans.push(Span::styled(
-            title_message.to_string(),
-            Style::default().fg(Color::Yellow),
-        ));
-    }
-
+    let title_spans = editor_title_spans(mode_label, mode_st, title_message, draft_state);
     let block = Block::default()
         .borders(Borders::ALL)
         .border_style(Style::default().fg(Color::DarkGray))
@@ -786,6 +821,44 @@ fn render_editor(
     if let Ok(p) = parser.read() {
         let pseudo_term = PseudoTerminal::new(p.screen()).block(block);
         frame.render_widget(pseudo_term, area);
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    fn spans_text(spans: &[Span]) -> String {
+        spans.iter().map(|s| s.content.as_ref()).collect()
+    }
+
+    #[test]
+    fn editor_title_shows_mode_and_editor_label() {
+        let spans = editor_title_spans("[NORMAL]", Style::default(), "", None);
+        assert_eq!(spans_text(&spans), "[NORMAL] EDITOR");
+    }
+
+    #[test]
+    fn editor_title_renders_draft_badge_when_draft() {
+        let spans = editor_title_spans("[NORMAL]", Style::default(), "", Some(DraftState::Draft));
+        assert_eq!(spans_text(&spans), "[NORMAL] EDITOR [DRAFT]");
+    }
+
+    #[test]
+    fn editor_title_no_draft_badge_when_published() {
+        let spans = editor_title_spans(
+            "[NORMAL]",
+            Style::default(),
+            "",
+            Some(DraftState::Published),
+        );
+        assert_eq!(spans_text(&spans), "[NORMAL] EDITOR");
+    }
+
+    #[test]
+    fn editor_title_draft_badge_precedes_title_message() {
+        let spans = editor_title_spans("[INSERT]", Style::default(), "[+]", Some(DraftState::Draft));
+        assert_eq!(spans_text(&spans), "[INSERT] EDITOR [DRAFT] [+]");
     }
 }
 

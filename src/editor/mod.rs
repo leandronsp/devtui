@@ -78,7 +78,7 @@ pub fn run(file_path: PathBuf) -> io::Result<()> {
     let picker = ratatui_image::picker::Picker::from_query_stdio()
         .unwrap_or_else(|_| ratatui_image::picker::Picker::halfblocks());
     let mut terminal = ratatui::init();
-    let result = vim::run(&mut terminal, file_path, None, None, &picker);
+    let result = vim::run(&mut terminal, file_path, None, None, &picker, None);
     ratatui::restore();
     result.map(|_| ())
 }
@@ -180,7 +180,11 @@ fn edit_article(
     let tmp_file = tmp_dir.join(format!("{}.md", article.slug));
     std::fs::write(&tmp_file, &article.content)?;
 
-    let (_result, final_content) = vim::run(terminal, tmp_file.clone(), html_config, chrome, picker)?;
+    let draft_state = Some(match article.status {
+        db::Status::Draft => vim::DraftState::Draft,
+        db::Status::Published => vim::DraftState::Published,
+    });
+    let (_result, final_content) = vim::run(terminal, tmp_file.clone(), html_config, chrome, picker, draft_state)?;
 
     // Only update DB if content actually changed (protects against :q! or crash)
     if !final_content.is_empty() && final_content != article.content {
@@ -219,7 +223,14 @@ fn new_article(
     let tmp_file = tmp_dir.join(format!("{}.md", article.slug));
     std::fs::write(&tmp_file, "")?;
 
-    let (_result, final_content) = vim::run(terminal, tmp_file.clone(), html_config, chrome, picker)?;
+    let (_result, final_content) = vim::run(
+        terminal,
+        tmp_file.clone(),
+        html_config,
+        chrome,
+        picker,
+        Some(vim::DraftState::Draft),
+    )?;
 
     if !final_content.is_empty() {
         let _ = db::update_content(conn, article.id, &final_content);
