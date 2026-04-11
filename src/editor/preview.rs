@@ -36,7 +36,10 @@ fn frontmatter_field(content: &str, field: &str) -> Option<String> {
 pub fn render_with_offsets(content: &str) -> (Vec<Line<'static>>, Vec<u16>) {
     let title = frontmatter_field(content, "title");
     let subtitle = frontmatter_field(content, "subtitle");
-    let content = strip_frontmatter(content);
+    let original_line_count = content.lines().count().max(1);
+    let body = strip_frontmatter(content);
+    let frontmatter_line_count = original_line_count - body.lines().count().max(1);
+    let content = body;
     let source_line_count = content.lines().count().max(1);
     let header_len: u16 = match (&title, &subtitle) {
         (Some(_), Some(_)) => 3,
@@ -181,6 +184,21 @@ pub fn render_with_offsets(content: &str) -> (Vec<Line<'static>>, Vec<u16>) {
         )));
     }
 
+    if frontmatter_line_count > 0 {
+        // Re-index offsets by original content lines (including the stripped
+        // frontmatter block) so callers passing vim's line('w0') — which
+        // counts from the top of the file including frontmatter — land on
+        // the correct rendered line.
+        let mut reindexed = vec![0u16; original_line_count + 1];
+        for (i, v) in source_to_rendered.iter().enumerate() {
+            let idx = i + frontmatter_line_count;
+            if idx < reindexed.len() {
+                reindexed[idx] = *v;
+            }
+        }
+        source_to_rendered = reindexed;
+    }
+
     (lines, source_to_rendered)
 }
 
@@ -314,6 +332,24 @@ mod tests {
         assert_eq!(line_text(&lines[0]), "Hello");
         assert_eq!(line_text(&lines[1]), "A short tagline");
         assert_eq!(line_text(&lines[2]), "");
+    }
+
+    #[test]
+    fn offset_map_indexed_by_original_content_lines_with_frontmatter() {
+        // Original content: 5 lines
+        //   line 0: ---
+        //   line 1: title: Hello
+        //   line 2: ---
+        //   line 3: (blank)
+        //   line 4: Body paragraph
+        // vim passes original-content line numbers via titlestring's line('w0').
+        // The offset map must therefore be indexed by original lines, not
+        // post-strip body lines.
+        let md = "---\ntitle: Hello\n---\n\nBody paragraph";
+        let (_, offsets) = render_with_offsets(md);
+        assert!(offsets.len() >= 6, "offset map too short: {}", offsets.len());
+        assert_eq!(offsets[1], 0, "frontmatter line maps to header");
+        assert!(offsets[4] >= 2, "body line must skip header: {}", offsets[4]);
     }
 
     #[test]
