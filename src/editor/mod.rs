@@ -239,3 +239,64 @@ fn write_published_md(article: &db::Article, cfg: &BlogConfig, blog_dir: &Path) 
     let path = posts_dir.join(format!("{}.md", article.slug));
     std::fs::write(path, md)
 }
+
+/// Sync DB → `.md` for a DevTUI-managed blog. No-op when `devtui.db` is absent
+/// (the blog is not managed by DevTUI and the engine already reads `.md`
+/// directly). Intended to run once before `engine::build` at the binary entry
+/// point, keeping the engine unaware of the DB.
+pub fn sync_managed_blog(blog_dir: &Path) -> io::Result<()> {
+    let db_path = blog_dir.join("devtui.db");
+    if !db_path.exists() {
+        return Ok(());
+    }
+    let cfg = BlogConfig::from_file(&blog_dir.join("blog.toml"))
+        .map_err(io::Error::other)?;
+    let conn = db::init_db(&db_path).map_err(|e| io::Error::other(e.to_string()))?;
+    let posts_dir = blog_dir.join("posts");
+    db::sync_to_filesystem(&conn, &posts_dir, &cfg.date_field)
+        .map_err(|e| io::Error::other(e.to_string()))?;
+    Ok(())
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use crate::testutil::tempdir;
+
+    fn write_blog_toml(blog_dir: &Path) {
+        std::fs::write(
+            blog_dir.join("blog.toml"),
+            "title = \"Test\"\nurl = \"https://t.example\"\nauthor = \"A\"\ndate_field = \"date\"\nlang = \"en\"\n",
+        )
+        .unwrap();
+    }
+
+    #[test]
+    fn sync_managed_blog_is_noop_when_db_missing() {
+        // No devtui.db, no blog.toml. sync_managed_blog must early-return Ok
+        // without touching the filesystem or reading config.
+        let blog_dir = tempdir();
+        sync_managed_blog(&blog_dir).unwrap();
+        assert!(!blog_dir.join("posts").exists());
+    }
+
+    #[test]
+    fn sync_managed_blog_writes_published_article() {
+        let blog_dir = tempdir();
+        write_blog_toml(&blog_dir);
+        let db_path = blog_dir.join("devtui.db");
+        let conn = db::init_db(&db_path).unwrap();
+        let article = db::create_article(&conn, "Sync Me").unwrap();
+        db::update_content(&conn, article.id, "Published body.").unwrap();
+        db::publish(&conn, article.id).unwrap();
+        drop(conn);
+
+        sync_managed_blog(&blog_dir).unwrap();
+
+        let md_path = blog_dir.join("posts/sync-me.md");
+        assert!(md_path.exists());
+        let contents = std::fs::read_to_string(&md_path).unwrap();
+        assert!(contents.contains("title: Sync Me"));
+        assert!(contents.contains("Published body."));
+    }
+}
