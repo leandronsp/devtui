@@ -376,15 +376,14 @@ pub fn import_from_filesystem(
 pub fn sync_to_filesystem(
     conn: &Connection,
     posts_dir: &Path,
-    date_field: &str,
+    _date_field: &str,
 ) -> Result<(), CmsError> {
     std::fs::create_dir_all(posts_dir)?;
     for article in list_articles(conn, None)? {
         let path = posts_dir.join(format!("{}.md", article.slug));
         match article.status {
             Status::Published => {
-                let md = build_markdown(&article, date_field);
-                std::fs::write(&path, md)?;
+                std::fs::write(&path, &article.content)?;
             }
             Status::Draft => {
                 if path.exists() {
@@ -800,7 +799,8 @@ mod tests {
         let conn = test_db();
         let dir = tempdir();
         let article = create_article(&conn, "Hello World").unwrap();
-        update_content(&conn, article.id, "Body here.").unwrap();
+        let md = "---\ntitle: Hello World\n---\n\nBody here.";
+        update_content(&conn, article.id, md).unwrap();
         publish(&conn, article.id).unwrap();
 
         sync_to_filesystem(&conn, &dir, "date").unwrap();
@@ -808,8 +808,7 @@ mod tests {
         let path = dir.join("hello-world.md");
         assert!(path.exists(), "expected {path:?} to exist");
         let contents = fs::read_to_string(&path).unwrap();
-        assert!(contents.starts_with("---\ntitle: Hello World\n"));
-        assert!(contents.ends_with("Body here."));
+        assert_eq!(contents, md, "content should be written verbatim");
     }
 
     #[test]

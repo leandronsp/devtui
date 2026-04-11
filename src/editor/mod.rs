@@ -235,12 +235,11 @@ fn new_article(
     Ok(())
 }
 
-fn write_published_md(article: &db::Article, cfg: &BlogConfig, blog_dir: &Path) -> io::Result<()> {
+fn write_published_md(article: &db::Article, _cfg: &BlogConfig, blog_dir: &Path) -> io::Result<()> {
     let posts_dir = blog_dir.join("posts");
     std::fs::create_dir_all(&posts_dir)?;
-    let md = db::build_markdown(article, &cfg.date_field);
     let path = posts_dir.join(format!("{}.md", article.slug));
-    std::fs::write(path, md)
+    std::fs::write(path, &article.content)
 }
 
 /// Force re-import `.md` files into the DB. Unlike `import_if_empty`, this
@@ -326,7 +325,8 @@ mod tests {
         let db_path = blog_dir.join("devtui.db");
         let conn = db::init_db(&db_path).unwrap();
         let article = db::create_article(&conn, "Sync Me").unwrap();
-        db::update_content(&conn, article.id, "Published body.").unwrap();
+        let md = "---\ntitle: Sync Me\n---\n\nPublished body.";
+        db::update_content(&conn, article.id, md).unwrap();
         db::publish(&conn, article.id).unwrap();
         drop(conn);
 
@@ -335,7 +335,6 @@ mod tests {
         let md_path = blog_dir.join("posts/sync-me.md");
         assert!(md_path.exists());
         let contents = std::fs::read_to_string(&md_path).unwrap();
-        assert!(contents.contains("title: Sync Me"));
-        assert!(contents.contains("Published body."));
+        assert_eq!(contents, md);
     }
 }
