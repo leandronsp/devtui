@@ -397,6 +397,34 @@ pub fn sync_to_filesystem(
     Ok(())
 }
 
+/// One-shot, idempotent migration: rewrite any body-only `content` rows to
+/// full markdown (frontmatter + body) so `content` is the single source of
+/// truth for each article's on-disk form.
+pub fn migrate_content_to_full_markdown(
+    conn: &Connection,
+    date_field: &str,
+) -> Result<(), CmsError> {
+    let mut stmt = conn.prepare(
+        "SELECT id, title, slug, content, status, language, pinned, tags, published_at, created_at, updated_at
+         FROM articles",
+    )?;
+    let articles: Vec<Article> = stmt
+        .query_map([], row_to_article)?
+        .collect::<Result<_, _>>()?;
+    drop(stmt);
+    for article in articles {
+        if article.content.starts_with("---\n") {
+            continue;
+        }
+        let rewritten = build_markdown(&article, date_field);
+        conn.execute(
+            "UPDATE articles SET content = ?1 WHERE id = ?2",
+            params![rewritten, article.id],
+        )?;
+    }
+    Ok(())
+}
+
 /// Build frontmatter + content for writing a published .md file.
 pub fn build_markdown(article: &Article, date_field: &str) -> String {
     use std::fmt::Write;
@@ -486,6 +514,35 @@ mod tests {
 
     fn test_db() -> Connection {
         init_db_memory().expect("failed to init test db")
+    }
+
+    // --- migrate_content_to_full_markdown ---
+
+    #[test]
+    fn migrate_rewrites_body_only_content_to_full_markdown() {
+        let conn = test_db();
+        let article = create_article(&conn, "Test Post").unwrap();
+        update_content(&conn, article.id, "Just a body.").unwrap();
+        assert_eq!(get_article(&conn, article.id).unwrap().content, "Just a body.");
+
+        migrate_content_to_full_markdown(&conn, "published_at").unwrap();
+
+        let after = get_article(&conn, article.id).unwrap();
+        assert!(after.content.starts_with("---\n"), "no frontmatter: {:?}", after.content);
+        assert!(after.content.contains("title: Test Post"));
+        assert!(after.content.contains("Just a body."));
+    }
+
+    #[test]
+    fn migrate_is_idempotent() {
+        let conn = test_db();
+        let article = create_article(&conn, "Test").unwrap();
+        update_content(&conn, article.id, "Body.").unwrap();
+        migrate_content_to_full_markdown(&conn, "published_at").unwrap();
+        let first = get_article(&conn, article.id).unwrap().content;
+        migrate_content_to_full_markdown(&conn, "published_at").unwrap();
+        let second = get_article(&conn, article.id).unwrap().content;
+        assert_eq!(first, second);
     }
 
     // --- init_db ---

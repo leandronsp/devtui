@@ -33,6 +33,9 @@ pub fn run_cms(blog_dir: PathBuf) -> io::Result<()> {
         let _ = db::import_if_empty(&conn, &posts_dir, &cfg.date_field);
     }
 
+    db::migrate_content_to_full_markdown(&conn, &cfg.date_field)
+        .map_err(|e| io::Error::other(e.to_string()))?;
+
     // Prepare HTML preview config (template + CSS)
     let html_config = load_html_preview_config(&cfg, &blog_dir);
     if html_config.is_none() {
