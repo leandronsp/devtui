@@ -68,7 +68,7 @@ pub fn run_cms(blog_dir: PathBuf) -> io::Result<()> {
     }
 
     let mut terminal = ratatui::init();
-    let result = cms_loop(&mut terminal, &conn, &cfg, &blog_dir, html_config.as_ref(), chrome.as_ref(), &picker);
+    let result = cms_loop(&mut terminal, &conn, &blog_dir, html_config.as_ref(), chrome.as_ref(), &picker);
     ratatui::restore();
     result
 }
@@ -138,7 +138,6 @@ fn load_html_preview_config(cfg: &BlogConfig, blog_dir: &Path) -> Option<HtmlPre
 fn cms_loop(
     terminal: &mut ratatui::DefaultTerminal,
     conn: &Connection,
-    cfg: &BlogConfig,
     blog_dir: &Path,
     html_config: Option<&HtmlPreviewConfig>,
     chrome: Option<&ChromeHandle>,
@@ -154,7 +153,7 @@ fn cms_loop(
         match action {
             ListAction::Quit => return Ok(()),
             ListAction::Edit(id) => {
-                edit_article(terminal, conn, cfg, blog_dir, id, html_config, chrome, picker)?;
+                edit_article(terminal, conn, blog_dir, id, html_config, chrome, picker)?;
             }
             ListAction::New => {
                 new_article(terminal, conn, blog_dir, html_config, chrome, picker)?;
@@ -167,7 +166,6 @@ fn cms_loop(
 fn edit_article(
     terminal: &mut ratatui::DefaultTerminal,
     conn: &Connection,
-    cfg: &BlogConfig,
     blog_dir: &Path,
     id: i64,
     html_config: Option<&HtmlPreviewConfig>,
@@ -197,7 +195,7 @@ fn edit_article(
         let updated = db::get_article(conn, id)
             .map_err(|e| io::Error::other(e.to_string()))?;
         if updated.status == Status::Published {
-            write_published_md(&updated, cfg, blog_dir)?;
+            write_published_md(&updated, blog_dir)?;
         }
     }
 
@@ -235,7 +233,7 @@ fn new_article(
     Ok(())
 }
 
-fn write_published_md(article: &db::Article, _cfg: &BlogConfig, blog_dir: &Path) -> io::Result<()> {
+fn write_published_md(article: &db::Article, blog_dir: &Path) -> io::Result<()> {
     let posts_dir = blog_dir.join("posts");
     std::fs::create_dir_all(&posts_dir)?;
     let path = posts_dir.join(format!("{}.md", article.slug));
@@ -267,11 +265,9 @@ pub fn sync_managed_blog(blog_dir: &Path) -> io::Result<()> {
     if !db_path.exists() {
         return Ok(());
     }
-    let cfg = BlogConfig::from_file(&blog_dir.join("blog.toml"))
-        .map_err(io::Error::other)?;
     let conn = db::init_db(&db_path).map_err(|e| io::Error::other(e.to_string()))?;
     let posts_dir = blog_dir.join("posts");
-    db::sync_to_filesystem(&conn, &posts_dir, &cfg.date_field)
+    db::sync_to_filesystem(&conn, &posts_dir)
         .map_err(|e| io::Error::other(e.to_string()))?;
     Ok(())
 }
