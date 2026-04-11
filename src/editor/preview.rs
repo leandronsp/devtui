@@ -4,6 +4,12 @@ use ratatui::{
     text::{Line, Span},
 };
 
+fn h1_style() -> Style {
+    Style::default()
+        .fg(Color::Cyan)
+        .add_modifier(Modifier::BOLD)
+}
+
 fn strip_frontmatter(content: &str) -> &str {
     let Some(rest) = content.strip_prefix("---\n") else {
         return content;
@@ -14,18 +20,35 @@ fn strip_frontmatter(content: &str) -> &str {
     &rest[end + "\n---\n".len()..]
 }
 
+fn frontmatter_field(content: &str, field: &str) -> Option<String> {
+    let rest = content.strip_prefix("---\n")?;
+    let end = rest.find("\n---\n")?;
+    let prefix = format!("{field}:");
+    rest[..end].lines().find_map(|line| {
+        let value = line.trim_start().strip_prefix(&prefix)?.trim();
+        let value = value.trim_matches('"');
+        if value.is_empty() { None } else { Some(value.to_string()) }
+    })
+}
+
 /// Returns (rendered_lines, source_to_rendered_offset).
 /// source_to_rendered_offset[i] = how many rendered lines exist before source line i.
 pub fn render_with_offsets(content: &str) -> (Vec<Line<'static>>, Vec<u16>) {
+    let title = frontmatter_field(content, "title");
     let content = strip_frontmatter(content);
     let source_line_count = content.lines().count().max(1);
-    let mut source_to_rendered: Vec<u16> = vec![0; source_line_count + 1];
+    let header_len: u16 = if title.is_some() { 2 } else { 0 };
+    let mut source_to_rendered: Vec<u16> = vec![header_len; source_line_count + 1];
 
     let options =
         Options::ENABLE_STRIKETHROUGH | Options::ENABLE_TABLES | Options::ENABLE_FOOTNOTES;
 
     let parser = Parser::new_ext(content, options).into_offset_iter();
     let mut lines: Vec<Line<'static>> = Vec::new();
+    if let Some(title) = title {
+        lines.push(Line::from(Span::styled(title, h1_style())));
+        lines.push(Line::from(""));
+    }
     let mut spans: Vec<Span<'static>> = Vec::new();
     let mut style_stack: Vec<Style> = vec![Style::default()];
     let mut current_source_line: usize = 0;
@@ -263,6 +286,28 @@ mod tests {
     fn strip_frontmatter_passthrough_when_no_block() {
         let content = "Just a plain body\nwith no frontmatter";
         assert_eq!(strip_frontmatter(content), content);
+    }
+
+    #[test]
+    fn frontmatter_title_rendered_as_header_at_top() {
+        let md = "---\ntitle: Hello World\n---\n\nBody.";
+        let (lines, _) = render_with_offsets(md);
+        assert_eq!(line_text(&lines[0]), "Hello World");
+        assert_eq!(line_text(&lines[1]), "");
+    }
+
+    #[test]
+    fn frontmatter_title_quoted_value_is_unquoted() {
+        let md = "---\ntitle: \"Hello World\"\n---\n\nBody.";
+        let (lines, _) = render_with_offsets(md);
+        assert_eq!(line_text(&lines[0]), "Hello World");
+    }
+
+    #[test]
+    fn no_title_header_when_no_frontmatter() {
+        let md = "Just a plain body.";
+        let (lines, _) = render_with_offsets(md);
+        assert_eq!(line_text(&lines[0]), "Just a plain body.");
     }
 
     #[test]
