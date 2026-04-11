@@ -73,6 +73,7 @@ fn render_articles(
     theme_dir: &Path,
     engine_dir: &Path,
 ) -> Result<(Vec<String>, String, usize), String> {
+    let config_path = blog_dir.join("blog.toml");
     let article_tpl_path = template::resolve_file(
         "article.html",
         &blog_dir.join("templates"),
@@ -89,7 +90,11 @@ fn render_articles(
     for post in posts {
         let html_out = articles_dir.join(format!("{}.html", post.slug));
 
-        if html_out.exists() && is_newer(&html_out, &post.path) && is_newer(&html_out, &article_tpl_path) {
+        if html_out.exists()
+            && is_newer(&html_out, &post.path)
+            && is_newer(&html_out, &article_tpl_path)
+            && is_newer(&html_out, &config_path)
+        {
             skipped += 1;
         } else {
             render_article(cfg, post, articles_prefix, &article_tpl, &html_out)?;
@@ -723,6 +728,19 @@ This is the second post.
         fs::write(&md, content).expect("write md");
         let report = do_build(&blog, &dist);
         assert!(report.built > 0);
+    }
+
+    #[test]
+    fn build_rebuilds_articles_when_blog_toml_changes() {
+        let tmp = tempdir();
+        let (blog, dist) = setup_blog(&tmp);
+        do_build(&blog, &dist);
+        std::thread::sleep(std::time::Duration::from_secs(1));
+        let toml_path = blog.join("blog.toml");
+        let content = fs::read_to_string(&toml_path).expect("read blog.toml");
+        fs::write(&toml_path, content).expect("write blog.toml");
+        let report = do_build(&blog, &dist);
+        assert!(report.built > 0, "expected articles to rebuild when blog.toml changes, got built={} skipped={}", report.built, report.skipped);
     }
 
     #[test]
