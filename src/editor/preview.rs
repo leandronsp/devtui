@@ -27,7 +27,18 @@ pub fn render_with_offsets(content: &str) -> (Vec<Line<'static>>, Vec<u16>) {
         let byte_offset = range.start;
         let src_line = content[..byte_offset].matches('\n').count();
         if src_line != current_source_line && src_line > current_source_line {
-            // Record rendered line count at each source line boundary
+            // Preserve source vertical rhythm: pad rendered `lines` with the
+            // blank lines the user actually typed between blocks. pulldown-cmark
+            // collapses runs of blank lines at the parser level, so without
+            // this padding the preview drifts relative to vim's scroll.
+            // handle_tag_end already added one blank via push_blank_line after
+            // the previous block, so we only owe (delta - 2) additional blanks.
+            if !in_code_block {
+                let delta = src_line - current_source_line;
+                for _ in 0..delta.saturating_sub(2) {
+                    lines.push(Line::from(""));
+                }
+            }
             let rendered = lines.len() as u16;
             for entry in &mut source_to_rendered[(current_source_line + 1)..=src_line.min(source_line_count)] {
                 *entry = rendered;
@@ -442,6 +453,21 @@ mod tests {
     }
 
     // Paragraphs
+
+    #[test]
+    fn preserves_multiple_blank_lines_between_paragraphs() {
+        // User types 3 blank lines between paragraphs. Preview must mirror
+        // the source's vertical rhythm so vim and preview stay aligned while
+        // scrolling, even though markdown semantically collapses whitespace.
+        let md = "First\n\n\n\nSecond";
+        let (lines, _) = render_with_offsets(md);
+        let texts = all_text(&lines);
+        assert!(texts[0].contains("First"));
+        assert_eq!(texts[1], "");
+        assert_eq!(texts[2], "");
+        assert_eq!(texts[3], "");
+        assert!(texts[4].contains("Second"));
+    }
 
     #[test]
     fn paragraphs_separated_by_blank_line() {
