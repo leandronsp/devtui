@@ -363,6 +363,36 @@ pub fn import_from_filesystem(
     Ok(count)
 }
 
+/// Sync DB state to the posts directory: write published articles as `.md`
+/// files, remove `.md` files for articles now marked draft. This is the only
+/// bridge between CMS state and what the blog engine sees; the engine stays
+/// unaware of the DB. Orphan files (no DB row) are left untouched so manual
+/// copies into `posts/` still reach the engine. Every call rewrites published
+/// files unconditionally, so callers should gate sync on DB state change to
+/// avoid forcing full rebuilds through mtime churn.
+pub fn sync_to_filesystem(
+    conn: &Connection,
+    posts_dir: &Path,
+    date_field: &str,
+) -> Result<(), CmsError> {
+    std::fs::create_dir_all(posts_dir)?;
+    for article in list_articles(conn, None)? {
+        let path = posts_dir.join(format!("{}.md", article.slug));
+        match article.status {
+            Status::Published => {
+                let md = build_markdown(&article, date_field);
+                std::fs::write(&path, md)?;
+            }
+            Status::Draft => {
+                if path.exists() {
+                    std::fs::remove_file(&path)?;
+                }
+            }
+        }
+    }
+    Ok(())
+}
+
 /// Build frontmatter + content for writing a published .md file.
 pub fn build_markdown(article: &Article, date_field: &str) -> String {
     use std::fmt::Write;
@@ -680,6 +710,54 @@ mod tests {
         assert_eq!(articles.len(), 2);
         // All imported as published
         assert!(articles.iter().all(|a| a.status == Status::Published));
+    }
+
+    #[test]
+    fn sync_writes_published_article_to_md_file() {
+        let conn = test_db();
+        let dir = tempdir();
+        let article = create_article(&conn, "Hello World").unwrap();
+        update_content(&conn, article.id, "Body here.").unwrap();
+        publish(&conn, article.id).unwrap();
+
+        sync_to_filesystem(&conn, &dir, "date").unwrap();
+
+        let path = dir.join("hello-world.md");
+        assert!(path.exists(), "expected {path:?} to exist");
+        let contents = fs::read_to_string(&path).unwrap();
+        assert!(contents.starts_with("---\ntitle: Hello World\n"));
+        assert!(contents.ends_with("Body here."));
+    }
+
+    #[test]
+    fn sync_leaves_orphan_md_files_untouched() {
+        let conn = test_db();
+        let dir = tempdir();
+        let orphan = dir.join("manual-post.md");
+        fs::write(&orphan, "# Manual\n").unwrap();
+
+        sync_to_filesystem(&conn, &dir, "date").unwrap();
+
+        assert!(orphan.exists(), "orphan .md should survive sync");
+        assert_eq!(fs::read_to_string(&orphan).unwrap(), "# Manual\n");
+    }
+
+    #[test]
+    fn sync_removes_md_file_for_draft_article() {
+        let conn = test_db();
+        let dir = tempdir();
+        let article = create_article(&conn, "To Be Unpublished").unwrap();
+        update_content(&conn, article.id, "Content.").unwrap();
+        publish(&conn, article.id).unwrap();
+
+        sync_to_filesystem(&conn, &dir, "date").unwrap();
+        let path = dir.join("to-be-unpublished.md");
+        assert!(path.exists());
+
+        unpublish(&conn, article.id).unwrap();
+        sync_to_filesystem(&conn, &dir, "date").unwrap();
+
+        assert!(!path.exists(), "draft .md should be removed after sync");
     }
 
     #[test]
