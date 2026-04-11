@@ -254,22 +254,20 @@ pub fn update_language(conn: &Connection, id: i64, lang: &str) -> Result<(), Cms
 }
 
 /// List articles with optional search filter.
-/// Order: pinned first, then published (by published_at desc), then drafts (by created_at desc).
+/// Order: drafts first (newest first), then pinned, then published (newest first).
 pub fn list_articles(conn: &Connection, search: Option<&str>) -> Result<Vec<Article>, CmsError> {
     let query = match search {
         Some(_) => {
             "SELECT id, title, slug, content, status, language, pinned, tags, published_at, created_at, updated_at
              FROM articles
              WHERE title LIKE '%' || ?1 || '%'
-             ORDER BY pinned DESC,
-                      CASE status WHEN 'published' THEN 0 ELSE 1 END,
+             ORDER BY CASE WHEN status = 'draft' THEN 0 WHEN pinned = 1 THEN 1 ELSE 2 END,
                       COALESCE(published_at, created_at) DESC"
         }
         None => {
             "SELECT id, title, slug, content, status, language, pinned, tags, published_at, created_at, updated_at
              FROM articles
-             ORDER BY pinned DESC,
-                      CASE status WHEN 'published' THEN 0 ELSE 1 END,
+             ORDER BY CASE WHEN status = 'draft' THEN 0 WHEN pinned = 1 THEN 1 ELSE 2 END,
                       COALESCE(published_at, created_at) DESC"
         }
     };
@@ -587,7 +585,7 @@ mod tests {
     // --- list_articles ---
 
     #[test]
-    fn list_articles_orders_pinned_published_draft() {
+    fn list_articles_orders_drafts_pinned_published() {
         let conn = test_db();
         let _draft = create_article(&conn, "Draft Article").unwrap();
         let pub1 = create_article(&conn, "Published One").unwrap();
@@ -599,9 +597,9 @@ mod tests {
 
         let articles = list_articles(&conn, None).unwrap();
         assert_eq!(articles.len(), 3);
-        assert_eq!(articles[0].title, "Pinned Article");
-        assert_eq!(articles[1].title, "Published One");
-        assert_eq!(articles[2].title, "Draft Article");
+        assert_eq!(articles[0].title, "Draft Article");
+        assert_eq!(articles[1].title, "Pinned Article");
+        assert_eq!(articles[2].title, "Published One");
     }
 
     #[test]
