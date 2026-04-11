@@ -35,9 +35,14 @@ fn frontmatter_field(content: &str, field: &str) -> Option<String> {
 /// source_to_rendered_offset[i] = how many rendered lines exist before source line i.
 pub fn render_with_offsets(content: &str) -> (Vec<Line<'static>>, Vec<u16>) {
     let title = frontmatter_field(content, "title");
+    let subtitle = frontmatter_field(content, "subtitle");
     let content = strip_frontmatter(content);
     let source_line_count = content.lines().count().max(1);
-    let header_len: u16 = if title.is_some() { 2 } else { 0 };
+    let header_len: u16 = match (&title, &subtitle) {
+        (Some(_), Some(_)) => 3,
+        (Some(_), None) => 2,
+        _ => 0,
+    };
     let mut source_to_rendered: Vec<u16> = vec![header_len; source_line_count + 1];
 
     let options =
@@ -47,6 +52,12 @@ pub fn render_with_offsets(content: &str) -> (Vec<Line<'static>>, Vec<u16>) {
     let mut lines: Vec<Line<'static>> = Vec::new();
     if let Some(title) = title {
         lines.push(Line::from(Span::styled(title, h1_style())));
+        if let Some(subtitle) = subtitle {
+            lines.push(Line::from(Span::styled(
+                subtitle,
+                Style::default().fg(Color::DarkGray).add_modifier(Modifier::ITALIC),
+            )));
+        }
         lines.push(Line::from(""));
     }
     let mut spans: Vec<Span<'static>> = Vec::new();
@@ -293,6 +304,23 @@ mod tests {
         let md = "---\ntitle: Hello World\n---\n\nBody.";
         let (lines, _) = render_with_offsets(md);
         assert_eq!(line_text(&lines[0]), "Hello World");
+        assert_eq!(line_text(&lines[1]), "");
+    }
+
+    #[test]
+    fn frontmatter_subtitle_rendered_under_title() {
+        let md = "---\ntitle: Hello\nsubtitle: A short tagline\n---\n\nBody.";
+        let (lines, _) = render_with_offsets(md);
+        assert_eq!(line_text(&lines[0]), "Hello");
+        assert_eq!(line_text(&lines[1]), "A short tagline");
+        assert_eq!(line_text(&lines[2]), "");
+    }
+
+    #[test]
+    fn frontmatter_no_subtitle_keeps_blank_after_title() {
+        let md = "---\ntitle: Hello\n---\n\nBody.";
+        let (lines, _) = render_with_offsets(md);
+        assert_eq!(line_text(&lines[0]), "Hello");
         assert_eq!(line_text(&lines[1]), "");
     }
 
