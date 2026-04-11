@@ -4,9 +4,20 @@ use ratatui::{
     text::{Line, Span},
 };
 
+fn strip_frontmatter(content: &str) -> &str {
+    let Some(rest) = content.strip_prefix("---\n") else {
+        return content;
+    };
+    let Some(end) = rest.find("\n---\n") else {
+        return content;
+    };
+    &rest[end + "\n---\n".len()..]
+}
+
 /// Returns (rendered_lines, source_to_rendered_offset).
 /// source_to_rendered_offset[i] = how many rendered lines exist before source line i.
 pub fn render_with_offsets(content: &str) -> (Vec<Line<'static>>, Vec<u16>) {
+    let content = strip_frontmatter(content);
     let source_line_count = content.lines().count().max(1);
     let mut source_to_rendered: Vec<u16> = vec![0; source_line_count + 1];
 
@@ -238,6 +249,38 @@ mod tests {
 
     fn all_text(lines: &[Line]) -> Vec<String> {
         lines.iter().map(|l| line_text(l)).collect()
+    }
+
+    // Frontmatter
+
+    #[test]
+    fn strip_frontmatter_removes_leading_yaml_block() {
+        let content = "---\ntitle: Hello\nsubtitle: World\n---\nBody text";
+        assert_eq!(strip_frontmatter(content), "Body text");
+    }
+
+    #[test]
+    fn strip_frontmatter_passthrough_when_no_block() {
+        let content = "Just a plain body\nwith no frontmatter";
+        assert_eq!(strip_frontmatter(content), content);
+    }
+
+    #[test]
+    fn frontmatter_block_is_not_rendered_as_body() {
+        let md = "---\ntitle: Hello\nsubtitle: World\n---\n\nReal body paragraph.";
+        let (lines, _) = render_with_offsets(md);
+        let combined: String = all_text(&lines).join("\n");
+        assert!(!combined.contains("title: Hello"), "frontmatter leaked: {}", combined);
+        assert!(!combined.contains("subtitle: World"), "subtitle leaked: {}", combined);
+        assert!(combined.contains("Real body paragraph"));
+    }
+
+    #[test]
+    fn strip_frontmatter_ignores_mid_document_rules() {
+        // A `---` used as a markdown horizontal rule further down the file
+        // must not be treated as the end of a frontmatter block.
+        let content = "Body paragraph\n\n---\n\nAfter rule";
+        assert_eq!(strip_frontmatter(content), content);
     }
 
     // Empty / minimal
