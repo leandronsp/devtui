@@ -267,10 +267,13 @@ struct RunLoopState {
     flash: Option<(&'static str, std::time::Instant)>,
     /// Tracks modified state across frames to detect :w saves.
     was_modified: bool,
+    /// Blog author from blog.toml; rendered in preview header when post has no
+    /// `author:` frontmatter field.
+    blog_author: Option<String>,
 }
 
 impl RunLoopState {
-    fn new(chrome_available: bool) -> Self {
+    fn new(chrome_available: bool, blog_author: Option<String>) -> Self {
         Self {
             last_content: String::new(),
             cached_lines: Vec::new(),
@@ -287,6 +290,7 @@ impl RunLoopState {
             preview_stale: false,
             flash: None,
             was_modified: false,
+            blog_author,
         }
     }
 
@@ -320,7 +324,7 @@ impl RunLoopState {
         self.content_changed_at = None;
 
         if self.split_layout != SplitLayout::EditorOnly {
-            let (lines, offsets) = preview::render_with_offsets(&self.last_content, None);
+            let (lines, offsets) = preview::render_with_offsets(&self.last_content, self.blog_author.as_deref());
             self.cached_offsets = offsets;
             self.cached_lines = lines;
         }
@@ -412,7 +416,7 @@ impl RunLoopState {
             }
 
             // Refresh text preview
-            let (lines, offsets) = preview::render_with_offsets(&self.last_content, None);
+            let (lines, offsets) = preview::render_with_offsets(&self.last_content, self.blog_author.as_deref());
             self.cached_offsets = offsets;
             self.cached_lines = lines;
 
@@ -599,7 +603,7 @@ impl RunLoopState {
             resize_pty(self.split_layout, terminal, pty_master, parser)?;
             // Re-render preview content when coming back from EditorOnly
             if self.split_layout != SplitLayout::EditorOnly && self.cached_lines.is_empty() {
-                let (lines, offsets) = preview::render_with_offsets(&self.last_content, None);
+                let (lines, offsets) = preview::render_with_offsets(&self.last_content, self.blog_author.as_deref());
                 self.cached_offsets = offsets;
                 self.cached_lines = lines;
             }
@@ -714,7 +718,8 @@ fn run_loop(
     chrome: Option<&ChromeHandle>,
     picker: &ratatui_image::picker::Picker,
 ) -> io::Result<()> {
-    let mut state = RunLoopState::new(chrome.is_some());
+    let blog_author = html_config.map(|c| c.blog_config.author.clone());
+    let mut state = RunLoopState::new(chrome.is_some(), blog_author);
 
     loop {
         if vim_exited.load(Ordering::Relaxed) {
