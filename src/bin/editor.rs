@@ -22,6 +22,12 @@ fn main() -> io::Result<()> {
         return devtui::editor::run_cms(blog_dir);
     }
 
+    // Force re-import from filesystem: devtui --import <blog_dir>
+    if args.len() >= 3 && args[1] == "--import" {
+        let blog_dir = PathBuf::from(&args[2]);
+        return devtui::editor::import_blog(&blog_dir);
+    }
+
     // Legacy mode: devtui [file.md]
     let file_path = args
         .get(1)

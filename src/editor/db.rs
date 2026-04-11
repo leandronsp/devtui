@@ -177,7 +177,11 @@ pub fn update_title(conn: &Connection, id: i64, title: &str) -> Result<(), CmsEr
 
 pub fn publish(conn: &Connection, id: i64) -> Result<(), CmsError> {
     let changed = conn.execute(
-        "UPDATE articles SET status = 'published', published_at = datetime('now'), updated_at = datetime('now') WHERE id = ?1",
+        "UPDATE articles
+         SET status = 'published',
+             published_at = COALESCE(published_at, datetime('now')),
+             updated_at = datetime('now')
+         WHERE id = ?1",
         params![id],
     )?;
     if changed == 0 {
@@ -188,7 +192,7 @@ pub fn publish(conn: &Connection, id: i64) -> Result<(), CmsError> {
 
 pub fn unpublish(conn: &Connection, id: i64) -> Result<(), CmsError> {
     let changed = conn.execute(
-        "UPDATE articles SET status = 'draft', published_at = NULL, updated_at = datetime('now') WHERE id = ?1",
+        "UPDATE articles SET status = 'draft', updated_at = datetime('now') WHERE id = ?1",
         params![id],
     )?;
     if changed == 0 {
@@ -254,22 +258,20 @@ pub fn update_language(conn: &Connection, id: i64, lang: &str) -> Result<(), Cms
 }
 
 /// List articles with optional search filter.
-/// Order: pinned first, then published (by published_at desc), then drafts (by created_at desc).
+/// Order: drafts first (newest first), then pinned, then published (newest first).
 pub fn list_articles(conn: &Connection, search: Option<&str>) -> Result<Vec<Article>, CmsError> {
     let query = match search {
         Some(_) => {
             "SELECT id, title, slug, content, status, language, pinned, tags, published_at, created_at, updated_at
              FROM articles
              WHERE title LIKE '%' || ?1 || '%'
-             ORDER BY pinned DESC,
-                      CASE status WHEN 'published' THEN 0 ELSE 1 END,
+             ORDER BY CASE WHEN status = 'draft' THEN 0 WHEN pinned = 1 THEN 1 ELSE 2 END,
                       COALESCE(published_at, created_at) DESC"
         }
         None => {
             "SELECT id, title, slug, content, status, language, pinned, tags, published_at, created_at, updated_at
              FROM articles
-             ORDER BY pinned DESC,
-                      CASE status WHEN 'published' THEN 0 ELSE 1 END,
+             ORDER BY CASE WHEN status = 'draft' THEN 0 WHEN pinned = 1 THEN 1 ELSE 2 END,
                       COALESCE(published_at, created_at) DESC"
         }
     };
@@ -285,6 +287,21 @@ pub fn list_articles(conn: &Connection, search: Option<&str>) -> Result<Vec<Arti
         articles.push(row?);
     }
     Ok(articles)
+}
+
+/// First-run import: populates the DB from `posts_dir` only when the `articles`
+/// table is empty. On subsequent runs the DB is the source of truth and this
+/// function is a no-op, preserving any draft/pin state from prior sessions.
+pub fn import_if_empty(
+    conn: &Connection,
+    posts_dir: &Path,
+    date_field: &str,
+) -> Result<usize, CmsError> {
+    let count: i64 = conn.query_row("SELECT COUNT(*) FROM articles", [], |row| row.get(0))?;
+    if count > 0 {
+        return Ok(0);
+    }
+    import_from_filesystem(conn, posts_dir, date_field)
 }
 
 /// Import existing .md files from posts directory into the database.
@@ -323,7 +340,7 @@ pub fn import_from_filesystem(
                 Some(id) => {
                     conn.execute(
                         "UPDATE articles SET title = ?1, content = ?2, language = ?3, tags = ?4,
-                         status = 'published', published_at = COALESCE(?5, published_at),
+                         status = 'published', published_at = COALESCE(published_at, ?5),
                          updated_at = datetime('now')
                          WHERE id = ?6",
                         params![title, body, language, tags_str.replace(' ', ","), date, id],
@@ -348,6 +365,36 @@ pub fn import_from_filesystem(
         }
     }
     Ok(count)
+}
+
+/// Sync DB state to the posts directory: write published articles as `.md`
+/// files, remove `.md` files for articles now marked draft. This is the only
+/// bridge between CMS state and what the blog engine sees; the engine stays
+/// unaware of the DB. Orphan files (no DB row) are left untouched so manual
+/// copies into `posts/` still reach the engine. Every call rewrites published
+/// files unconditionally, so callers should gate sync on DB state change to
+/// avoid forcing full rebuilds through mtime churn.
+pub fn sync_to_filesystem(
+    conn: &Connection,
+    posts_dir: &Path,
+    date_field: &str,
+) -> Result<(), CmsError> {
+    std::fs::create_dir_all(posts_dir)?;
+    for article in list_articles(conn, None)? {
+        let path = posts_dir.join(format!("{}.md", article.slug));
+        match article.status {
+            Status::Published => {
+                let md = build_markdown(&article, date_field);
+                std::fs::write(&path, md)?;
+            }
+            Status::Draft => {
+                if path.exists() {
+                    std::fs::remove_file(&path)?;
+                }
+            }
+        }
+    }
+    Ok(())
 }
 
 /// Build frontmatter + content for writing a published .md file.
@@ -548,15 +595,38 @@ mod tests {
     }
 
     #[test]
-    fn unpublish_clears_status_and_date() {
+    fn publish_preserves_existing_published_at() {
         let conn = test_db();
-        let article = create_article(&conn, "To Unpublish").unwrap();
+        let article = create_article(&conn, "Imported").unwrap();
+        // Simulate an imported article with an original frontmatter date.
+        conn.execute(
+            "UPDATE articles SET published_at = '2024-01-15' WHERE id = ?1",
+            params![article.id],
+        )
+        .unwrap();
+
+        publish(&conn, article.id).unwrap();
+
+        let fetched = get_article(&conn, article.id).unwrap();
+        assert_eq!(fetched.status, Status::Published);
+        assert_eq!(fetched.published_at.as_deref(), Some("2024-01-15"));
+    }
+
+    #[test]
+    fn unpublish_preserves_published_at() {
+        let conn = test_db();
+        let article = create_article(&conn, "Round Trip").unwrap();
+        conn.execute(
+            "UPDATE articles SET published_at = '2024-01-15' WHERE id = ?1",
+            params![article.id],
+        )
+        .unwrap();
         publish(&conn, article.id).unwrap();
         unpublish(&conn, article.id).unwrap();
 
         let fetched = get_article(&conn, article.id).unwrap();
         assert_eq!(fetched.status, Status::Draft);
-        assert!(fetched.published_at.is_none());
+        assert_eq!(fetched.published_at.as_deref(), Some("2024-01-15"));
     }
 
     // --- pin / unpin ---
@@ -587,7 +657,7 @@ mod tests {
     // --- list_articles ---
 
     #[test]
-    fn list_articles_orders_pinned_published_draft() {
+    fn list_articles_orders_drafts_pinned_published() {
         let conn = test_db();
         let _draft = create_article(&conn, "Draft Article").unwrap();
         let pub1 = create_article(&conn, "Published One").unwrap();
@@ -599,9 +669,9 @@ mod tests {
 
         let articles = list_articles(&conn, None).unwrap();
         assert_eq!(articles.len(), 3);
-        assert_eq!(articles[0].title, "Pinned Article");
-        assert_eq!(articles[1].title, "Published One");
-        assert_eq!(articles[2].title, "Draft Article");
+        assert_eq!(articles[0].title, "Draft Article");
+        assert_eq!(articles[1].title, "Pinned Article");
+        assert_eq!(articles[2].title, "Published One");
     }
 
     #[test]
@@ -667,6 +737,107 @@ mod tests {
         assert_eq!(articles.len(), 2);
         // All imported as published
         assert!(articles.iter().all(|a| a.status == Status::Published));
+    }
+
+    #[test]
+    fn sync_writes_published_article_to_md_file() {
+        let conn = test_db();
+        let dir = tempdir();
+        let article = create_article(&conn, "Hello World").unwrap();
+        update_content(&conn, article.id, "Body here.").unwrap();
+        publish(&conn, article.id).unwrap();
+
+        sync_to_filesystem(&conn, &dir, "date").unwrap();
+
+        let path = dir.join("hello-world.md");
+        assert!(path.exists(), "expected {path:?} to exist");
+        let contents = fs::read_to_string(&path).unwrap();
+        assert!(contents.starts_with("---\ntitle: Hello World\n"));
+        assert!(contents.ends_with("Body here."));
+    }
+
+    #[test]
+    fn sync_leaves_orphan_md_files_untouched() {
+        let conn = test_db();
+        let dir = tempdir();
+        let orphan = dir.join("manual-post.md");
+        fs::write(&orphan, "# Manual\n").unwrap();
+
+        sync_to_filesystem(&conn, &dir, "date").unwrap();
+
+        assert!(orphan.exists(), "orphan .md should survive sync");
+        assert_eq!(fs::read_to_string(&orphan).unwrap(), "# Manual\n");
+    }
+
+    #[test]
+    fn sync_removes_md_file_for_draft_article() {
+        let conn = test_db();
+        let dir = tempdir();
+        let article = create_article(&conn, "To Be Unpublished").unwrap();
+        update_content(&conn, article.id, "Content.").unwrap();
+        publish(&conn, article.id).unwrap();
+
+        sync_to_filesystem(&conn, &dir, "date").unwrap();
+        let path = dir.join("to-be-unpublished.md");
+        assert!(path.exists());
+
+        unpublish(&conn, article.id).unwrap();
+        sync_to_filesystem(&conn, &dir, "date").unwrap();
+
+        assert!(!path.exists(), "draft .md should be removed after sync");
+    }
+
+    #[test]
+    fn import_if_empty_skips_when_db_has_articles() {
+        let conn = test_db();
+        let dir = tempdir();
+        fs::write(
+            dir.join("2026-03-29-post.md"),
+            "---\ntitle: Post\ndate: 2026-03-29\n---\n\nBody.\n",
+        )
+        .unwrap();
+
+        // First-run import populates the DB.
+        import_if_empty(&conn, &dir, "date").unwrap();
+        let articles = list_articles(&conn, None).unwrap();
+        assert_eq!(articles.len(), 1);
+
+        // User toggles the article to draft.
+        unpublish(&conn, articles[0].id).unwrap();
+
+        // Second-run must NOT re-import and must NOT overwrite the draft state.
+        import_if_empty(&conn, &dir, "date").unwrap();
+        let after = list_articles(&conn, None).unwrap();
+        assert_eq!(after.len(), 1);
+        assert_eq!(after[0].status, Status::Draft);
+    }
+
+    #[test]
+    fn import_does_not_override_existing_published_at() {
+        let conn = test_db();
+        let dir = tempdir();
+        // First import: DB has no row, file date wins.
+        fs::write(
+            dir.join("post.md"),
+            "---\ntitle: Post\ndate: 2024-01-15\n---\n\nv1.\n",
+        )
+        .unwrap();
+        import_from_filesystem(&conn, &dir, "date").unwrap();
+
+        // User edits the file with a different (wrong) date.
+        fs::write(
+            dir.join("post.md"),
+            "---\ntitle: Post\ndate: 2099-12-31\n---\n\nv2.\n",
+        )
+        .unwrap();
+        import_from_filesystem(&conn, &dir, "date").unwrap();
+
+        let articles = list_articles(&conn, None).unwrap();
+        assert_eq!(articles.len(), 1);
+        // Immutable: the DB date from the first import must win.
+        assert_eq!(articles[0].published_at.as_deref(), Some("2024-01-15"));
+        // Content still updates.
+        assert_eq!(articles[0].content, "v2.\n");
     }
 
     #[test]

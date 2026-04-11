@@ -19,6 +19,11 @@ fn main() {
     let dist_dir = Path::new(&args[2]);
     let engine_dir = Path::new(env!("CARGO_MANIFEST_DIR")).join("src/engine");
 
+    if let Err(e) = devtui::editor::sync_managed_blog(blog_dir) {
+        eprintln!("sync error: {e}");
+        process::exit(1);
+    }
+
     match devtui::engine::build::build(blog_dir, dist_dir, &engine_dir) {
         Ok(report) => {
             if report.built > 0 {
