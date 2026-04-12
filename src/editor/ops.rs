@@ -327,18 +327,66 @@ pub fn start_scribe_session(session_name: &str) -> Result<String, String> {
     }
 }
 
-/// Send content to the scribe session and return the raw response.
+/// Send content to the scribe session and wait for the AI response.
+///
+/// `overmind send` is fire-and-forget. The response arrives asynchronously
+/// in the session logs. This function sends the message, then polls
+/// `overmind logs` until the AI response appears after the `[human]` marker.
 pub fn send_to_scribe(session_name: &str, prompt: &str) -> Result<String, String> {
     let output = std::process::Command::new("overmind")
         .args(["send", session_name, prompt])
         .output()
         .map_err(|e| format!("failed to send to overmind: {e}"))?;
 
-    if output.status.success() {
-        Ok(String::from_utf8_lossy(&output.stdout).to_string())
-    } else {
+    if !output.status.success() {
         let stderr = String::from_utf8_lossy(&output.stderr);
-        Err(format!("overmind send failed: {stderr}"))
+        return Err(format!("overmind send failed: {stderr}"));
+    }
+
+    // Poll logs until the AI response stabilizes (unchanged for 2 consecutive polls).
+    // The response streams incrementally, so we wait until it stops growing.
+    let deadline = std::time::Instant::now() + std::time::Duration::from_secs(60);
+    let mut prev_response = String::new();
+    loop {
+        if std::time::Instant::now() > deadline {
+            return Err("scribe response timed out after 60s".to_string());
+        }
+
+        std::thread::sleep(std::time::Duration::from_secs(2));
+
+        let response = extract_response_from_logs(session_name)?;
+        if !response.is_empty() && response == prev_response {
+            return Ok(response);
+        }
+        prev_response = response;
+    }
+}
+
+/// Read session logs and extract the AI response after the last `[human]` marker.
+fn extract_response_from_logs(session_name: &str) -> Result<String, String> {
+    let output = std::process::Command::new("overmind")
+        .args(["logs", session_name])
+        .output()
+        .map_err(|e| format!("failed to read overmind logs: {e}"))?;
+
+    if !output.status.success() {
+        let stderr = String::from_utf8_lossy(&output.stderr);
+        return Err(format!("overmind logs failed: {stderr}"));
+    }
+
+    let logs = String::from_utf8_lossy(&output.stdout);
+    Ok(parse_last_response(&logs))
+}
+
+/// Parse the AI response from overmind session logs.
+/// Logs format: `[human] <message>` followed by response lines without prefix.
+/// Returns everything after the last `[human]` line.
+pub fn parse_last_response(logs: &str) -> String {
+    let lines: Vec<&str> = logs.lines().collect();
+    let last_human = lines.iter().rposition(|l| l.starts_with("[human]"));
+    match last_human {
+        Some(idx) => lines[idx + 1..].join("\n"),
+        None => String::new(),
     }
 }
 
@@ -570,6 +618,29 @@ mod tests {
         let result = run_deploy(&dist_dir, &deploy_dir);
 
         assert!(result.is_err());
+    }
+
+    #[test]
+    fn parse_last_response_extracts_ai_reply() {
+        let logs = "[human] say hello\nhello world\nhow are you?";
+        assert_eq!(parse_last_response(logs), "hello world\nhow are you?");
+    }
+
+    #[test]
+    fn parse_last_response_returns_empty_when_no_response_yet() {
+        let logs = "[human] say hello";
+        assert_eq!(parse_last_response(logs), "");
+    }
+
+    #[test]
+    fn parse_last_response_uses_last_human_marker() {
+        let logs = "[human] first question\nold answer\n[human] second question\nnew answer";
+        assert_eq!(parse_last_response(logs), "new answer");
+    }
+
+    #[test]
+    fn parse_last_response_returns_empty_on_no_logs() {
+        assert_eq!(parse_last_response(""), "");
     }
 
     #[test]
