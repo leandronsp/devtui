@@ -384,10 +384,12 @@ fn extract_response_from_logs(session_name: &str) -> Result<String, String> {
 pub fn parse_last_response(logs: &str) -> String {
     let lines: Vec<&str> = logs.lines().collect();
     let last_human = lines.iter().rposition(|l| l.starts_with("[human]"));
-    match last_human {
+    let response = match last_human {
         Some(idx) => lines[idx + 1..].join("\n"),
-        None => String::new(),
-    }
+        None => return String::new(),
+    };
+    // Overmind logs escape quotes as \". Unescape for JSON parsing.
+    response.replace("\\\"", "\"")
 }
 
 /// Kill the scribe session on editor exit.
@@ -641,6 +643,14 @@ mod tests {
     #[test]
     fn parse_last_response_returns_empty_on_no_logs() {
         assert_eq!(parse_last_response(""), "");
+    }
+
+    #[test]
+    fn parse_last_response_unescapes_backslash_quotes() {
+        let logs = r#"[human] check this
+[{\"line\":1,\"tier\":\"error\",\"message\":\"typo\"}]"#;
+        let response = parse_last_response(logs);
+        assert_eq!(response, r#"[{"line":1,"tier":"error","message":"typo"}]"#);
     }
 
     #[test]
