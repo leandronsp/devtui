@@ -43,14 +43,23 @@ pub struct ListView {
     serve_after_build: bool,
     serve_stop: Arc<AtomicBool>,
     serve_handle: Option<JoinHandle<()>>,
+    confirm_deploy: bool,
+    deploy_dir: Option<String>,
+    show_theme_picker: bool,
+    themes: Vec<String>,
+    theme_index: usize,
+    current_theme: String,
 }
 
 impl ListView {
-    pub fn new(blog_dir: PathBuf, articles: Vec<Article>) -> Self {
+    pub fn new(blog_dir: PathBuf, articles: Vec<Article>, config: &crate::engine::config::BlogConfig) -> Self {
         let mut table_state = TableState::default();
         if !articles.is_empty() {
             table_state.select(Some(0));
         }
+        let current_theme = config.theme.clone().unwrap_or_else(|| "paper".to_string());
+        let themes = ops::available_themes();
+        let theme_index = themes.iter().position(|t| t == &current_theme).unwrap_or(0);
         Self {
             blog_dir,
             articles,
@@ -69,6 +78,12 @@ impl ListView {
             serve_after_build: false,
             serve_stop: Arc::new(AtomicBool::new(false)),
             serve_handle: None,
+            confirm_deploy: false,
+            deploy_dir: config.deploy_dir.clone(),
+            show_theme_picker: false,
+            themes,
+            theme_index,
+            current_theme,
         }
     }
 
@@ -218,6 +233,16 @@ impl ListView {
                 self.render_delete_confirm(frame, frame.area(), id);
             }
 
+            // Deploy confirmation
+            if self.confirm_deploy {
+                self.render_deploy_confirm(frame, frame.area());
+            }
+
+            // Theme picker
+            if self.show_theme_picker {
+                self.render_theme_picker(frame, frame.area());
+            }
+
             // Error overlay
             if self.show_error {
                 self.render_error_overlay(frame, frame.area());
@@ -363,7 +388,7 @@ impl ListView {
             frame.render_widget(Paragraph::new(search), area);
         } else {
             let hints = Line::from(Span::styled(
-                " j/k:nav  Enter:edit  n:new  p:pub  i:pin  d:del  b:build  s:serve  o:open  e:errors  /:search  ?:help  q:quit",
+                " j/k:nav  Enter:edit  n:new  p:pub  i:pin  d:del  b:build  s:serve  o:open  D:deploy  t:theme  e:errors  ?:help  q:quit",
                 Style::default().fg(Color::DarkGray),
             ));
             frame.render_widget(Paragraph::new(hints), area);
@@ -388,6 +413,8 @@ impl ListView {
             Line::from(" b            Build blog"),
             Line::from(" s            Start/stop server"),
             Line::from(" o            Open in browser"),
+            Line::from(" D            Deploy (build + rsync)"),
+            Line::from(" t            Change theme"),
             Line::from(" e            Show last error"),
             Line::from(" /            Search by title"),
             Line::from(" Esc          Clear search / close"),
@@ -475,6 +502,85 @@ impl ListView {
         frame.render_widget(error, popup_area);
     }
 
+    fn render_deploy_confirm(&self, frame: &mut ratatui::Frame, area: Rect) {
+        let target = self
+            .deploy_dir
+            .as_deref()
+            .unwrap_or("(not configured)");
+        let text = vec![
+            Line::from(""),
+            Line::from(format!(" Deploy to {target}?")),
+            Line::from(""),
+            Line::from(vec![
+                Span::styled(" y ", Style::default().fg(Color::Yellow).add_modifier(Modifier::BOLD)),
+                Span::raw("confirm  "),
+                Span::styled(" n ", Style::default().fg(Color::Green).add_modifier(Modifier::BOLD)),
+                Span::raw("cancel"),
+            ]),
+        ];
+
+        let width = 60.min(area.width);
+        let height = 6.min(area.height);
+        let x = area.x + (area.width.saturating_sub(width)) / 2;
+        let y = area.y + (area.height.saturating_sub(height)) / 2;
+        let popup_area = Rect::new(x, y, width, height);
+
+        let confirm = Paragraph::new(text).block(
+            Block::default()
+                .borders(Borders::ALL)
+                .border_style(Style::default().fg(Color::Yellow))
+                .title(" Confirm Deploy "),
+        );
+        frame.render_widget(ratatui::widgets::Clear, popup_area);
+        frame.render_widget(confirm, popup_area);
+    }
+
+    fn render_theme_picker(&self, frame: &mut ratatui::Frame, area: Rect) {
+        let mut lines = vec![
+            Line::from(""),
+            Line::from(Span::styled(
+                " Select Theme ",
+                Style::default().fg(Color::Cyan).add_modifier(Modifier::BOLD),
+            )),
+            Line::from(""),
+        ];
+
+        for (idx, theme) in self.themes.iter().enumerate() {
+            let marker = if idx == self.theme_index { "> " } else { "  " };
+            let current = if *theme == self.current_theme { " (current)" } else { "" };
+            let style = if idx == self.theme_index {
+                Style::default().fg(Color::White).add_modifier(Modifier::BOLD)
+            } else {
+                Style::default().fg(Color::DarkGray)
+            };
+            lines.push(Line::from(Span::styled(
+                format!(" {marker}{theme}{current}"),
+                style,
+            )));
+        }
+
+        lines.push(Line::from(""));
+        lines.push(Line::from(Span::styled(
+            " j/k:select  Enter:apply  Esc:cancel ",
+            Style::default().fg(Color::DarkGray),
+        )));
+
+        let width = 40.min(area.width);
+        let height = (lines.len() as u16 + 2).min(area.height);
+        let x = area.x + (area.width.saturating_sub(width)) / 2;
+        let y = area.y + (area.height.saturating_sub(height)) / 2;
+        let popup_area = Rect::new(x, y, width, height);
+
+        let picker = Paragraph::new(lines).block(
+            Block::default()
+                .borders(Borders::ALL)
+                .border_style(Style::default().fg(Color::Cyan))
+                .title(" Theme "),
+        );
+        frame.render_widget(ratatui::widgets::Clear, popup_area);
+        frame.render_widget(picker, popup_area);
+    }
+
     fn handle_key(
         &mut self,
         code: KeyCode,
@@ -504,6 +610,71 @@ impl ListView {
                 _ => {
                     self.confirm_delete = None;
                 }
+            }
+            return Ok(None);
+        }
+
+        // Deploy confirmation mode
+        if self.confirm_deploy {
+            match code {
+                KeyCode::Char('y') => {
+                    self.confirm_deploy = false;
+                    if let Some(deploy_dir) = &self.deploy_dir {
+                        let dist_dir = ops::dist_dir_for_blog(&self.blog_dir);
+                        let deploy_path = PathBuf::from(deploy_dir);
+                        match ops::run_deploy(&dist_dir, &deploy_path) {
+                            Ok(msg) => {
+                                self.flash = Some((msg, Instant::now()));
+                            }
+                            Err(err) => {
+                                self.flash = Some((format!("Deploy failed: {err}"), Instant::now()));
+                                self.last_error = Some(err);
+                            }
+                        }
+                    }
+                }
+                _ => {
+                    self.confirm_deploy = false;
+                }
+            }
+            return Ok(None);
+        }
+
+        // Theme picker mode
+        if self.show_theme_picker {
+            match code {
+                KeyCode::Char('j') | KeyCode::Down => {
+                    if self.theme_index + 1 < self.themes.len() {
+                        self.theme_index += 1;
+                    }
+                }
+                KeyCode::Char('k') | KeyCode::Up => {
+                    if self.theme_index > 0 {
+                        self.theme_index -= 1;
+                    }
+                }
+                KeyCode::Enter => {
+                    if let Some(theme) = self.themes.get(self.theme_index) {
+                        let theme = theme.clone();
+                        if theme != self.current_theme {
+                            if let Err(e) = ops::set_theme(&self.blog_dir, &theme) {
+                                self.flash = Some((format!("Theme error: {e}"), Instant::now()));
+                            } else {
+                                self.current_theme = theme.clone();
+                                self.flash = Some((format!("Theme set to {theme}"), Instant::now()));
+                                if self.serving {
+                                    self.stop_serve();
+                                    self.start_serve();
+                                }
+                            }
+                        }
+                    }
+                    self.show_theme_picker = false;
+                }
+                KeyCode::Esc => {
+                    self.show_theme_picker = false;
+                }
+                _ => {}
             }
             return Ok(None);
         }
@@ -581,6 +752,19 @@ impl ListView {
                 }
                 let url = format!("http://localhost:{}", ops::SERVE_PORT);
                 let _ = std::process::Command::new("open").arg(&url).spawn();
+            }
+            KeyCode::Char('D') => {
+                if self.deploy_dir.is_some() {
+                    self.confirm_deploy = true;
+                } else {
+                    self.flash = Some(("No deploy_dir in blog.toml".into(), Instant::now()));
+                }
+            }
+            KeyCode::Char('t') => {
+                if !self.themes.is_empty() {
+                    self.theme_index = self.themes.iter().position(|t| t == &self.current_theme).unwrap_or(0);
+                    self.show_theme_picker = true;
+                }
             }
             KeyCode::Char('e') => {
                 if self.last_error.is_some() {
@@ -683,8 +867,28 @@ impl ListView {
 mod tests {
     use super::*;
 
+    fn test_config() -> crate::engine::config::BlogConfig {
+        crate::engine::config::BlogConfig {
+            title: "Test".into(),
+            subtitle: None,
+            url: "https://test.com".into(),
+            author: "A".into(),
+            lang: "en".into(),
+            articles_path: None,
+            theme: Some("paper".into()),
+            analytics_id: None,
+            license: None,
+            license_url: None,
+            og_image: None,
+            deploy_dir: None,
+            tags: None,
+            links: None,
+            guides: None,
+        }
+    }
+
     fn make_list_view() -> ListView {
-        ListView::new(PathBuf::from("blogs/test"), vec![])
+        ListView::new(PathBuf::from("blogs/test"), vec![], &test_config())
     }
 
     #[test]
