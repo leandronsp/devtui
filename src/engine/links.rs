@@ -62,7 +62,6 @@ mod tests {
 title = "Test"
 url = "https://test.com"
 author = "Author"
-date_field = "date"
 lang = "en"
 
 [[links]]
@@ -83,7 +82,6 @@ url = "https://linkedin.com/in/user"
 title = "Test"
 url = "https://test.com"
 author = "Author"
-date_field = "date"
 lang = "en"
 tags = ["ruby", "rust", "docker"]
 "#,
@@ -97,7 +95,6 @@ tags = ["ruby", "rust", "docker"]
 title = "Test"
 url = "https://test.com"
 author = "Author"
-date_field = "date"
 lang = "en"
 
 [[guides]]
@@ -118,7 +115,6 @@ url = "https://aws101.test.com"
 title = "Test"
 url = "https://test.com"
 author = "Author"
-date_field = "date"
 lang = "en"
 "#,
         )

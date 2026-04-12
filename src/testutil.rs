@@ -17,7 +17,6 @@ pub fn test_blog_config() -> BlogConfig {
         subtitle: None,
         url: "https://test.com".to_string(),
         author: "A".to_string(),
-        date_field: "date".to_string(),
         lang: "en".to_string(),
         articles_path: None,
         theme: None,

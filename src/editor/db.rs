@@ -295,13 +295,12 @@ pub fn list_articles(conn: &Connection, search: Option<&str>) -> Result<Vec<Arti
 pub fn import_if_empty(
     conn: &Connection,
     posts_dir: &Path,
-    date_field: &str,
 ) -> Result<usize, CmsError> {
     let count: i64 = conn.query_row("SELECT COUNT(*) FROM articles", [], |row| row.get(0))?;
     if count > 0 {
         return Ok(0);
     }
-    import_from_filesystem(conn, posts_dir, date_field)
+    import_from_filesystem(conn, posts_dir)
 }
 
 /// Import existing .md files from posts directory into the database.
@@ -309,7 +308,6 @@ pub fn import_if_empty(
 pub fn import_from_filesystem(
     conn: &Connection,
     posts_dir: &Path,
-    date_field: &str,
 ) -> Result<usize, CmsError> {
     let entries = std::fs::read_dir(posts_dir)?;
     let mut count = 0;
@@ -323,7 +321,7 @@ pub fn import_from_filesystem(
                 .map(|s| s.to_string_lossy().to_string())
                 .unwrap_or_default();
             let title = config::frontmatter("title", &content).unwrap_or_else(|| slug.clone());
-            let date = config::frontmatter_date(date_field, &content);
+            let date = config::frontmatter_date(&content);
             let language = config::frontmatter("language", &content).unwrap_or_else(|| "en".to_string());
             let tags_str = config::extract_tags(&content);
 
@@ -394,10 +392,7 @@ pub fn sync_to_filesystem(conn: &Connection, posts_dir: &Path) -> Result<(), Cms
 /// One-shot, idempotent migration: rewrite any body-only `content` rows to
 /// full markdown (frontmatter + body) so `content` is the single source of
 /// truth for each article's on-disk form.
-pub fn migrate_content_to_full_markdown(
-    conn: &Connection,
-    date_field: &str,
-) -> Result<(), CmsError> {
+pub fn migrate_content_to_full_markdown(conn: &Connection) -> Result<(), CmsError> {
     let mut stmt = conn.prepare(
         "SELECT id, title, slug, content, status, language, pinned, tags, published_at, created_at, updated_at
          FROM articles",
@@ -410,7 +405,7 @@ pub fn migrate_content_to_full_markdown(
         if article.content.starts_with("---\n") {
             continue;
         }
-        let rewritten = build_markdown(&article, date_field);
+        let rewritten = build_markdown(&article);
         conn.execute(
             "UPDATE articles SET content = ?1 WHERE id = ?2",
             params![rewritten, article.id],
@@ -420,12 +415,12 @@ pub fn migrate_content_to_full_markdown(
 }
 
 /// Build frontmatter + content for writing a published .md file.
-pub fn build_markdown(article: &Article, date_field: &str) -> String {
+pub fn build_markdown(article: &Article) -> String {
     use std::fmt::Write;
     let mut md = String::from("---\n");
     let _ = writeln!(md, "title: {}", article.title);
     if let Some(ref date) = article.published_at {
-        let _ = writeln!(md, "{date_field}: {date}");
+        let _ = writeln!(md, "published_at: {date}");
     }
     if !article.tags.is_empty() {
         let tags_yaml: Vec<String> = article.tags.iter().map(|t| format!("\"{t}\"")).collect();
@@ -519,7 +514,7 @@ mod tests {
         update_content(&conn, article.id, "Just a body.").unwrap();
         assert_eq!(get_article(&conn, article.id).unwrap().content, "Just a body.");
 
-        migrate_content_to_full_markdown(&conn, "published_at").unwrap();
+        migrate_content_to_full_markdown(&conn).unwrap();
 
         let after = get_article(&conn, article.id).unwrap();
         assert!(after.content.starts_with("---\n"), "no frontmatter: {:?}", after.content);
@@ -532,9 +527,9 @@ mod tests {
         let conn = test_db();
         let article = create_article(&conn, "Test").unwrap();
         update_content(&conn, article.id, "Body.").unwrap();
-        migrate_content_to_full_markdown(&conn, "published_at").unwrap();
+        migrate_content_to_full_markdown(&conn).unwrap();
         let first = get_article(&conn, article.id).unwrap().content;
-        migrate_content_to_full_markdown(&conn, "published_at").unwrap();
+        migrate_content_to_full_markdown(&conn).unwrap();
         let second = get_article(&conn, article.id).unwrap().content;
         assert_eq!(first, second);
     }
@@ -781,7 +776,7 @@ mod tests {
         )
         .unwrap();
 
-        let count = import_from_filesystem(&conn, &dir, "date").unwrap();
+        let count = import_from_filesystem(&conn, &dir).unwrap();
         assert_eq!(count, 2);
 
         let articles = list_articles(&conn, None).unwrap();
@@ -847,7 +842,7 @@ mod tests {
             "---\ntitle: Hello\ndate: 2026-04-11\n---\n\nBody text.\n",
         )
         .unwrap();
-        import_from_filesystem(&conn, &dir, "date").unwrap();
+        import_from_filesystem(&conn, &dir).unwrap();
         let articles = list_articles(&conn, None).unwrap();
         assert!(articles[0].content.starts_with("---\n"), "{}", articles[0].content);
         assert!(articles[0].content.contains("title: Hello"));
@@ -865,7 +860,7 @@ mod tests {
         .unwrap();
 
         // First-run import populates the DB.
-        import_if_empty(&conn, &dir, "date").unwrap();
+        import_if_empty(&conn, &dir).unwrap();
         let articles = list_articles(&conn, None).unwrap();
         assert_eq!(articles.len(), 1);
 
@@ -873,7 +868,7 @@ mod tests {
         unpublish(&conn, articles[0].id).unwrap();
 
         // Second-run must NOT re-import and must NOT overwrite the draft state.
-        import_if_empty(&conn, &dir, "date").unwrap();
+        import_if_empty(&conn, &dir).unwrap();
         let after = list_articles(&conn, None).unwrap();
         assert_eq!(after.len(), 1);
         assert_eq!(after[0].status, Status::Draft);
@@ -886,18 +881,18 @@ mod tests {
         // First import: DB has no row, file date wins.
         fs::write(
             dir.join("post.md"),
-            "---\ntitle: Post\ndate: 2024-01-15\n---\n\nv1.\n",
+            "---\ntitle: Post\npublished_at: 2024-01-15\n---\n\nv1.\n",
         )
         .unwrap();
-        import_from_filesystem(&conn, &dir, "date").unwrap();
+        import_from_filesystem(&conn, &dir).unwrap();
 
         // User edits the file with a different (wrong) date.
         fs::write(
             dir.join("post.md"),
-            "---\ntitle: Post\ndate: 2099-12-31\n---\n\nv2.\n",
+            "---\ntitle: Post\npublished_at: 2099-12-31\n---\n\nv2.\n",
         )
         .unwrap();
-        import_from_filesystem(&conn, &dir, "date").unwrap();
+        import_from_filesystem(&conn, &dir).unwrap();
 
         let articles = list_articles(&conn, None).unwrap();
         assert_eq!(articles.len(), 1);
@@ -918,8 +913,8 @@ mod tests {
         )
         .unwrap();
 
-        import_from_filesystem(&conn, &dir, "date").unwrap();
-        import_from_filesystem(&conn, &dir, "date").unwrap();
+        import_from_filesystem(&conn, &dir).unwrap();
+        import_from_filesystem(&conn, &dir).unwrap();
 
         let articles = list_articles(&conn, None).unwrap();
         assert_eq!(articles.len(), 1);
@@ -1047,7 +1042,7 @@ mod tests {
             created_at: "2026-03-29".to_string(),
             updated_at: "2026-03-29".to_string(),
         };
-        let md = build_markdown(&article, "date");
+        let md = build_markdown(&article);
         assert!(md.starts_with("---\n"));
         assert!(md.contains("title: Draft Post"));
         assert!(!md.contains("date:"));
@@ -1071,7 +1066,7 @@ mod tests {
             created_at: "2026-03-29".to_string(),
             updated_at: "2026-03-29".to_string(),
         };
-        let md = build_markdown(&article, "date");
+        let md = build_markdown(&article);
         assert!(md.contains("language: pt"));
     }
 
@@ -1127,10 +1122,10 @@ mod tests {
             created_at: "2026-03-29".to_string(),
             updated_at: "2026-03-29".to_string(),
         };
-        let md = build_markdown(&article, "date");
+        let md = build_markdown(&article);
         assert!(md.starts_with("---\n"));
         assert!(md.contains("title: Test Post"));
-        assert!(md.contains("date: 2026-03-29"));
+        assert!(md.contains("published_at: 2026-03-29"));
         assert!(md.contains("tags: [\"rust\", \"tdd\"]"));
         assert!(md.contains("Hello world."));
         // language "en" should NOT appear (it's the default)

@@ -36,7 +36,7 @@ pub fn build(blog_dir: &Path, dist_dir: &Path, engine_dir: &Path) -> Result<Buil
     };
     fs::create_dir_all(&articles_dir).map_err(|e| e.to_string())?;
 
-    let mut posts = config::collect_posts(&posts_dir, &cfg.date_field)?;
+    let mut posts = config::collect_posts(&posts_dir)?;
 
     let (rebuilt_articles, sitemap_entries, skipped) = render_articles(
         &cfg, &posts, &articles_dir, articles_prefix, blog_dir, &theme_dir, engine_dir,
@@ -180,7 +180,7 @@ pub fn render_preview_html(
     let html_body = markdown::markdown_to_html(&body);
     let description = markdown::post_snippet(&body, None, 160);
     let date = if has_frontmatter {
-        config::frontmatter_date(&cfg.date_field, content).unwrap_or_default()
+        config::frontmatter_date(content).unwrap_or_default()
     } else {
         String::new()
     };
@@ -268,7 +268,6 @@ title = "Test Blog"
 subtitle = "a test subtitle"
 url = "https://test-blog.com"
 author = "Test Author"
-date_field = "date"
 lang = "en"
 "#,
         )
@@ -278,7 +277,7 @@ lang = "en"
             posts.join("2026-01-01-hello.md"),
             r#"---
 title: Hello World
-date: 2026-01-01
+published_at: 2026-01-01
 description: A hello post
 language: en
 tags: ["rust", "tdd"]
@@ -293,7 +292,7 @@ This is the **first** post.
             posts.join("2026-01-02-second.md"),
             r#"---
 title: Second Post
-date: 2026-01-02
+published_at: 2026-01-02
 description: The second post
 language: en
 tags: ["rust"]
@@ -368,7 +367,7 @@ This is the second post.
         let (blog, dist) = setup_blog(&tmp);
         fs::write(
             blog.join("posts/2026-01-09-with-image.md"),
-            "---\ntitle: Image Post\ndate: 2026-01-09\ndescription: A post with image\nimage: https://example.com/cover.png\n---\n\nContent.\n",
+            "---\ntitle: Image Post\npublished_at: 2026-01-09\ndescription: A post with image\nimage: https://example.com/cover.png\n---\n\nContent.\n",
         )
         .expect("write test post");
         do_build(&blog, &dist);
@@ -620,7 +619,7 @@ This is the second post.
         let (blog, dist) = setup_blog(&tmp);
         fs::write(
             blog.join("posts/2026-01-03-no-desc.md"),
-            "---\ntitle: No Description Post\ndate: 2026-01-03\nlanguage: en\n---\n\nContent without description.\n",
+            "---\ntitle: No Description Post\npublished_at: 2026-01-03\nlanguage: en\n---\n\nContent without description.\n",
         )
         .expect("write test post");
         do_build(&blog, &dist);
@@ -633,7 +632,7 @@ This is the second post.
         let (blog, dist) = setup_blog(&tmp);
         fs::write(
             blog.join("posts/2026-01-03-no-desc.md"),
-            "---\ntitle: No Description Post\ndate: 2026-01-03\nlanguage: en\n---\n\nContent without explicit description field.\n",
+            "---\ntitle: No Description Post\npublished_at: 2026-01-03\nlanguage: en\n---\n\nContent without explicit description field.\n",
         )
         .expect("write test post");
         do_build(&blog, &dist);
@@ -647,7 +646,7 @@ This is the second post.
         let (blog, dist) = setup_blog(&tmp);
         fs::write(
             blog.join("posts/2026-01-04-hr-heading.md"),
-            "---\ntitle: HR Heading Test\ndate: 2026-01-04\n---\n\nSome text\n\n---\n\n## Section After Rule\n",
+            "---\ntitle: HR Heading Test\npublished_at: 2026-01-04\n---\n\nSome text\n\n---\n\n## Section After Rule\n",
         )
         .expect("write test post");
         do_build(&blog, &dist);
@@ -662,12 +661,12 @@ This is the second post.
         let (blog, dist) = setup_blog(&tmp);
         fs::write(
             blog.join("posts/2026-01-05-my-post.md"),
-            "---\ntitle: Duplicate Post\ndate: 2026-01-05\nlanguage: en\n---\n\nFirst version.\n",
+            "---\ntitle: Duplicate Post\npublished_at: 2026-01-05\nlanguage: en\n---\n\nFirst version.\n",
         )
         .expect("write test post");
         fs::write(
             blog.join("posts/2026-01-05-my-post-abc.md"),
-            "---\ntitle: Duplicate Post\ndate: 2026-01-05\nlanguage: en\n---\n\nSecond version.\n",
+            "---\ntitle: Duplicate Post\npublished_at: 2026-01-05\nlanguage: en\n---\n\nSecond version.\n",
         )
         .expect("write test post");
         do_build(&blog, &dist);
@@ -817,7 +816,7 @@ This is the second post.
         let (blog, dist) = setup_blog(&tmp);
         fs::write(
             blog.join("posts/2026-01-06-emoji.md"),
-            "---\ntitle: Emoji Test\ndate: 2026-01-06\ndescription: Testing emojis\n---\n\nHello :wave: world :bulb:\n",
+            "---\ntitle: Emoji Test\npublished_at: 2026-01-06\ndescription: Testing emojis\n---\n\nHello :wave: world :bulb:\n",
         )
         .expect("write test post");
         do_build(&blog, &dist);
@@ -834,7 +833,7 @@ This is the second post.
         let (blog, dist) = setup_blog(&tmp);
         fs::write(
             blog.join("posts/2026-01-07-list.md"),
-            "---\ntitle: List Test\ndate: 2026-01-07\n---\n\nSome text:\n* item one\n* item two\n",
+            "---\ntitle: List Test\npublished_at: 2026-01-07\n---\n\nSome text:\n* item one\n* item two\n",
         )
         .expect("write test post");
         do_build(&blog, &dist);
@@ -848,7 +847,7 @@ This is the second post.
         let (blog, dist) = setup_blog(&tmp);
         fs::write(
             blog.join("posts/2026-01-08-quote.md"),
-            "---\ntitle: Quote Test\ndate: 2026-01-08\n---\n\nSome text\n> a quote\n",
+            "---\ntitle: Quote Test\npublished_at: 2026-01-08\n---\n\nSome text\n> a quote\n",
         )
         .expect("write test post");
         do_build(&blog, &dist);

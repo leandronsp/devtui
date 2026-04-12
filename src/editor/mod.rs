@@ -30,10 +30,10 @@ pub fn run_cms(blog_dir: PathBuf) -> io::Result<()> {
 
     let posts_dir = blog_dir.join("posts");
     if posts_dir.exists() {
-        let _ = db::import_if_empty(&conn, &posts_dir, &cfg.date_field);
+        let _ = db::import_if_empty(&conn, &posts_dir);
     }
 
-    db::migrate_content_to_full_markdown(&conn, &cfg.date_field)
+    db::migrate_content_to_full_markdown(&conn)
         .map_err(|e| io::Error::other(e.to_string()))?;
 
     // Prepare HTML preview config (template + CSS)
@@ -246,12 +246,12 @@ fn write_published_md(article: &db::Article, blog_dir: &Path) -> io::Result<()> 
 /// the CMS and the user wants to pull changes in. Draft/pin state on
 /// unaffected articles is preserved.
 pub fn import_blog(blog_dir: &Path) -> io::Result<()> {
-    let cfg = BlogConfig::from_file(&blog_dir.join("blog.toml"))
+    BlogConfig::from_file(&blog_dir.join("blog.toml"))
         .map_err(io::Error::other)?;
     let conn = db::init_db(&blog_dir.join("devtui.db"))
         .map_err(|e| io::Error::other(e.to_string()))?;
     let posts_dir = blog_dir.join("posts");
-    db::import_from_filesystem(&conn, &posts_dir, &cfg.date_field)
+    db::import_from_filesystem(&conn, &posts_dir)
         .map_err(|e| io::Error::other(e.to_string()))?;
     Ok(())
 }
@@ -280,7 +280,7 @@ mod tests {
     fn write_blog_toml(blog_dir: &Path) {
         std::fs::write(
             blog_dir.join("blog.toml"),
-            "title = \"Test\"\nurl = \"https://t.example\"\nauthor = \"A\"\ndate_field = \"date\"\nlang = \"en\"\n",
+            "title = \"Test\"\nurl = \"https://t.example\"\nauthor = \"A\"\nlang = \"en\"\n",
         )
         .unwrap();
     }

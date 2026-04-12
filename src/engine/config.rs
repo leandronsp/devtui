@@ -20,7 +20,6 @@ pub struct BlogConfig {
     pub subtitle: Option<String>,
     pub url: String,
     pub author: String,
-    pub date_field: String,
     pub lang: String,
     pub articles_path: Option<String>,
     pub theme: Option<String>,
@@ -81,9 +80,10 @@ pub fn frontmatter(field: &str, content: &str) -> Option<String> {
     None
 }
 
-/// Extract date from frontmatter, stripping time portion.
-pub fn frontmatter_date(field: &str, content: &str) -> Option<String> {
-    frontmatter(field, content).map(|v| v.split_whitespace().next().unwrap_or(&v).to_string())
+/// Extract `published_at` from frontmatter, stripping any time portion.
+pub fn frontmatter_date(content: &str) -> Option<String> {
+    frontmatter("published_at", content)
+        .map(|v| v.split_whitespace().next().unwrap_or(&v).to_string())
 }
 
 /// Extract post body (everything after the closing --- of frontmatter).
@@ -133,13 +133,13 @@ pub struct Post {
 }
 
 /// Collect all markdown posts from a directory, extracting frontmatter fields.
-pub fn collect_posts(posts_dir: &Path, date_field: &str) -> Result<Vec<Post>, String> {
+pub fn collect_posts(posts_dir: &Path) -> Result<Vec<Post>, String> {
     if !posts_dir.exists() {
         return Ok(Vec::new());
     }
     let mut entries = markdown_entries(posts_dir)?;
     entries.sort_by_key(|e| e.file_name());
-    entries.iter().map(|e| post_from_path(&e.path(), date_field)).collect()
+    entries.iter().map(|e| post_from_path(&e.path())).collect()
 }
 
 fn markdown_entries(dir: &Path) -> Result<Vec<fs::DirEntry>, String> {
@@ -150,12 +150,12 @@ fn markdown_entries(dir: &Path) -> Result<Vec<fs::DirEntry>, String> {
         .collect())
 }
 
-fn post_from_path(path: &Path, date_field: &str) -> Result<Post, String> {
+fn post_from_path(path: &Path) -> Result<Post, String> {
     let content = fs::read_to_string(path).map_err(|e| e.to_string())?;
     let slug = path.file_stem().map(|s| s.to_string_lossy().to_string()).unwrap_or_default();
     Ok(Post {
         title: frontmatter("title", &content).unwrap_or_default(),
-        date: frontmatter_date(date_field, &content).unwrap_or_default(),
+        date: frontmatter_date(&content).unwrap_or_default(),
         description: frontmatter("description", &content).unwrap_or_default(),
         image: frontmatter("image", &content),
         slug,
@@ -203,13 +203,12 @@ title = "Test Blog"
 subtitle = "a test subtitle"
 url = "https://test.com"
 author = "Test Author"
-date_field = "date"
 lang = "en"
 "#
     }
 
     fn post_md() -> &'static str {
-        "---\ntitle: My Test Post\ndate: 2026-03-29\ndescription: A test description\ntags: [\"rust\", \"tdd\"]\n---\n\nSome content here.\n"
+        "---\ntitle: My Test Post\npublished_at: 2026-03-29\ndescription: A test description\ntags: [\"rust\", \"tdd\"]\n---\n\nSome content here.\n"
     }
 
     fn post_alt_md() -> &'static str {
@@ -217,11 +216,11 @@ lang = "en"
     }
 
     fn post_no_desc_md() -> &'static str {
-        "---\ntitle: No Description Post\ndate: 2026-03-29\n---\n\nContent without description.\n"
+        "---\ntitle: No Description Post\npublished_at: 2026-03-29\n---\n\nContent without description.\n"
     }
 
     fn post_with_hr_md() -> &'static str {
-        "---\ntitle: HR Post\ndate: 2026-03-29\n---\n\nBefore rule\n\n---\n\nAfter rule\n"
+        "---\ntitle: HR Post\npublished_at: 2026-03-29\n---\n\nBefore rule\n\n---\n\nAfter rule\n"
     }
 
     // --- BlogConfig ---
@@ -258,8 +257,8 @@ lang = "en"
     }
 
     #[test]
-    fn frontmatter_extracts_date() {
-        assert_eq!(frontmatter("date", post_md()).unwrap(), "2026-03-29");
+    fn frontmatter_extracts_published_at_field() {
+        assert_eq!(frontmatter("published_at", post_md()).unwrap(), "2026-03-29");
     }
 
     #[test]
@@ -290,7 +289,7 @@ lang = "en"
     #[test]
     fn frontmatter_date_strips_time() {
         assert_eq!(
-            frontmatter_date("published_at", post_alt_md()).unwrap(),
+            frontmatter_date(post_alt_md()).unwrap(),
             "2024-01-15"
         );
     }
@@ -298,7 +297,7 @@ lang = "en"
     #[test]
     fn frontmatter_date_keeps_date_only() {
         assert_eq!(
-            frontmatter_date("date", post_md()).unwrap(),
+            frontmatter_date(post_md()).unwrap(),
             "2026-03-29"
         );
     }
@@ -426,7 +425,7 @@ lang = "en"
     #[test]
     fn collect_posts_returns_empty_for_nonexistent_dir() {
         let dir = std::path::PathBuf::from("/tmp/devtui-no-such-dir-999");
-        let posts = collect_posts(&dir, "date").unwrap();
+        let posts = collect_posts(&dir).unwrap();
         assert!(posts.is_empty());
     }
 
@@ -435,12 +434,12 @@ lang = "en"
         let dir = tempdir();
         fs::write(
             dir.join("hello-world.md"),
-            "---\ntitle: Hello World\ndate: 2026-03-29\ndescription: A test\n---\n\nBody.\n",
+            "---\ntitle: Hello World\npublished_at: 2026-03-29\ndescription: A test\n---\n\nBody.\n",
         )
         .unwrap();
         fs::write(dir.join("not-markdown.txt"), "skip me").unwrap();
 
-        let posts = collect_posts(&dir, "date").unwrap();
+        let posts = collect_posts(&dir).unwrap();
         assert_eq!(posts.len(), 1);
         assert_eq!(posts[0].title, "Hello World");
         assert_eq!(posts[0].slug, "hello-world");
@@ -453,11 +452,11 @@ lang = "en"
         let dir = tempdir();
         fs::write(
             dir.join("no-desc.md"),
-            "---\ntitle: No Desc\ndate: 2026-01-01\n---\n\nBody.\n",
+            "---\ntitle: No Desc\npublished_at: 2026-01-01\n---\n\nBody.\n",
         )
         .unwrap();
 
-        let posts = collect_posts(&dir, "date").unwrap();
+        let posts = collect_posts(&dir).unwrap();
         assert_eq!(posts.len(), 1);
         assert!(posts[0].description.is_empty());
         assert!(posts[0].image.is_none());
