@@ -31,6 +31,37 @@ fn frontmatter_date(content: &str) -> Option<String> {
     }
 }
 
+/// Replace or insert a field in the YAML frontmatter block.
+/// Returns the content unchanged if no frontmatter block is found.
+pub(crate) fn set_frontmatter_field(content: &str, field: &str, value: &str) -> String {
+    let Some(rest) = content.strip_prefix("---\n") else {
+        return content.to_string();
+    };
+    let Some(end) = rest.find("\n---") else {
+        return content.to_string();
+    };
+    let prefix = format!("{field}:");
+    let mut lines: Vec<String> = rest[..end].lines().map(|l| l.to_string()).collect();
+    let mut found = false;
+    for line in &mut lines {
+        if line.trim_start().starts_with(&prefix) {
+            *line = format!("{field}: {value}");
+            found = true;
+            break;
+        }
+    }
+    if !found {
+        lines.push(format!("{field}: {value}"));
+    }
+    let mut result = String::from("---\n");
+    for line in &lines {
+        result.push_str(line);
+        result.push('\n');
+    }
+    result.push_str(&rest[end + 1..]);
+    result
+}
+
 pub(crate) fn frontmatter_field(content: &str, field: &str) -> Option<String> {
     let rest = content.strip_prefix("---\n")?;
     let end = rest.find("\n---\n")?;
@@ -785,5 +816,33 @@ mod tests {
         assert_eq!(line_text(&lines[0]), "Hello");
         assert_eq!(line_text(&lines[1]), "");
         assert_eq!(line_text(&lines[2]), "Body.");
+    }
+
+    // --- set_frontmatter_field ---
+
+    #[test]
+    fn set_frontmatter_field_replaces_existing() {
+        let content = "---\ntitle: Old Title\npublished_at: 2026-01-01\n---\n\nBody.";
+        let result = set_frontmatter_field(content, "title", "New Title");
+        assert!(result.contains("title: New Title"));
+        assert!(!result.contains("Old Title"));
+        assert!(result.contains("published_at: 2026-01-01"));
+        assert!(result.contains("Body."));
+    }
+
+    #[test]
+    fn set_frontmatter_field_inserts_when_missing() {
+        let content = "---\ntitle: Hello\n---\n\nBody.";
+        let result = set_frontmatter_field(content, "subtitle", "A tagline");
+        assert!(result.contains("subtitle: A tagline"));
+        assert!(result.contains("title: Hello"));
+        assert!(result.contains("Body."));
+    }
+
+    #[test]
+    fn set_frontmatter_field_no_frontmatter_returns_unchanged() {
+        let content = "Just plain text.";
+        let result = set_frontmatter_field(content, "title", "New");
+        assert_eq!(result, content);
     }
 }
