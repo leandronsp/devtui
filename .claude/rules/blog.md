@@ -54,7 +54,7 @@ Every build generates: canonical URLs, Open Graph, Twitter Card, JSON-LD (BlogPo
 - Unit tests in each `src/engine/*.rs` module with `#[cfg(test)]`
 - Integration tests in `src/engine/build.rs` (full pipeline with temp dirs)
 - Every new engine function needs tests. Every new output artifact needs integration assertions.
-- `make test` runs all tests (149 total)
+- `make test` runs all tests (360 total)
 
 ## Adding a new engine module
 
