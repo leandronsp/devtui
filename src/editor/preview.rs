@@ -62,29 +62,6 @@ pub(crate) fn set_frontmatter_field(content: &str, field: &str, value: &str) -> 
     result
 }
 
-/// Remove a field from the YAML frontmatter block.
-/// Returns the content unchanged if no frontmatter or field not found.
-pub(crate) fn remove_frontmatter_field(content: &str, field: &str) -> String {
-    let Some(rest) = content.strip_prefix("---\n") else {
-        return content.to_string();
-    };
-    let Some(end) = rest.find("\n---") else {
-        return content.to_string();
-    };
-    let prefix = format!("{field}:");
-    let lines: Vec<&str> = rest[..end]
-        .lines()
-        .filter(|line| !line.trim_start().starts_with(&prefix))
-        .collect();
-    let mut result = String::from("---\n");
-    for line in &lines {
-        result.push_str(line);
-        result.push('\n');
-    }
-    result.push_str(&rest[end + 1..]);
-    result
-}
-
 pub(crate) fn frontmatter_field(content: &str, field: &str) -> Option<String> {
     let rest = content.strip_prefix("---\n")?;
     let end = rest.find("\n---\n")?;
@@ -869,21 +846,4 @@ mod tests {
         assert_eq!(result, content);
     }
 
-    // --- remove_frontmatter_field ---
-
-    #[test]
-    fn remove_frontmatter_field_removes_existing() {
-        let content = "---\ntitle: Hello\nsubtitle: Tagline\n---\n\nBody.";
-        let result = remove_frontmatter_field(content, "subtitle");
-        assert!(!result.contains("subtitle"));
-        assert!(result.contains("title: Hello"));
-        assert!(result.contains("Body."));
-    }
-
-    #[test]
-    fn remove_frontmatter_field_missing_is_noop() {
-        let content = "---\ntitle: Hello\n---\n\nBody.";
-        let result = remove_frontmatter_field(content, "subtitle");
-        assert_eq!(result, content);
-    }
 }

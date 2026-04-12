@@ -1,5 +1,5 @@
 use std::io::{self, Read, Write};
-use std::path::{Path, PathBuf};
+use std::path::PathBuf;
 use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::{Arc, Mutex, RwLock};
 use std::thread;
@@ -8,26 +8,17 @@ use std::time::Duration;
 use crossterm::event::{self, Event, KeyCode, KeyModifiers};
 use portable_pty::{CommandBuilder, NativePtySystem, PtySize, PtySystem};
 use ratatui::{
-    layout::{Constraint, Layout, Rect},
+    layout::{Constraint, Layout},
     style::{Color, Modifier, Style},
     text::{Line, Span},
     widgets::{Block, Borders, Paragraph, Wrap},
 };
 use tui_term::widget::PseudoTerminal;
 
-use super::chrome::{ChromeHandle, ChromeResult};
-use super::kitty::KittyImage;
 use super::preview;
-
 
 const DRAFT_PATH: &str = "draft.md";
 const CONTENT_TMP: &str = "/tmp/devtui-content";
-
-#[derive(Clone, Copy, Debug, PartialEq)]
-enum PreviewMode {
-    Text,
-    Html,
-}
 
 #[derive(Clone, Copy, PartialEq)]
 enum SplitLayout {
@@ -49,8 +40,6 @@ pub fn run(
     terminal: &mut ratatui::DefaultTerminal,
     file_path: PathBuf,
     html_config: Option<&HtmlPreviewConfig>,
-    chrome: Option<&ChromeHandle>,
-    picker: &ratatui_image::picker::Picker,
 ) -> io::Result<(EditorResult, String)> {
     if !file_path.exists() {
         std::fs::write(&file_path, "")?;
@@ -157,11 +146,8 @@ pub fn run(
         &pty_pair.master,
         &vim_exited,
         &file_display,
-        &file_path,
         &content_swap,
         html_config,
-        chrome,
-        picker,
     )?;
 
     // Read final content from the actual file vim was editing.
@@ -247,125 +233,14 @@ fn vim_size(layout: SplitLayout, width: u16, height: u16) -> (u16, u16) {
     }
 }
 
-/// Inline form for editing title and subtitle.
-struct TitleForm {
-    title: String,
-    subtitle: String,
-    focused: TitleFormField,
-    cursor: usize,
-    error: Option<&'static str>,
-}
-
-#[derive(PartialEq)]
-enum TitleFormField {
-    Title,
-    Subtitle,
-}
-
-impl TitleForm {
-    fn new(title: String, subtitle: String) -> Self {
-        let cursor = title.len();
-        Self {
-            title,
-            subtitle,
-            focused: TitleFormField::Title,
-            cursor,
-            error: None,
-        }
-    }
-
-    fn focused_value(&self) -> &str {
-        match self.focused {
-            TitleFormField::Title => &self.title,
-            TitleFormField::Subtitle => &self.subtitle,
-        }
-    }
-
-    fn active_field(&mut self) -> &mut String {
-        match self.focused {
-            TitleFormField::Title => &mut self.title,
-            TitleFormField::Subtitle => &mut self.subtitle,
-        }
-    }
-
-    fn insert_char(&mut self, c: char) {
-        let cursor = self.cursor;
-        let val = self.active_field();
-        if cursor <= val.len() {
-            val.insert(cursor, c);
-            self.cursor += c.len_utf8();
-        }
-        self.error = None;
-    }
-
-    fn delete_char(&mut self) {
-        if self.cursor > 0 {
-            let cursor = self.cursor;
-            let val = self.active_field();
-            let prev = val[..cursor]
-                .char_indices()
-                .next_back()
-                .map(|(i, _)| i)
-                .unwrap_or(0);
-            val.drain(prev..cursor);
-            self.cursor = prev;
-        }
-        self.error = None;
-    }
-
-    fn move_left(&mut self) {
-        if self.cursor > 0 {
-            let cursor = self.cursor;
-            let val = self.focused_value();
-            self.cursor = val[..cursor]
-                .char_indices()
-                .next_back()
-                .map(|(i, _)| i)
-                .unwrap_or(0);
-        }
-    }
-
-    fn move_right(&mut self) {
-        let cursor = self.cursor;
-        let val = self.focused_value();
-        if cursor < val.len() {
-            self.cursor = val[cursor..]
-                .char_indices()
-                .nth(1)
-                .map(|(i, _)| cursor + i)
-                .unwrap_or(val.len());
-        }
-    }
-
-    fn toggle_field(&mut self) {
-        self.focused = match self.focused {
-            TitleFormField::Title => {
-                self.cursor = self.subtitle.len();
-                TitleFormField::Subtitle
-            }
-            TitleFormField::Subtitle => {
-                self.cursor = self.title.len();
-                TitleFormField::Title
-            }
-        };
-    }
-}
-
 /// All mutable state owned by the run loop. Extracted to allow splitting the loop body
 /// into focused methods without passing a dozen locals through each call.
 struct RunLoopState {
     last_content: String,
     cached_lines: Vec<Line<'static>>,
     cached_offsets: Vec<u16>,
-    preview_mode: PreviewMode,
-    kitty_image: Option<KittyImage>,
     split_layout: SplitLayout,
     preview_scroll: u16,
-    chrome_available: bool,
-    html_rendering: bool,
-    chrome_error: Option<String>,
-    /// True when content changed since last HTML render was dispatched.
-    html_stale: bool,
     /// Set when content changes; cleared after 100ms debounce fires.
     content_changed_at: Option<std::time::Instant>,
     preview_stale: bool,
@@ -375,33 +250,21 @@ struct RunLoopState {
     /// Blog author from blog.toml; rendered in preview header when post has no
     /// `author:` frontmatter field.
     blog_author: Option<String>,
-    /// Path to the file vim is editing, for frontmatter write-back.
-    file_path: PathBuf,
-    /// Inline title/subtitle edit form.
-    title_form: Option<TitleForm>,
 }
 
 impl RunLoopState {
-    fn new(chrome_available: bool, blog_author: Option<String>, file_path: PathBuf) -> Self {
+    fn new(blog_author: Option<String>) -> Self {
         Self {
             last_content: String::new(),
             cached_lines: Vec::new(),
             cached_offsets: Vec::new(),
-            preview_mode: PreviewMode::Text,
-            kitty_image: None,
             split_layout: SplitLayout::Vertical,
             preview_scroll: 0,
-            chrome_available,
-            html_rendering: false,
-            chrome_error: None,
-            html_stale: true,
             content_changed_at: None,
             preview_stale: false,
             flash: None,
             was_modified: false,
             blog_author,
-            file_path,
-            title_form: None,
         }
     }
 
@@ -414,7 +277,6 @@ impl RunLoopState {
                     self.last_content = new_content;
                     self.content_changed_at = Some(std::time::Instant::now());
                     self.preview_stale = true;
-                    self.html_stale = true;
                 }
             }
         }
@@ -442,80 +304,15 @@ impl RunLoopState {
         true
     }
 
-    /// Pick up a pending Chrome screenshot result (non-blocking). On success, stores the
-    /// new KittyImage and positions the scroll to follow the current cursor. On error,
-    /// stores the error message for display in the preview pane.
-    fn poll_chrome_result(
-        &mut self,
-        vim_state: &VimState,
-        terminal: &ratatui::DefaultTerminal,
-        chrome: Option<&ChromeHandle>,
-        picker: &ratatui_image::picker::Picker,
-    ) {
-        if self.preview_mode != PreviewMode::Html {
-            return;
-        }
-        let Some(ch) = chrome else { return };
-        let Some(result) = ch.try_recv() else { return };
-
-        match result {
-            ChromeResult::Image(png_bytes) => {
-                match image::load_from_memory(&png_bytes) {
-                    Ok(img) => {
-                        let font_h = picker.font_size().1 as u32;
-                        let w = img.width();
-                        let h = img.height();
-                        drop(img);
-                        let image_rows = (h / font_h.max(1)) as u16;
-                        log::debug!("Chrome image: {}x{} px, font_h={}, image_rows={}", w, h, font_h, image_rows);
-                        drop(self.kitty_image.take());
-                        match KittyImage::transmit(&png_bytes, w, h) {
-                            Ok(mut ki) => {
-                                ki.set_max_rows(image_rows);
-                                // Follow cursor to new image position
-                                let visible = terminal.size()
-                                    .map(|s| s.height.saturating_sub(4))
-                                    .unwrap_or(30);
-                                let ratio = vim_state.cursor_line as f64
-                                    / vim_state.total_lines.max(1) as f64;
-                                let target = (ratio * ki.max_rows() as f64) as u16;
-                                ki.scroll_row = target.saturating_sub(visible / 2);
-                                ki.scroll_row = ki.scroll_row.min(ki.max_rows().saturating_sub(visible));
-                                self.kitty_image = Some(ki);
-                                self.html_rendering = false;
-                                self.chrome_error = None;
-                            }
-                            Err(e) => {
-                                log::error!("Kitty transmit failed: {}", e);
-                                self.chrome_error = Some(format!("Kitty transmit failed: {e}"));
-                                self.html_rendering = false;
-                            }
-                        }
-                    }
-                    Err(e) => {
-                        log::error!("Failed to decode Chrome PNG: {}", e);
-                    }
-                }
-            }
-            ChromeResult::Error(msg) => {
-                self.chrome_error = Some(msg);
-                self.html_rendering = false;
-            }
-        }
-    }
-
     /// Detect a `:w` save (modified flag transitions true -> false). Shows "saved" flash,
     /// reopens the preview pane if it was hidden, and triggers a preview refresh.
-    #[allow(clippy::borrowed_box, clippy::too_many_arguments)]
+    #[allow(clippy::borrowed_box)]
     fn handle_save_detected(
         &mut self,
         vim_state: &VimState,
         terminal: &mut ratatui::DefaultTerminal,
         pty_master: &Box<dyn portable_pty::MasterPty + Send>,
         parser: &Arc<RwLock<vt100::Parser>>,
-        html_config: Option<&HtmlPreviewConfig>,
-        chrome: Option<&ChromeHandle>,
-        picker: &ratatui_image::picker::Picker,
     ) -> io::Result<()> {
         if self.was_modified && !vim_state.modified {
             self.flash = Some(("saved", std::time::Instant::now()));
@@ -531,27 +328,14 @@ impl RunLoopState {
             self.cached_offsets = offsets;
             self.cached_lines = lines;
 
-            // Refresh HTML preview
-            if self.preview_mode == PreviewMode::Html {
-                if let (Some(cfg), Some(ch)) = (html_config, chrome) {
-                    let html = render_html_preview(&self.last_content, cfg);
-                    let vw = viewport_width(terminal, picker);
-                    ch.send_html(html, vw);
-                    self.html_rendering = true;
-                    self.html_stale = false;
-                }
-            }
-
-            // Follow cursor in text preview (HTML follows when new image arrives)
-            if self.preview_mode != PreviewMode::Html {
-                let size = terminal.size()?;
-                let pw = (size.width / 2).saturating_sub(2) as usize;
-                let vr = size.height.saturating_sub(4) as usize;
-                self.preview_scroll = follow_editor_cursor(
-                    vim_state.cursor_line, vim_state.total_lines,
-                    &self.cached_lines, &self.cached_offsets, pw, vr,
-                );
-            }
+            // Follow cursor
+            let size = terminal.size()?;
+            let pw = (size.width / 2).saturating_sub(2) as usize;
+            let vr = size.height.saturating_sub(4) as usize;
+            self.preview_scroll = follow_editor_cursor(
+                vim_state.cursor_line, vim_state.total_lines,
+                &self.cached_lines, &self.cached_offsets, pw, vr,
+            );
         }
         self.was_modified = vim_state.modified;
         Ok(())
@@ -596,8 +380,8 @@ impl RunLoopState {
         let visible_rows = terminal.size()?.height.saturating_sub(4) as usize;
         let max_scroll = visual_lines.saturating_sub(visible_rows) as u16;
 
-        // Auto-follow cursor in text preview when content changes
-        if content_updated && self.preview_mode == PreviewMode::Text && self.split_layout == SplitLayout::Vertical {
+        // Auto-follow cursor in preview when content changes
+        if content_updated && self.split_layout == SplitLayout::Vertical {
             self.preview_scroll = follow_editor_cursor(
                 vim_state.cursor_line, vim_state.total_lines,
                 &self.cached_lines, &self.cached_offsets, pane_width, visible_rows,
@@ -615,23 +399,17 @@ impl RunLoopState {
         vim_state: &VimState,
         scroll: &ScrollInfo,
         file_display: &str,
-        html_config: Option<&HtmlPreviewConfig>,
-    ) -> io::Result<Rect> {
+        has_browser: bool,
+    ) -> io::Result<()> {
         let (mode_label, mode_st) = mode_style(vim_state.mode);
         let title_message = self.title_message(vim_state);
         let layout_label = match self.split_layout {
             SplitLayout::Vertical => "|",
             SplitLayout::EditorOnly => "[]",
         };
-        let preview_mode_label = match self.preview_mode {
-            PreviewMode::Text => "TEXT",
-            PreviewMode::Html => "HTML",
-        };
 
-        let mut preview_area = Rect::default();
         terminal.draw(|frame| {
             let area = frame.area();
-            log::debug!("frame.area: {:?}", area);
             let status_split = Layout::vertical([
                 Constraint::Min(1),
                 Constraint::Length(1),
@@ -654,32 +432,15 @@ impl RunLoopState {
                     ])
                     .split(main_area);
                     render_editor(frame, parser, mode_label, mode_st, title_message, post_title.as_deref(), is_draft, panes[0]);
-                    render_preview(
-                        frame, &self.cached_lines, scroll.clamped_scroll, self.preview_mode,
-                        preview_mode_label, &self.kitty_image,
-                        self.html_rendering, &self.chrome_error, panes[1],
-                    );
-                    preview_area = panes[1];
+                    render_preview(frame, &self.cached_lines, scroll.clamped_scroll, panes[1]);
                 }
                 SplitLayout::EditorOnly => {
                     render_editor(frame, parser, mode_label, mode_st, title_message, post_title.as_deref(), is_draft, main_area);
                 }
             }
 
-            // Title form overlay
-            if let Some(ref form) = self.title_form {
-                render_title_form(frame, form, area);
-            }
-
             // Status bar
-            let chrome_hint = if !self.chrome_available {
-                ""
-            } else if self.preview_mode == PreviewMode::Html {
-                " ^P:text"
-            } else {
-                " ^P:html"
-            };
-            let browser_hint = if html_config.is_some() { " ^O:browser" } else { "" };
+            let browser_hint = if has_browser { " ^O:browser" } else { "" };
             let scroll_hint = if self.split_layout != SplitLayout::EditorOnly {
                 " ^F:follow-cursor ^J/^K:scroll"
             } else {
@@ -687,7 +448,7 @@ impl RunLoopState {
             };
             let status = Line::from(Span::styled(
                 format!(
-                    " {} | DevTUI [{layout_label}] ^T:title ^G:layout{chrome_hint}{browser_hint}{scroll_hint}",
+                    " {} | DevTUI [{layout_label}] ^G:layout{browser_hint}{scroll_hint}",
                     file_display,
                 ),
                 Style::default().fg(Color::DarkGray),
@@ -695,7 +456,7 @@ impl RunLoopState {
             frame.render_widget(Paragraph::new(status), status_area);
         })?;
 
-        Ok(preview_area)
+        Ok(())
     }
 
     /// Handle a single key event. Returns `true` if the loop should break (vim exited via write failure).
@@ -710,74 +471,8 @@ impl RunLoopState {
         vim_state: &VimState,
         scroll: &ScrollInfo,
         html_config: Option<&HtmlPreviewConfig>,
-        chrome: Option<&ChromeHandle>,
-        picker: &ratatui_image::picker::Picker,
     ) -> io::Result<bool> {
         let ctrl = key.modifiers.contains(KeyModifiers::CONTROL);
-
-        // Title form overlay: intercept all keys when form is open
-        if self.title_form.is_some() {
-            match key.code {
-                KeyCode::Esc => {
-                    self.title_form = None;
-                }
-                KeyCode::Tab | KeyCode::BackTab => {
-                    self.title_form.as_mut().unwrap().toggle_field();
-                }
-                KeyCode::Enter => {
-                    let form = self.title_form.as_mut().unwrap();
-                    if form.title.trim().is_empty() {
-                        form.error = Some("Title cannot be empty");
-                        return Ok(false);
-                    }
-                    let title = form.title.clone();
-                    let subtitle = form.subtitle.clone();
-                    self.title_form = None;
-
-                    // Update frontmatter in content
-                    let mut content = self.last_content.clone();
-                    content = preview::set_frontmatter_field(&content, "title", &title);
-                    if subtitle.is_empty() {
-                        content = preview::remove_frontmatter_field(&content, "subtitle");
-                    } else {
-                        content = preview::set_frontmatter_field(&content, "subtitle", &subtitle);
-                    }
-
-                    // Write to file and content tmp
-                    let _ = std::fs::write(&self.file_path, &content);
-                    let _ = std::fs::write(CONTENT_TMP, &content);
-                    self.last_content = content;
-                    self.preview_stale = true;
-
-                    // Tell vim to reload the file
-                    let _ = pty_writer.write_all(b"\x1b:e!\r");
-
-                    self.flash = Some(("Title updated", std::time::Instant::now()));
-                }
-                KeyCode::Backspace => {
-                    self.title_form.as_mut().unwrap().delete_char();
-                }
-                KeyCode::Left => {
-                    self.title_form.as_mut().unwrap().move_left();
-                }
-                KeyCode::Right => {
-                    self.title_form.as_mut().unwrap().move_right();
-                }
-                KeyCode::Char(c) => {
-                    self.title_form.as_mut().unwrap().insert_char(c);
-                }
-                _ => {}
-            }
-            return Ok(false);
-        }
-
-        // Ctrl+T: open title/subtitle form
-        if key.code == KeyCode::Char('t') && ctrl {
-            let title = preview::frontmatter_field(&self.last_content, "title").unwrap_or_default();
-            let subtitle = preview::frontmatter_field(&self.last_content, "subtitle").unwrap_or_default();
-            self.title_form = Some(TitleForm::new(title, subtitle));
-            return Ok(false);
-        }
 
         // Ctrl+G: toggle layout
         if key.code == KeyCode::Char('g') && ctrl {
@@ -786,7 +481,6 @@ impl RunLoopState {
                 SplitLayout::EditorOnly => SplitLayout::Vertical,
             };
             resize_pty(self.split_layout, terminal, pty_master, parser)?;
-            // Re-render preview content when coming back from EditorOnly
             if self.split_layout != SplitLayout::EditorOnly && self.cached_lines.is_empty() {
                 let (lines, offsets) = preview::render_with_offsets(&self.last_content, self.blog_author.as_deref());
                 self.cached_offsets = offsets;
@@ -797,41 +491,10 @@ impl RunLoopState {
 
         // Ctrl+F: follow editor cursor in preview
         if key.code == KeyCode::Char('f') && ctrl && self.split_layout != SplitLayout::EditorOnly {
-            if self.preview_mode == PreviewMode::Html {
-                if let Some(ref mut ki) = self.kitty_image {
-                    let visible = terminal.size()?.height.saturating_sub(4);
-                    let ratio = vim_state.cursor_line as f64 / vim_state.total_lines.max(1) as f64;
-                    let target_row = (ratio * ki.max_rows() as f64) as u16;
-                    ki.scroll_row = target_row.saturating_sub(visible / 2);
-                    ki.scroll_row = ki.scroll_row.min(ki.max_rows().saturating_sub(visible));
-                }
-            } else {
-                self.preview_scroll = follow_editor_cursor(
-                    vim_state.cursor_line, vim_state.total_lines,
-                    &self.cached_lines, &self.cached_offsets, scroll.pane_width, scroll.visible_rows,
-                );
-            }
-            return Ok(false);
-        }
-
-        // Ctrl+P: toggle preview mode (text/html)
-        if key.code == KeyCode::Char('p') && ctrl && self.chrome_available {
-            log::info!("Ctrl+P: toggling preview mode (current={:?})", self.preview_mode);
-            self.preview_mode = match self.preview_mode {
-                PreviewMode::Text => {
-                    if self.html_stale {
-                        if let (Some(cfg), Some(ch)) = (html_config, chrome) {
-                            let html = render_html_preview(&self.last_content, cfg);
-                            let vw = viewport_width(terminal, picker);
-                            ch.send_html(html, vw);
-                            self.html_rendering = true;
-                            self.html_stale = false;
-                        }
-                    }
-                    PreviewMode::Html
-                }
-                PreviewMode::Html => PreviewMode::Text,
-            };
+            self.preview_scroll = follow_editor_cursor(
+                vim_state.cursor_line, vim_state.total_lines,
+                &self.cached_lines, &self.cached_offsets, scroll.pane_width, scroll.visible_rows,
+            );
             return Ok(false);
         }
 
@@ -848,33 +511,20 @@ impl RunLoopState {
 
         // Ctrl+J: scroll preview down
         if key.code == KeyCode::Char('j') && ctrl && self.split_layout != SplitLayout::EditorOnly {
-            if self.preview_mode == PreviewMode::Html {
-                if let Some(ref mut ki) = self.kitty_image {
-                    let visible = terminal.size()?.height.saturating_sub(4);
-                    ki.scroll_down(5, visible);
-                }
-            } else {
-                self.preview_scroll = self.preview_scroll.saturating_add(3).min(scroll.max_scroll);
-            }
+            self.preview_scroll = self.preview_scroll.saturating_add(3).min(scroll.max_scroll);
             return Ok(false);
         }
 
         // Ctrl+K: scroll preview up
         if key.code == KeyCode::Char('k') && ctrl && self.split_layout != SplitLayout::EditorOnly {
-            if self.preview_mode == PreviewMode::Html {
-                if let Some(ref mut ki) = self.kitty_image {
-                    ki.scroll_up(5);
-                }
-            } else {
-                self.preview_scroll = self.preview_scroll.saturating_sub(3);
-            }
+            self.preview_scroll = self.preview_scroll.saturating_sub(3);
             return Ok(false);
         }
 
         // Pass everything else to vim
         if let Some(bytes) = key_to_bytes(key.code, key.modifiers) {
             if pty_writer.write_all(&bytes).is_err() {
-                return Ok(true); // signal break
+                return Ok(true);
             }
             let _ = pty_writer.flush();
         }
@@ -898,14 +548,11 @@ fn run_loop(
     pty_master: &Box<dyn portable_pty::MasterPty + Send>,
     vim_exited: &Arc<AtomicBool>,
     file_display: &str,
-    file_path: &Path,
     content_swap: &Arc<Mutex<Option<String>>>,
     html_config: Option<&HtmlPreviewConfig>,
-    chrome: Option<&ChromeHandle>,
-    picker: &ratatui_image::picker::Picker,
 ) -> io::Result<()> {
     let blog_author = html_config.map(|c| c.blog_config.author.clone());
-    let mut state = RunLoopState::new(chrome.is_some(), blog_author, file_path.to_path_buf());
+    let mut state = RunLoopState::new(blog_author);
 
     loop {
         if vim_exited.load(Ordering::Relaxed) {
@@ -915,16 +562,15 @@ fn run_loop(
         state.poll_content_swap(content_swap);
         let content_updated = state.poll_preview_render();
         let vim_state = parse_title(parser);
-        state.poll_chrome_result(&vim_state, terminal, chrome, picker);
-        state.handle_save_detected(&vim_state, terminal, pty_master, parser, html_config, chrome, picker)?;
+        state.handle_save_detected(&vim_state, terminal, pty_master, parser)?;
         state.manage_flash();
         let scroll = state.calculate_scroll(terminal, &vim_state, content_updated)?;
-        state.draw_frame(terminal, parser, &vim_state, &scroll, file_display, html_config)?;
+        state.draw_frame(terminal, parser, &vim_state, &scroll, file_display, html_config.is_some())?;
 
         if event::poll(Duration::from_millis(30))? {
             match event::read()? {
                 Event::Key(key) => {
-                    if state.dispatch_key(key, terminal, pty_writer, pty_master, parser, &vim_state, &scroll, html_config, chrome, picker)? {
+                    if state.dispatch_key(key, terminal, pty_writer, pty_master, parser, &vim_state, &scroll, html_config)? {
                         break;
                     }
                 }
@@ -1000,139 +646,22 @@ fn render_editor(
     }
 }
 
-fn render_title_form(frame: &mut ratatui::Frame, form: &TitleForm, area: Rect) {
-    use ratatui::widgets::Clear;
-
-    let width = area.width.min(60);
-    let height = 9_u16;
-    let x = area.x + (area.width.saturating_sub(width)) / 2;
-    let y = area.y + (area.height.saturating_sub(height)) / 2;
-    let popup = Rect::new(x, y, width, height);
-
-    frame.render_widget(Clear, popup);
-
-    let block = Block::default()
-        .title(Line::from(Span::styled(
-            " Edit Title ",
-            Style::default().fg(Color::Cyan).add_modifier(Modifier::BOLD),
-        )))
-        .borders(Borders::ALL)
-        .border_style(Style::default().fg(Color::Cyan));
-    frame.render_widget(block, popup);
-
-    let inner = Rect::new(popup.x + 1, popup.y + 1, popup.width.saturating_sub(2), popup.height.saturating_sub(2));
-
-    let title_label_style = if form.focused == TitleFormField::Title {
-        Style::default().fg(Color::Cyan).add_modifier(Modifier::BOLD)
-    } else {
-        Style::default().fg(Color::DarkGray)
-    };
-    let subtitle_label_style = if form.focused == TitleFormField::Subtitle {
-        Style::default().fg(Color::Cyan).add_modifier(Modifier::BOLD)
-    } else {
-        Style::default().fg(Color::DarkGray)
-    };
-
-    let title_cursor = if form.focused == TitleFormField::Title { "▎" } else { "" };
-    let subtitle_cursor = if form.focused == TitleFormField::Subtitle { "▎" } else { "" };
-
-    let warning = if form.title.len() > 80 {
-        Some(Line::from(Span::styled("  Title > 80 chars", Style::default().fg(Color::Yellow))))
-    } else {
-        form.error.map(|e| Line::from(Span::styled(format!("  {e}"), Style::default().fg(Color::Red))))
-    };
-
-    let mut lines = vec![
-        Line::from(Span::styled("  Title:", title_label_style)),
-        Line::from(vec![
-            Span::raw("  "),
-            Span::styled(format!("{}{title_cursor}", form.title), Style::default().fg(Color::White)),
-        ]),
-        Line::from(""),
-        Line::from(Span::styled("  Subtitle:", subtitle_label_style)),
-        Line::from(vec![
-            Span::raw("  "),
-            Span::styled(format!("{}{subtitle_cursor}", form.subtitle), Style::default().fg(Color::White)),
-        ]),
-    ];
-
-    if let Some(warning_line) = warning {
-        lines.push(Line::from(""));
-        lines.push(warning_line);
-    }
-
-    let text = Paragraph::new(lines);
-    frame.render_widget(text, inner);
-}
-
-#[allow(clippy::too_many_arguments)]
 fn render_preview(
     frame: &mut ratatui::Frame,
     cached_lines: &[Line<'static>],
     scroll: u16,
-    preview_mode: PreviewMode,
-    mode_label: &str,
-    kitty_image: &Option<KittyImage>,
-    html_rendering: bool,
-    chrome_error: &Option<String>,
     area: ratatui::layout::Rect,
 ) {
-    let rendering_indicator = if html_rendering { " ..." } else { "" };
-    let preview_title = format!(" PREVIEW [{mode_label}]{rendering_indicator} ");
     let preview_block = Block::default()
         .borders(Borders::ALL)
         .border_style(Style::default().fg(Color::DarkGray))
-        .title(preview_title);
+        .title(" PREVIEW [TEXT] ");
 
-    match preview_mode {
-        PreviewMode::Text => {
-            let preview_widget = Paragraph::new(cached_lines.to_vec())
-                .block(preview_block)
-                .wrap(Wrap { trim: false })
-                .scroll((scroll, 0));
-            frame.render_widget(preview_widget, area);
-        }
-        PreviewMode::Html => {
-            if let Some(ref err) = chrome_error {
-                let error_msg = Paragraph::new(Line::from(Span::styled(
-                    format!(" Chrome error: {err}"),
-                    Style::default().fg(Color::Red),
-                )))
-                .block(preview_block)
-                .wrap(Wrap { trim: false });
-                frame.render_widget(error_msg, area);
-            } else if let Some(ref ki) = kitty_image {
-                let inner = preview_block.inner(area);
-                frame.render_widget(preview_block, area);
-                ki.render_placeholders(inner, frame.buffer_mut());
-            } else {
-                let msg = if html_rendering {
-                    " Rendering..."
-                } else {
-                    " Press ^P to render HTML preview"
-                };
-                let loading = Paragraph::new(Line::from(Span::styled(
-                    msg,
-                    Style::default().fg(Color::DarkGray),
-                )))
-                .block(preview_block);
-                frame.render_widget(loading, area);
-            }
-        }
-    }
-}
-
-
-
-#[allow(clippy::borrowed_box)]
-/// Calculate Chrome viewport width in CSS pixels based on current terminal size.
-fn viewport_width(terminal: &ratatui::DefaultTerminal, picker: &ratatui_image::picker::Picker) -> u32 {
-    let term_width = terminal.size().map(|s| s.width).unwrap_or(120);
-    let font_w = picker.font_size().0 as u32;
-    let pane_cols = term_width as u32 / 2;
-    let physical = pane_cols * font_w;
-    let scale: f64 = if font_w > 12 { 2.0 } else { 1.0 };
-    (physical as f64 / scale) as u32
+    let preview_widget = Paragraph::new(cached_lines.to_vec())
+        .block(preview_block)
+        .wrap(Wrap { trim: false })
+        .scroll((scroll, 0));
+    frame.render_widget(preview_widget, area);
 }
 
 /// Calculate text preview scroll position to follow the cursor line.

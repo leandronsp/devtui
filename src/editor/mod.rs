@@ -1,9 +1,6 @@
-pub mod chrome;
 pub mod db;
-pub mod kitty;
 pub mod list;
 pub mod preview;
-pub mod tmux;
 pub mod vim;
 
 use std::io;
@@ -13,7 +10,6 @@ use rusqlite::Connection;
 
 use crate::engine::config::BlogConfig;
 use crate::engine::{minify, template};
-use chrome::ChromeHandle;
 use db::Status;
 use list::{ListAction, ListView};
 use vim::HtmlPreviewConfig;
@@ -36,49 +32,18 @@ pub fn run_cms(blog_dir: PathBuf) -> io::Result<()> {
     db::migrate_content_to_full_markdown(&conn)
         .map_err(|e| io::Error::other(e.to_string()))?;
 
-    // Prepare HTML preview config (template + CSS)
     let html_config = load_html_preview_config(&cfg, &blog_dir);
-    if html_config.is_none() {
-        log::warn!("HTML preview config failed to load — ^P will be disabled");
-    }
-
-    // Query terminal for font size and graphics protocol BEFORE entering raw mode.
-    let picker = ratatui_image::picker::Picker::from_query_stdio()
-        .unwrap_or_else(|e| {
-            log::warn!("Picker query failed ({e}), falling back to halfblocks");
-            ratatui_image::picker::Picker::halfblocks()
-        });
-
-    // Chrome viewport in CSS pixels, screenshot at device scale for crisp Retina rendering.
-    // Retina displays report ~16-20 physical px/cell; non-Retina ~7-10. Threshold at 12.
-    let term_size = crossterm::terminal::size().unwrap_or((120, 40));
-    let font_size = picker.font_size();
-    let pane_cols = term_size.0 / 2;
-    let physical_width = pane_cols as u32 * font_size.0 as u32;
-    let scale: f64 = if font_size.0 > 12 { 2.0 } else { 1.0 };
-    let viewport_css = (physical_width as f64 / scale) as u32;
-    log::info!(
-        "Terminal: {:?}, font_size: {:?}, pane_cols: {}, physical_width: {}, scale: {}, viewport_css: {}",
-        term_size, font_size, pane_cols, physical_width, scale, viewport_css
-    );
-    let chrome = ChromeHandle::try_spawn(viewport_css, scale);
-    match &chrome {
-        Some(_) => log::info!("Chrome spawned (viewport={}px, scale={})", viewport_css, scale),
-        None => log::warn!("Chrome not available — HTML preview disabled"),
-    }
 
     let mut terminal = ratatui::init();
-    let result = cms_loop(&mut terminal, &conn, &blog_dir, html_config.as_ref(), chrome.as_ref(), &picker);
+    let result = cms_loop(&mut terminal, &conn, &blog_dir, html_config.as_ref());
     ratatui::restore();
     result
 }
 
 /// Legacy entry point: run editor for a single file (no CMS).
 pub fn run(file_path: PathBuf) -> io::Result<()> {
-    let picker = ratatui_image::picker::Picker::from_query_stdio()
-        .unwrap_or_else(|_| ratatui_image::picker::Picker::halfblocks());
     let mut terminal = ratatui::init();
-    let result = vim::run(&mut terminal, file_path, None, None, &picker);
+    let result = vim::run(&mut terminal, file_path, None);
     ratatui::restore();
     result.map(|_| ())
 }
@@ -140,8 +105,6 @@ fn cms_loop(
     conn: &Connection,
     blog_dir: &Path,
     html_config: Option<&HtmlPreviewConfig>,
-    chrome: Option<&ChromeHandle>,
-    picker: &ratatui_image::picker::Picker,
 ) -> io::Result<()> {
     loop {
         let articles = db::list_articles(conn, None)
@@ -153,24 +116,21 @@ fn cms_loop(
         match action {
             ListAction::Quit => return Ok(()),
             ListAction::Edit(id) => {
-                edit_article(terminal, conn, blog_dir, id, html_config, chrome, picker)?;
+                edit_article(terminal, conn, blog_dir, id, html_config)?;
             }
             ListAction::New => {
-                new_article(terminal, conn, blog_dir, html_config, chrome, picker)?;
+                new_article(terminal, conn, blog_dir, html_config)?;
             }
         }
     }
 }
 
-#[allow(clippy::too_many_arguments)]
 fn edit_article(
     terminal: &mut ratatui::DefaultTerminal,
     conn: &Connection,
     blog_dir: &Path,
     id: i64,
     html_config: Option<&HtmlPreviewConfig>,
-    chrome: Option<&ChromeHandle>,
-    picker: &ratatui_image::picker::Picker,
 ) -> io::Result<()> {
     let article = db::get_article(conn, id)
         .map_err(|e| io::Error::other(e.to_string()))?;
@@ -180,7 +140,7 @@ fn edit_article(
     let tmp_file = tmp_dir.join(format!("{}.md", article.slug));
     std::fs::write(&tmp_file, &article.content)?;
 
-    let (_result, final_content) = vim::run(terminal, tmp_file.clone(), html_config, chrome, picker)?;
+    let (_result, final_content) = vim::run(terminal, tmp_file.clone(), html_config)?;
 
     // Only update DB if content actually changed (protects against :q! or crash)
     if !final_content.is_empty() && final_content != article.content {
@@ -208,8 +168,6 @@ fn new_article(
     conn: &Connection,
     _blog_dir: &Path,
     html_config: Option<&HtmlPreviewConfig>,
-    chrome: Option<&ChromeHandle>,
-    picker: &ratatui_image::picker::Picker,
 ) -> io::Result<()> {
     let article = db::create_article(conn, "Untitled")
         .map_err(|e| io::Error::other(e.to_string()))?;
@@ -219,7 +177,7 @@ fn new_article(
     let tmp_file = tmp_dir.join(format!("{}.md", article.slug));
     std::fs::write(&tmp_file, "")?;
 
-    let (_result, final_content) = vim::run(terminal, tmp_file.clone(), html_config, chrome, picker)?;
+    let (_result, final_content) = vim::run(terminal, tmp_file.clone(), html_config)?;
 
     if !final_content.is_empty() {
         let _ = db::update_content(conn, article.id, &final_content);
