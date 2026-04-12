@@ -45,7 +45,13 @@ pub(crate) fn set_frontmatter_field(content: &str, field: &str, value: &str) -> 
     let mut found = false;
     for line in &mut lines {
         if line.trim_start().starts_with(&prefix) {
-            *line = format!("{field}: {value}");
+            let existing_value = line.trim_start()[prefix.len()..].trim();
+            let quoted = existing_value.starts_with('"');
+            *line = if quoted {
+                format!("{field}: \"{value}\"")
+            } else {
+                format!("{field}: {value}")
+            };
             found = true;
             break;
         }
