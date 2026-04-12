@@ -40,6 +40,7 @@ pub struct ListView {
     last_error: Option<String>,
     show_error: bool,
     serving: bool,
+    serve_after_build: bool,
     serve_stop: Arc<AtomicBool>,
     serve_handle: Option<JoinHandle<()>>,
 }
@@ -65,6 +66,7 @@ impl ListView {
             last_error: None,
             show_error: false,
             serving: false,
+            serve_after_build: false,
             serve_stop: Arc::new(AtomicBool::new(false)),
             serve_handle: None,
         }
@@ -101,8 +103,13 @@ impl ListView {
                 Ok(msg) => {
                     self.flash = Some((msg, Instant::now()));
                     self.last_built = Some(Instant::now());
+                    if self.serve_after_build {
+                        self.serve_after_build = false;
+                        self.spawn_serve();
+                    }
                 }
                 Err(err) => {
+                    self.serve_after_build = false;
                     let first_line = err.lines().next().unwrap_or(&err).to_string();
                     self.flash = Some((format!("Build failed: {first_line}"), Instant::now()));
                     self.last_error = Some(err);
@@ -112,13 +119,15 @@ impl ListView {
     }
 
     fn start_serve(&mut self) {
-        if self.serving || self.building {
+        if self.serving {
             return;
         }
-        // Build first, then serve
+        // Build first, then spawn server after build completes
+        self.serve_after_build = true;
         self.start_build();
-        // Actual serve spawn happens after build completes (in poll_build_result)
-        // For now, just start serving directly
+    }
+
+    fn spawn_serve(&mut self) {
         self.serving = true;
         self.serve_stop.store(false, Ordering::Relaxed);
 
@@ -749,6 +758,30 @@ mod tests {
         view.serving = true;
         view.stop_serve();
         assert!(!view.serving);
+    }
+
+    #[test]
+    fn poll_build_result_spawns_serve_when_serve_after_build() {
+        let mut view = make_list_view();
+        view.building = true;
+        view.serve_after_build = true;
+        *view.build_result.lock().unwrap() = Some(Ok("Built 1 articles in 0.1s".into()));
+        view.poll_build_result();
+        assert!(view.serving);
+        assert!(!view.serve_after_build);
+        // Clean up the spawned server
+        view.stop_serve();
+    }
+
+    #[test]
+    fn poll_build_result_clears_serve_after_build_on_error() {
+        let mut view = make_list_view();
+        view.building = true;
+        view.serve_after_build = true;
+        *view.build_result.lock().unwrap() = Some(Err("build failed".into()));
+        view.poll_build_result();
+        assert!(!view.serving);
+        assert!(!view.serve_after_build);
     }
 
     #[test]
