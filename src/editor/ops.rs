@@ -285,8 +285,35 @@ pub fn run_build(blog_dir: &Path, dist_dir: &Path) -> Result<BuildReport, String
     crate::engine::build::build(blog_dir, dist_dir, &engine_dir())
 }
 
+/// Ensure the Overmind daemon is running. Starts it if not.
+fn ensure_overmind_daemon() -> Result<(), String> {
+    let status = std::process::Command::new("overmind")
+        .args(["status"])
+        .output()
+        .map_err(|e| format!("overmind not found: {e}"))?;
+
+    if status.status.success() {
+        return Ok(());
+    }
+
+    log::info!("overmind daemon not running, starting...");
+    let start = std::process::Command::new("overmind")
+        .args(["start"])
+        .output()
+        .map_err(|e| format!("failed to start overmind daemon: {e}"))?;
+
+    if start.status.success() {
+        Ok(())
+    } else {
+        let stderr = String::from_utf8_lossy(&start.stderr);
+        Err(format!("failed to start overmind daemon: {stderr}"))
+    }
+}
+
 /// Start an Overmind scribe session for the AI writing companion.
 pub fn start_scribe_session(session_name: &str) -> Result<String, String> {
+    ensure_overmind_daemon()?;
+
     let output = std::process::Command::new("overmind")
         .args(["run", "--type", "session", "--name", session_name, "--provider", "claude", "--model", "sonnet"])
         .output()
