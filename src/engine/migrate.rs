@@ -1,3 +1,33 @@
+use std::fs;
+use std::io;
+use std::path::{Path, PathBuf};
+
+#[derive(Debug, Default)]
+pub struct MigrationReport {
+    pub rewritten: Vec<PathBuf>,
+    pub skipped: Vec<PathBuf>,
+}
+
+pub fn migrate_posts(posts_dir: &Path) -> io::Result<MigrationReport> {
+    let mut report = MigrationReport::default();
+    for entry in fs::read_dir(posts_dir)? {
+        let entry = entry?;
+        let path = entry.path();
+        if path.extension().and_then(|e| e.to_str()) != Some("md") {
+            continue;
+        }
+        let original = fs::read_to_string(&path)?;
+        let normalized = normalize_frontmatter(&original);
+        if normalized == original {
+            report.skipped.push(path);
+        } else {
+            fs::write(&path, normalized)?;
+            report.rewritten.push(path);
+        }
+    }
+    Ok(report)
+}
+
 const CANONICAL_ORDER: &[&str] = &[
     "title",
     "subtitle",
@@ -75,6 +105,53 @@ fn split_frontmatter(content: &str) -> Option<(String, String)> {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::testutil::tempdir;
+    use std::fs;
+
+    #[test]
+    fn migrate_posts_skips_canonical_files() {
+        let dir = tempdir();
+        let post = dir.join("canonical.md");
+        let canonical = "---\ntitle: \"Foo\"\npublished_at: \"2026-03-28\"\n---\n\nBody.\n";
+        fs::write(&post, canonical).unwrap();
+
+        let report = migrate_posts(&dir).unwrap();
+
+        assert_eq!(fs::read_to_string(&post).unwrap(), canonical);
+        assert_eq!(report.skipped, vec![post]);
+        assert!(report.rewritten.is_empty());
+    }
+
+    #[test]
+    fn migrate_posts_ignores_non_markdown_files() {
+        let dir = tempdir();
+        let txt = dir.join("notes.txt");
+        fs::write(&txt, "---\ndate: x\n---\n").unwrap();
+
+        let report = migrate_posts(&dir).unwrap();
+
+        assert_eq!(fs::read_to_string(&txt).unwrap(), "---\ndate: x\n---\n");
+        assert!(report.rewritten.is_empty());
+        assert!(report.skipped.is_empty());
+    }
+
+    #[test]
+    fn migrate_posts_rewrites_non_canonical_files() {
+        let dir = tempdir();
+        let post = dir.join("minimal.md");
+        fs::write(&post, "---\ntitle: Foo\ndate: 2026-03-28\n---\n\nBody.\n").unwrap();
+
+        let report = migrate_posts(&dir).unwrap();
+
+        let after = fs::read_to_string(&post).unwrap();
+        assert_eq!(
+            after,
+            "---\ntitle: \"Foo\"\npublished_at: \"2026-03-28\"\n---\n\nBody.\n"
+        );
+        assert_eq!(report.rewritten, vec![post]);
+        assert!(report.skipped.is_empty());
+    }
+
 
     #[test]
     fn normalize_renames_date_to_published_at() {
