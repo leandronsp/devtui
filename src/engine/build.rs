@@ -872,4 +872,76 @@ This is the second post.
         assert!(dist.join("2026-01-01-hello.html").exists());
         assert!(dist.join("2026-01-02-second.html").exists());
     }
+
+    #[test]
+    fn build_excludes_draft_post_from_index() {
+        let tmp = tempdir();
+        let (blog, dist) = setup_blog(&tmp);
+        fs::write(
+            blog.join("posts/2026-01-03-draft.md"),
+            "---\ntitle: Draft Post\npublished_at: 2026-01-03\nstatus: draft\n---\n\nThis is a draft.\n",
+        )
+        .expect("write draft post");
+        do_build(&blog, &dist);
+        let index = fs::read_to_string(dist.join("index.html")).expect("read index");
+        assert!(!index.contains("Draft Post"));
+        assert!(index.contains("Hello World"));
+        assert!(index.contains("Second Post"));
+    }
+
+    #[test]
+    fn build_excludes_draft_post_from_feed_and_sitemap() {
+        let tmp = tempdir();
+        let (blog, dist) = setup_blog(&tmp);
+        fs::write(
+            blog.join("posts/2026-01-03-draft.md"),
+            "---\ntitle: Draft Post\npublished_at: 2026-01-03\nstatus: draft\n---\n\nThis is a draft.\n",
+        )
+        .expect("write draft post");
+        do_build(&blog, &dist);
+        let feed = fs::read_to_string(dist.join("feed.xml")).expect("read feed");
+        assert!(!feed.contains("Draft Post"));
+        assert!(!feed.contains("2026-01-03-draft"));
+        let sitemap = fs::read_to_string(dist.join("sitemap.xml")).expect("read sitemap");
+        assert!(!sitemap.contains("2026-01-03-draft"));
+    }
+
+    #[test]
+    fn build_includes_post_with_status_published() {
+        let tmp = tempdir();
+        let (blog, dist) = setup_blog(&tmp);
+        fs::write(
+            blog.join("posts/2026-01-03-explicit.md"),
+            "---\ntitle: Explicit Published\npublished_at: 2026-01-03\nstatus: published\n---\n\nExplicitly published.\n",
+        )
+        .expect("write post");
+        do_build(&blog, &dist);
+        assert!(dist.join("2026-01-03-explicit.html").exists());
+        let index = fs::read_to_string(dist.join("index.html")).expect("read index");
+        assert!(index.contains("Explicit Published"));
+    }
+
+    #[test]
+    fn build_includes_post_without_status_field() {
+        let tmp = tempdir();
+        let (blog, dist) = setup_blog(&tmp);
+        // setup_blog posts have no status field — they should still be included
+        do_build(&blog, &dist);
+        let index = fs::read_to_string(dist.join("index.html")).expect("read index");
+        assert!(index.contains("Hello World"));
+        assert!(index.contains("Second Post"));
+    }
+
+    #[test]
+    fn build_excludes_draft_post_case_insensitive() {
+        let tmp = tempdir();
+        let (blog, dist) = setup_blog(&tmp);
+        fs::write(
+            blog.join("posts/2026-01-03-upper.md"),
+            "---\ntitle: Upper Draft\npublished_at: 2026-01-03\nstatus: DRAFT\n---\n\nUppercase draft.\n",
+        )
+        .expect("write post");
+        do_build(&blog, &dist);
+        assert!(!dist.join("2026-01-03-upper.html").exists());
+    }
 }

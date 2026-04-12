@@ -159,7 +159,9 @@ fn post_from_path(path: &Path) -> Result<Post, String> {
         date: frontmatter_date(&content).unwrap_or_default(),
         description: frontmatter("description", &content).unwrap_or_default(),
         image: frontmatter("image", &content),
-        draft: frontmatter("status", &content).as_deref() == Some("draft"),
+        draft: frontmatter("status", &content)
+            .map(|s| s.eq_ignore_ascii_case("draft"))
+            .unwrap_or(false),
         slug,
         path: path.to_path_buf(),
         content,
