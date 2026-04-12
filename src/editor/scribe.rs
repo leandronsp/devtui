@@ -1,4 +1,5 @@
-use ratatui::text::Line;
+use ratatui::style::{Color, Style};
+use ratatui::text::{Line, Span};
 use serde::Deserialize;
 
 /// Annotation severity tier.
@@ -102,16 +103,53 @@ pub fn extract_annotations(response: &str) -> Vec<Annotation> {
     parse_annotations(&response[start..=end])
 }
 
+/// Render annotations with visible-line focus. Annotations for lines within
+/// `visible_start..visible_end` appear first and bright. Others are dimmed.
+pub fn render_lines_with_focus(
+    annotations: &[Annotation],
+    visible_start: u16,
+    visible_end: u16,
+) -> Vec<Line<'static>> {
+    let is_visible = |a: &Annotation| a.line >= visible_start && a.line <= visible_end;
+
+    let mut visible: Vec<&Annotation> = annotations.iter().filter(|a| is_visible(a)).collect();
+    let mut offscreen: Vec<&Annotation> = annotations.iter().filter(|a| !is_visible(a)).collect();
+    visible.sort_by_key(|a| a.line);
+    offscreen.sort_by_key(|a| a.line);
+
+    let mut lines = Vec::with_capacity(annotations.len());
+
+    for a in visible {
+        let icon = tier_icon(&a.tier);
+        lines.push(Line::from(format!("{icon} L{}: {}", a.line, a.message)));
+    }
+
+    let dim = Style::default().fg(Color::DarkGray);
+    for a in offscreen {
+        let icon = tier_icon(&a.tier);
+        lines.push(Line::from(Span::styled(
+            format!("{icon} L{}: {}", a.line, a.message),
+            dim,
+        )));
+    }
+
+    lines
+}
+
+fn tier_icon(tier: &Tier) -> &'static str {
+    match tier {
+        Tier::Error => "✗",
+        Tier::Hint => "💡",
+        Tier::Research => "📎",
+    }
+}
+
 /// Render annotations as ratatui lines for the scribe panel.
 pub fn render_lines(annotations: &[Annotation]) -> Vec<Line<'static>> {
     annotations
         .iter()
         .map(|a| {
-            let icon = match a.tier {
-                Tier::Error => "✗",
-                Tier::Hint => "💡",
-                Tier::Research => "📎",
-            };
+            let icon = tier_icon(&a.tier);
             Line::from(format!("{icon} L{}: {}", a.line, a.message))
         })
         .collect()
@@ -120,6 +158,47 @@ pub fn render_lines(annotations: &[Annotation]) -> Vec<Line<'static>> {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn render_lines_with_focus_sorts_visible_first() {
+        let annotations = vec![
+            Annotation { line: 2, tier: Tier::Error, message: "off-screen error".into() },
+            Annotation { line: 10, tier: Tier::Hint, message: "visible hint".into() },
+            Annotation { line: 15, tier: Tier::Error, message: "visible error".into() },
+            Annotation { line: 30, tier: Tier::Research, message: "off-screen ref".into() },
+        ];
+
+        let lines = render_lines_with_focus(&annotations, 8, 20);
+
+        assert_eq!(lines.len(), 4);
+        // Visible annotations (lines 10, 15) come first
+        let text: Vec<String> = lines.iter().map(|l| l.to_string()).collect();
+        assert!(text[0].contains("L10"));
+        assert!(text[1].contains("L15"));
+        // Off-screen annotations follow
+        assert!(text[2].contains("L2"));
+        assert!(text[3].contains("L30"));
+    }
+
+    #[test]
+    fn render_lines_with_focus_dims_offscreen_annotations() {
+        let annotations = vec![
+            Annotation { line: 5, tier: Tier::Error, message: "off-screen".into() },
+            Annotation { line: 15, tier: Tier::Error, message: "visible".into() },
+        ];
+
+        let lines = render_lines_with_focus(&annotations, 10, 20);
+
+        // Visible annotation (line 15) should not be dimmed
+        let visible_line = &lines[0];
+        let visible_styles: Vec<_> = visible_line.spans.iter().map(|s| s.style).collect();
+        assert!(visible_styles.iter().any(|s| s.fg != Some(Color::DarkGray)));
+
+        // Off-screen annotation (line 5) should be dimmed
+        let dim_line = &lines[1];
+        let dim_styles: Vec<_> = dim_line.spans.iter().map(|s| s.style).collect();
+        assert!(dim_styles.iter().all(|s| s.fg == Some(Color::DarkGray)));
+    }
 
     #[test]
     fn build_check_prompt_includes_content_and_json_instruction() {

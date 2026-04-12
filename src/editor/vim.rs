@@ -186,8 +186,9 @@ fn read_pty(
     }
 }
 
-/// Parsed vim state from titlestring: w0:cursor:total:mode
+/// Parsed vim state from titlestring: w0:cursor:total:mode:modified
 struct VimState {
+    first_visible_line: usize,
     cursor_line: usize,
     total_lines: usize,
     mode: &'static str,
@@ -199,6 +200,7 @@ fn parse_title(parser: &Arc<RwLock<vt100::Parser>>) -> VimState {
         let title = p.screen().title().to_string();
         let parts: Vec<&str> = title.trim().split(':').collect();
         if parts.len() >= 5 {
+            let first_visible_line = parts[0].parse::<usize>().unwrap_or(1);
             let cursor_line = parts[1].parse::<usize>().unwrap_or(1);
             let total_lines = parts[2].parse::<usize>().unwrap_or(1);
             let mode = match parts[3] {
@@ -209,10 +211,10 @@ fn parse_title(parser: &Arc<RwLock<vt100::Parser>>) -> VimState {
                 _ => "NORMAL",
             };
             let modified = parts[4] == "1";
-            return VimState { cursor_line, total_lines, mode, modified };
+            return VimState { first_visible_line, cursor_line, total_lines, mode, modified };
         }
     }
-    VimState { cursor_line: 1, total_lines: 1, mode: "NORMAL", modified: false }
+    VimState { first_visible_line: 1, cursor_line: 1, total_lines: 1, mode: "NORMAL", modified: false }
 }
 
 /// Extract the last line from the vim PTY screen (where vim shows messages).
@@ -253,8 +255,8 @@ struct RunLoopState {
     /// Blog author from blog.toml; rendered in preview header when post has no
     /// `author:` frontmatter field.
     blog_author: Option<String>,
-    /// Rendered scribe annotation lines for the right pane.
-    scribe_lines: Vec<Line<'static>>,
+    /// Raw annotations from the last scribe check.
+    scribe_annotations: Vec<scribe::Annotation>,
     /// When content last changed (for scribe idle debounce).
     scribe_idle_since: Option<std::time::Instant>,
     /// True when a scribe check is in flight.
@@ -270,6 +272,10 @@ struct RunLoopState {
     scribe_status: ScribeStatus,
     /// When the current scribe check started (for slow detection).
     scribe_check_started: Option<std::time::Instant>,
+    /// When the last scribe response was received.
+    scribe_last_response: Option<std::time::Instant>,
+    /// Error message from the last failed scribe check.
+    scribe_error: Option<String>,
 }
 
 impl RunLoopState {
@@ -285,7 +291,7 @@ impl RunLoopState {
             flash: None,
             was_modified: false,
             blog_author,
-            scribe_lines: Vec::new(),
+            scribe_annotations: Vec::new(),
             scribe_idle_since: None,
             scribe_pending: false,
             scribe_result: Arc::new(Mutex::new(None)),
@@ -294,6 +300,8 @@ impl RunLoopState {
             scribe_session_started: false,
             scribe_status: ScribeStatus::Idle,
             scribe_check_started: None,
+            scribe_last_response: None,
+            scribe_error: None,
         }
     }
 
@@ -398,16 +406,15 @@ impl RunLoopState {
             self.scribe_check_started = None;
             match result {
                 Ok(response) => {
-                    let annotations = scribe::extract_annotations(&response);
-                    self.scribe_lines = scribe::render_lines(&annotations);
+                    self.scribe_annotations = scribe::extract_annotations(&response);
+                    self.scribe_error = None;
                     self.scribe_status = ScribeStatus::Idle;
+                    self.scribe_last_response = Some(std::time::Instant::now());
                 }
                 Err(err) => {
                     log::warn!("scribe check failed: {err}");
-                    self.scribe_lines = vec![
-                        Line::from(""),
-                        Line::from(format!(" Error: {err}")),
-                    ];
+                    self.scribe_annotations = Vec::new();
+                    self.scribe_error = Some(err);
                     self.scribe_status = ScribeStatus::Error;
                     self.scribe_session_started = false;
                 }
@@ -552,7 +559,18 @@ impl RunLoopState {
                     ])
                     .split(main_area);
                     render_editor(frame, parser, mode_label, mode_st, title_message, post_title.as_deref(), is_draft, panes[0]);
-                    render_scribe(frame, &self.scribe_lines, self.scribe_status, panes[1]);
+
+                    let vim_rows = panes[0].height.saturating_sub(2) as usize;
+                    let visible_start = vim_state.first_visible_line as u16;
+                    let visible_end = (vim_state.first_visible_line + vim_rows) as u16;
+                    let scribe_lines = scribe::render_lines_with_focus(
+                        &self.scribe_annotations, visible_start, visible_end,
+                    );
+                    render_scribe(
+                        frame, &scribe_lines, self.scribe_status,
+                        &self.scribe_session_name, self.scribe_last_response,
+                        self.scribe_error.as_deref(), panes[1],
+                    );
                 }
                 SplitLayout::EditorOnly => {
                     render_editor(frame, parser, mode_label, mode_st, title_message, post_title.as_deref(), is_draft, main_area);
@@ -805,6 +823,9 @@ fn render_scribe(
     frame: &mut ratatui::Frame,
     scribe_lines: &[Line<'static>],
     status: ScribeStatus,
+    session_name: &str,
+    last_response: Option<std::time::Instant>,
+    error: Option<&str>,
     area: ratatui::layout::Rect,
 ) {
     let (status_label, status_color) = match status {
@@ -813,9 +834,13 @@ fn render_scribe(
         ScribeStatus::CheckingSlow => ("checking... (slow)", Color::Yellow),
         ScribeStatus::Error => ("error", Color::Red),
     };
+    let elapsed = last_response
+        .map(|t| format!(" {}s ago", t.elapsed().as_secs()))
+        .unwrap_or_default();
     let title = Line::from(vec![
-        Span::raw(" SCRIBE "),
+        Span::raw(format!(" SCRIBE {session_name} ")),
         Span::styled(format!("[{status_label}]"), Style::default().fg(status_color)),
+        Span::styled(elapsed, Style::default().fg(Color::DarkGray)),
         Span::raw(" "),
     ]);
     let block = Block::default()
@@ -823,7 +848,15 @@ fn render_scribe(
         .border_style(Style::default().fg(Color::DarkGray))
         .title(title);
 
-    let content = if scribe_lines.is_empty() {
+    let content = if let Some(err) = error {
+        vec![
+            Line::from(""),
+            Line::from(Span::styled(
+                format!(" Error: {err}"),
+                Style::default().fg(Color::Red),
+            )),
+        ]
+    } else if scribe_lines.is_empty() {
         vec![
             Line::from(""),
             Line::from(Span::styled(
