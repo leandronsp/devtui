@@ -1,5 +1,6 @@
 pub mod db;
 pub mod list;
+pub mod ops;
 pub mod preview;
 pub mod vim;
 
