@@ -431,33 +431,7 @@ pub fn build_markdown(article: &Article) -> String {
 
 /// Update or insert the `status:` field in frontmatter to match the DB status.
 fn inject_status(content: &str, status: &Status) -> String {
-    let status_line = format!("status: {status}");
-    if !content.starts_with("---\n") {
-        return content.to_string();
-    }
-    let Some(end) = content[4..].find("\n---") else {
-        return content.to_string();
-    };
-    let fm_end = end + 4; // points to the \n before ---
-    let lines: Vec<&str> = content[4..fm_end].lines().collect();
-    let mut result = String::from("---\n");
-    let mut found = false;
-    for line in &lines {
-        if line.starts_with("status:") {
-            result.push_str(&status_line);
-            found = true;
-        } else {
-            result.push_str(line);
-        }
-        result.push('\n');
-    }
-    if !found {
-        result.push_str(&status_line);
-        result.push('\n');
-    }
-    // Skip the \n before ---, append from ---
-    result.push_str(&content[fm_end + 1..]);
-    result
+    super::preview::set_frontmatter_field(content, "status", status.as_str())
 }
 
 fn slugify(title: &str) -> String {
