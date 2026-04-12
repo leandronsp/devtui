@@ -1,29 +1,67 @@
+const CANONICAL_ORDER: &[&str] = &[
+    "title",
+    "subtitle",
+    "description",
+    "slug",
+    "published_at",
+    "language",
+    "tags",
+    "image",
+    "status",
+    "pinned",
+];
+
 pub fn normalize_frontmatter(content: &str) -> String {
     let Some((frontmatter, body)) = split_frontmatter(content) else {
         return content.to_string();
     };
-    let rewritten: String = frontmatter
+    let fields: Vec<(String, String)> = frontmatter
         .lines()
-        .map(rewrite_line)
-        .map(|line| format!("{line}\n"))
+        .filter_map(parse_field)
+        .map(|(key, value)| (rename_key(&key), normalize_value(&value)))
         .collect();
-    format!("---\n{rewritten}---\n{body}")
+    let ordered = reorder_canonical(fields);
+    let body_block: String = ordered
+        .into_iter()
+        .map(|(key, value)| format!("{key}: {value}\n"))
+        .collect();
+    format!("---\n{body_block}---\n{body}")
 }
 
-fn rewrite_line(line: &str) -> String {
-    let Some((key, value)) = line.split_once(':') else {
-        return line.to_string();
-    };
-    let key = if key == "date" { "published_at" } else { key };
-    let trimmed = value.trim();
-    if trimmed.is_empty() || is_already_quoted_or_collection(trimmed) {
-        return format!("{key}:{value}");
+fn parse_field(line: &str) -> Option<(String, String)> {
+    let (key, value) = line.split_once(':')?;
+    Some((key.trim().to_string(), value.trim().to_string()))
+}
+
+fn rename_key(key: &str) -> String {
+    if key == "date" {
+        return "published_at".to_string();
     }
-    format!("{key}: \"{trimmed}\"")
+    key.to_string()
+}
+
+fn normalize_value(value: &str) -> String {
+    if value.is_empty() || is_already_quoted_or_collection(value) {
+        return value.to_string();
+    }
+    format!("\"{value}\"")
 }
 
 fn is_already_quoted_or_collection(value: &str) -> bool {
     value.starts_with('"') || value.starts_with('[') || value.starts_with('\'')
+}
+
+fn reorder_canonical(fields: Vec<(String, String)>) -> Vec<(String, String)> {
+    let canonical_index = |key: &str| {
+        CANONICAL_ORDER
+            .iter()
+            .position(|&k| k == key)
+            .map(|i| i as i32)
+            .unwrap_or(i32::MAX)
+    };
+    let mut ordered = fields;
+    ordered.sort_by_key(|(key, _)| canonical_index(key));
+    ordered
 }
 
 fn split_frontmatter(content: &str) -> Option<(String, String)> {
@@ -56,6 +94,20 @@ mod tests {
     fn normalize_only_renames_exact_date_field() {
         let input = "---\nlast_date: 2026-03-28\n---\n";
         let expected = "---\nlast_date: \"2026-03-28\"\n---\n";
+        assert_eq!(normalize_frontmatter(input), expected);
+    }
+
+    #[test]
+    fn normalize_passes_through_unknown_fields() {
+        let input = "---\ntitle: Foo\ncustom: bar\n---\n";
+        let expected = "---\ntitle: \"Foo\"\ncustom: \"bar\"\n---\n";
+        assert_eq!(normalize_frontmatter(input), expected);
+    }
+
+    #[test]
+    fn normalize_reorders_fields_to_canonical() {
+        let input = "---\npublished_at: \"2026-03-28\"\ntitle: \"Foo\"\n---\n";
+        let expected = "---\ntitle: \"Foo\"\npublished_at: \"2026-03-28\"\n---\n";
         assert_eq!(normalize_frontmatter(input), expected);
     }
 
