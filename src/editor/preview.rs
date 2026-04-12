@@ -52,15 +52,22 @@ pub fn render_with_offsets(
     let header_author = frontmatter_author.as_deref().or(author);
     let title = frontmatter_field(content, "title");
     let date = frontmatter_date(content);
+    let language = frontmatter_field(content, "language").map(|s| s.to_uppercase());
+    let date_line = match (&date, &language) {
+        (Some(d), Some(l)) => Some(format!("{d} · {l}")),
+        (Some(d), None) => Some(d.clone()),
+        (None, Some(l)) => Some(l.clone()),
+        (None, None) => None,
+    };
     let original_line_count = content.lines().count().max(1);
     let body = strip_frontmatter(content);
     let frontmatter_line_count = original_line_count - body.lines().count().max(1);
     let content = body;
     let source_line_count = content.lines().count().max(1);
-    let has_header = header_author.is_some() || title.is_some() || date.is_some();
+    let has_header = header_author.is_some() || title.is_some() || date_line.is_some();
     let header_len: u16 = header_author.is_some() as u16
         + title.is_some() as u16
-        + date.is_some() as u16
+        + date_line.is_some() as u16
         + has_header as u16;
     let mut source_to_rendered: Vec<u16> = vec![header_len; source_line_count + 1];
 
@@ -77,8 +84,8 @@ pub fn render_with_offsets(
         if let Some(title) = title {
             lines.push(Line::from(Span::styled(title, h1_style())));
         }
-        if let Some(date) = date {
-            lines.push(Line::from(Span::styled(date, dim)));
+        if let Some(date_line) = date_line {
+            lines.push(Line::from(Span::styled(date_line, dim)));
         }
         lines.push(Line::from(""));
     }
@@ -385,6 +392,21 @@ mod tests {
         let (lines, _) = render_with_offsets(md, None);
         assert_eq!(line_text(&lines[0]), "Hello");
         assert_eq!(line_text(&lines[1]), "2024-03-05");
+    }
+
+    #[test]
+    fn header_language_appended_to_date_line() {
+        let md = "---\ntitle: Hello\npublished_at: 2024-01-02\nlanguage: en\n---\n\nBody.";
+        let (lines, _) = render_with_offsets(md, None);
+        assert_eq!(line_text(&lines[1]), "2024-01-02 · EN");
+    }
+
+    #[test]
+    fn header_language_alone_renders_as_its_own_line() {
+        let md = "---\ntitle: Hello\nlanguage: pt\n---\n\nBody.";
+        let (lines, _) = render_with_offsets(md, None);
+        assert_eq!(line_text(&lines[0]), "Hello");
+        assert_eq!(line_text(&lines[1]), "PT");
     }
 
     #[test]
