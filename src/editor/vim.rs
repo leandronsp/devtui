@@ -1,5 +1,5 @@
 use std::io::{self, Read, Write};
-use std::path::PathBuf;
+use std::path::{Path, PathBuf};
 use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::{Arc, Mutex, RwLock};
 use std::thread;
@@ -157,6 +157,7 @@ pub fn run(
         &pty_pair.master,
         &vim_exited,
         &file_display,
+        &file_path,
         &content_swap,
         html_config,
         chrome,
@@ -246,6 +247,110 @@ fn vim_size(layout: SplitLayout, width: u16, height: u16) -> (u16, u16) {
     }
 }
 
+/// Inline form for editing title and subtitle.
+struct TitleForm {
+    title: String,
+    subtitle: String,
+    focused: TitleFormField,
+    cursor: usize,
+    error: Option<&'static str>,
+}
+
+#[derive(PartialEq)]
+enum TitleFormField {
+    Title,
+    Subtitle,
+}
+
+impl TitleForm {
+    fn new(title: String, subtitle: String) -> Self {
+        let cursor = title.len();
+        Self {
+            title,
+            subtitle,
+            focused: TitleFormField::Title,
+            cursor,
+            error: None,
+        }
+    }
+
+    fn focused_value(&self) -> &str {
+        match self.focused {
+            TitleFormField::Title => &self.title,
+            TitleFormField::Subtitle => &self.subtitle,
+        }
+    }
+
+    fn active_field(&mut self) -> &mut String {
+        match self.focused {
+            TitleFormField::Title => &mut self.title,
+            TitleFormField::Subtitle => &mut self.subtitle,
+        }
+    }
+
+    fn insert_char(&mut self, c: char) {
+        let cursor = self.cursor;
+        let val = self.active_field();
+        if cursor <= val.len() {
+            val.insert(cursor, c);
+            self.cursor += c.len_utf8();
+        }
+        self.error = None;
+    }
+
+    fn delete_char(&mut self) {
+        if self.cursor > 0 {
+            let cursor = self.cursor;
+            let val = self.active_field();
+            let prev = val[..cursor]
+                .char_indices()
+                .next_back()
+                .map(|(i, _)| i)
+                .unwrap_or(0);
+            val.drain(prev..cursor);
+            self.cursor = prev;
+        }
+        self.error = None;
+    }
+
+    fn move_left(&mut self) {
+        if self.cursor > 0 {
+            let cursor = self.cursor;
+            let val = self.focused_value();
+            self.cursor = val[..cursor]
+                .char_indices()
+                .next_back()
+                .map(|(i, _)| i)
+                .unwrap_or(0);
+        }
+    }
+
+    fn move_right(&mut self) {
+        let cursor = self.cursor;
+        let val = self.focused_value();
+        if cursor < val.len() {
+            self.cursor = val[cursor..]
+                .char_indices()
+                .nth(1)
+                .map(|(i, _)| cursor + i)
+                .unwrap_or(val.len());
+        }
+    }
+
+    fn toggle_field(&mut self) {
+        self.focused = match self.focused {
+            TitleFormField::Title => {
+                self.cursor = self.subtitle.len();
+                TitleFormField::Subtitle
+            }
+            TitleFormField::Subtitle => {
+                self.cursor = self.title.len();
+                TitleFormField::Title
+            }
+        };
+    }
+}
+
 /// All mutable state owned by the run loop. Extracted to allow splitting the loop body
 /// into focused methods without passing a dozen locals through each call.
 struct RunLoopState {
@@ -270,10 +375,14 @@ struct RunLoopState {
     /// Blog author from blog.toml; rendered in preview header when post has no
     /// `author:` frontmatter field.
     blog_author: Option<String>,
+    /// Path to the file vim is editing, for frontmatter write-back.
+    file_path: PathBuf,
+    /// Inline title/subtitle edit form.
+    title_form: Option<TitleForm>,
 }
 
 impl RunLoopState {
-    fn new(chrome_available: bool, blog_author: Option<String>) -> Self {
+    fn new(chrome_available: bool, blog_author: Option<String>, file_path: PathBuf) -> Self {
         Self {
             last_content: String::new(),
             cached_lines: Vec::new(),
@@ -291,6 +400,8 @@ impl RunLoopState {
             flash: None,
             was_modified: false,
             blog_author,
+            file_path,
+            title_form: None,
         }
     }
 
@@ -555,6 +666,11 @@ impl RunLoopState {
                 }
             }
 
+            // Title form overlay
+            if let Some(ref form) = self.title_form {
+                render_title_form(frame, form, area);
+            }
+
             // Status bar
             let chrome_hint = if !self.chrome_available {
                 ""
@@ -565,13 +681,13 @@ impl RunLoopState {
             };
             let browser_hint = if html_config.is_some() { " ^O:browser" } else { "" };
             let scroll_hint = if self.split_layout != SplitLayout::EditorOnly {
-                " ^T:follow-cursor ^J/^K:scroll"
+                " ^F:follow-cursor ^J/^K:scroll"
             } else {
                 ""
             };
             let status = Line::from(Span::styled(
                 format!(
-                    " {} | DevTUI [{layout_label}] ^G:layout{chrome_hint}{browser_hint}{scroll_hint}",
+                    " {} | DevTUI [{layout_label}] ^T:title ^G:layout{chrome_hint}{browser_hint}{scroll_hint}",
                     file_display,
                 ),
                 Style::default().fg(Color::DarkGray),
@@ -599,6 +715,70 @@ impl RunLoopState {
     ) -> io::Result<bool> {
         let ctrl = key.modifiers.contains(KeyModifiers::CONTROL);
 
+        // Title form overlay: intercept all keys when form is open
+        if self.title_form.is_some() {
+            match key.code {
+                KeyCode::Esc => {
+                    self.title_form = None;
+                }
+                KeyCode::Tab | KeyCode::BackTab => {
+                    self.title_form.as_mut().unwrap().toggle_field();
+                }
+                KeyCode::Enter => {
+                    let form = self.title_form.as_mut().unwrap();
+                    if form.title.trim().is_empty() {
+                        form.error = Some("Title cannot be empty");
+                        return Ok(false);
+                    }
+                    let title = form.title.clone();
+                    let subtitle = form.subtitle.clone();
+                    self.title_form = None;
+
+                    // Update frontmatter in content
+                    let mut content = self.last_content.clone();
+                    content = preview::set_frontmatter_field(&content, "title", &title);
+                    if subtitle.is_empty() {
+                        // Remove subtitle if empty (don't leave blank field)
+                    } else {
+                        content = preview::set_frontmatter_field(&content, "subtitle", &subtitle);
+                    }
+
+                    // Write to file and content tmp
+                    let _ = std::fs::write(&self.file_path, &content);
+                    let _ = std::fs::write(CONTENT_TMP, &content);
+                    self.last_content = content;
+                    self.preview_stale = true;
+
+                    // Tell vim to reload the file
+                    let _ = pty_writer.write_all(b"\x1b:e!\r");
+
+                    self.flash = Some(("Title updated", std::time::Instant::now()));
+                }
+                KeyCode::Backspace => {
+                    self.title_form.as_mut().unwrap().delete_char();
+                }
+                KeyCode::Left => {
+                    self.title_form.as_mut().unwrap().move_left();
+                }
+                KeyCode::Right => {
+                    self.title_form.as_mut().unwrap().move_right();
+                }
+                KeyCode::Char(c) => {
+                    self.title_form.as_mut().unwrap().insert_char(c);
+                }
+                _ => {}
+            }
+            return Ok(false);
+        }
+
+        // Ctrl+T: open title/subtitle form
+        if key.code == KeyCode::Char('t') && ctrl {
+            let title = preview::frontmatter_field(&self.last_content, "title").unwrap_or_default();
+            let subtitle = preview::frontmatter_field(&self.last_content, "subtitle").unwrap_or_default();
+            self.title_form = Some(TitleForm::new(title, subtitle));
+            return Ok(false);
+        }
+
         // Ctrl+G: toggle layout
         if key.code == KeyCode::Char('g') && ctrl {
             self.split_layout = match self.split_layout {
@@ -615,8 +795,8 @@ impl RunLoopState {
             return Ok(false);
         }
 
-        // Ctrl+T: follow editor cursor in preview
-        if key.code == KeyCode::Char('t') && ctrl && self.split_layout != SplitLayout::EditorOnly {
+        // Ctrl+F: follow editor cursor in preview
+        if key.code == KeyCode::Char('f') && ctrl && self.split_layout != SplitLayout::EditorOnly {
             if self.preview_mode == PreviewMode::Html {
                 if let Some(ref mut ki) = self.kitty_image {
                     let visible = terminal.size()?.height.saturating_sub(4);
@@ -718,13 +898,14 @@ fn run_loop(
     pty_master: &Box<dyn portable_pty::MasterPty + Send>,
     vim_exited: &Arc<AtomicBool>,
     file_display: &str,
+    file_path: &Path,
     content_swap: &Arc<Mutex<Option<String>>>,
     html_config: Option<&HtmlPreviewConfig>,
     chrome: Option<&ChromeHandle>,
     picker: &ratatui_image::picker::Picker,
 ) -> io::Result<()> {
     let blog_author = html_config.map(|c| c.blog_config.author.clone());
-    let mut state = RunLoopState::new(chrome.is_some(), blog_author);
+    let mut state = RunLoopState::new(chrome.is_some(), blog_author, file_path.to_path_buf());
 
     loop {
         if vim_exited.load(Ordering::Relaxed) {
@@ -817,6 +998,71 @@ fn render_editor(
         let pseudo_term = PseudoTerminal::new(p.screen()).block(block);
         frame.render_widget(pseudo_term, area);
     }
+}
+
+fn render_title_form(frame: &mut ratatui::Frame, form: &TitleForm, area: Rect) {
+    use ratatui::widgets::Clear;
+
+    let width = area.width.min(60);
+    let height = 9_u16;
+    let x = area.x + (area.width.saturating_sub(width)) / 2;
+    let y = area.y + (area.height.saturating_sub(height)) / 2;
+    let popup = Rect::new(x, y, width, height);
+
+    frame.render_widget(Clear, popup);
+
+    let block = Block::default()
+        .title(Line::from(Span::styled(
+            " Edit Title ",
+            Style::default().fg(Color::Cyan).add_modifier(Modifier::BOLD),
+        )))
+        .borders(Borders::ALL)
+        .border_style(Style::default().fg(Color::Cyan));
+    frame.render_widget(block, popup);
+
+    let inner = Rect::new(popup.x + 1, popup.y + 1, popup.width.saturating_sub(2), popup.height.saturating_sub(2));
+
+    let title_label_style = if form.focused == TitleFormField::Title {
+        Style::default().fg(Color::Cyan).add_modifier(Modifier::BOLD)
+    } else {
+        Style::default().fg(Color::DarkGray)
+    };
+    let subtitle_label_style = if form.focused == TitleFormField::Subtitle {
+        Style::default().fg(Color::Cyan).add_modifier(Modifier::BOLD)
+    } else {
+        Style::default().fg(Color::DarkGray)
+    };
+
+    let title_cursor = if form.focused == TitleFormField::Title { "▎" } else { "" };
+    let subtitle_cursor = if form.focused == TitleFormField::Subtitle { "▎" } else { "" };
+
+    let warning = if form.title.len() > 80 {
+        Some(Line::from(Span::styled("  Title > 80 chars", Style::default().fg(Color::Yellow))))
+    } else {
+        form.error.map(|e| Line::from(Span::styled(format!("  {e}"), Style::default().fg(Color::Red))))
+    };
+
+    let mut lines = vec![
+        Line::from(Span::styled("  Title:", title_label_style)),
+        Line::from(vec![
+            Span::raw("  "),
+            Span::styled(format!("{}{title_cursor}", form.title), Style::default().fg(Color::White)),
+        ]),
+        Line::from(""),
+        Line::from(Span::styled("  Subtitle:", subtitle_label_style)),
+        Line::from(vec![
+            Span::raw("  "),
+            Span::styled(format!("{}{subtitle_cursor}", form.subtitle), Style::default().fg(Color::White)),
+        ]),
+    ];
+
+    if let Some(warning_line) = warning {
+        lines.push(Line::from(""));
+        lines.push(warning_line);
+    }
+
+    let text = Paragraph::new(lines);
+    frame.render_widget(text, inner);
 }
 
 #[allow(clippy::too_many_arguments)]
