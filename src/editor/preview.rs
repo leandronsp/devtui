@@ -51,6 +51,7 @@ pub fn render_with_offsets(
     let frontmatter_author = frontmatter_field(content, "author");
     let header_author = frontmatter_author.as_deref().or(author);
     let title = frontmatter_field(content, "title");
+    let subtitle = frontmatter_field(content, "subtitle");
     let date = frontmatter_date(content);
     let language = frontmatter_field(content, "language").map(|s| s.to_uppercase());
     let date_line = match (&date, &language) {
@@ -67,6 +68,7 @@ pub fn render_with_offsets(
     let has_header = header_author.is_some() || title.is_some() || date_line.is_some();
     let header_len: u16 = header_author.is_some() as u16
         + title.is_some() as u16
+        + subtitle.is_some() as u16
         + date_line.is_some() as u16
         + has_header as u16;
     let mut source_to_rendered: Vec<u16> = vec![header_len; source_line_count + 1];
@@ -83,6 +85,10 @@ pub fn render_with_offsets(
         }
         if let Some(title) = title {
             lines.push(Line::from(Span::styled(title, h1_style())));
+        }
+        if let Some(subtitle) = subtitle {
+            let subtitle_style = Style::default().fg(Color::DarkGray).add_modifier(Modifier::ITALIC);
+            lines.push(Line::from(Span::styled(subtitle, subtitle_style)));
         }
         if let Some(date_line) = date_line {
             lines.push(Line::from(Span::styled(date_line, dim)));
@@ -761,5 +767,23 @@ mod tests {
         }
 
         assert!(lines.len() > 50, "full article should have many rendered lines");
+    }
+
+    #[test]
+    fn subtitle_rendered_below_title() {
+        let md = "---\ntitle: Hello\nsubtitle: A short tagline\n---\n\nBody.";
+        let (lines, _) = render_with_offsets(md, None);
+        assert_eq!(line_text(&lines[0]), "Hello");
+        assert_eq!(line_text(&lines[1]), "A short tagline");
+        assert_eq!(line_text(&lines[2]), "");
+    }
+
+    #[test]
+    fn no_subtitle_no_extra_line() {
+        let md = "---\ntitle: Hello\n---\n\nBody.";
+        let (lines, _) = render_with_offsets(md, None);
+        assert_eq!(line_text(&lines[0]), "Hello");
+        assert_eq!(line_text(&lines[1]), "");
+        assert_eq!(line_text(&lines[2]), "Body.");
     }
 }
