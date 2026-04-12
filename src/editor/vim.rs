@@ -738,7 +738,7 @@ impl RunLoopState {
                     let mut content = self.last_content.clone();
                     content = preview::set_frontmatter_field(&content, "title", &title);
                     if subtitle.is_empty() {
-                        // Remove subtitle if empty (don't leave blank field)
+                        content = preview::remove_frontmatter_field(&content, "subtitle");
                     } else {
                         content = preview::set_frontmatter_field(&content, "subtitle", &subtitle);
                     }
