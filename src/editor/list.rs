@@ -43,8 +43,11 @@ pub struct ListView {
     serve_after_build: bool,
     serve_stop: Arc<AtomicBool>,
     serve_handle: Option<JoinHandle<()>>,
-    confirm_deploy: bool,
-    deploy_dir: Option<String>,
+    deploying: bool,
+    deploy_result: Arc<Mutex<Option<Result<ops::DeployPreview, String>>>>,
+    deploy_preview: Option<ops::DeployPreview>,
+    pushing: bool,
+    push_result: Arc<Mutex<Option<Result<String, String>>>>,
     show_theme_picker: bool,
     themes: Vec<String>,
     theme_index: usize,
@@ -78,8 +81,11 @@ impl ListView {
             serve_after_build: false,
             serve_stop: Arc::new(AtomicBool::new(false)),
             serve_handle: None,
-            confirm_deploy: false,
-            deploy_dir: config.deploy_dir.clone(),
+            deploying: false,
+            deploy_result: Arc::new(Mutex::new(None)),
+            deploy_preview: None,
+            pushing: false,
+            push_result: Arc::new(Mutex::new(None)),
             show_theme_picker: false,
             themes,
             theme_index,
@@ -94,6 +100,8 @@ impl ListView {
     ) -> io::Result<ListAction> {
         loop {
             self.poll_build_result();
+            self.poll_deploy_result();
+            self.poll_push_result();
             self.draw(terminal)?;
 
             if event::poll(Duration::from_millis(50))? {
@@ -171,6 +179,93 @@ impl ListView {
         self.flash = Some(("Server stopped".into(), Instant::now()));
     }
 
+    fn start_deploy(&mut self) {
+        if self.deploying || self.building {
+            return;
+        }
+        self.deploying = true;
+        self.flash = Some(("Deploying...".into(), Instant::now()));
+
+        let blog_dir = self.blog_dir.clone();
+        let result_slot = Arc::clone(&self.deploy_result);
+
+        std::thread::spawn(move || {
+            let result = ops::deploy_build_and_sync(&blog_dir);
+            if let Ok(mut guard) = result_slot.lock() {
+                *guard = Some(result);
+            }
+        });
+    }
+
+    fn poll_deploy_result(&mut self) {
+        let result = if let Ok(mut guard) = self.deploy_result.lock() {
+            guard.take()
+        } else {
+            return;
+        };
+        if let Some(result) = result {
+            self.deploying = false;
+            self.last_built = Some(Instant::now());
+            match result {
+                Ok(preview) => {
+                    if preview.diff.is_empty() {
+                        self.flash = Some(("Nothing to deploy".into(), Instant::now()));
+                    } else {
+                        self.deploy_preview = Some(preview);
+                        self.flash = None;
+                    }
+                }
+                Err(err) => {
+                    let first_line = err.lines().next().unwrap_or(&err).to_string();
+                    self.flash = Some((format!("Deploy failed: {first_line}"), Instant::now()));
+                    self.last_error = Some(err);
+                }
+            }
+        }
+    }
+
+    fn start_push(&mut self) {
+        if self.pushing {
+            return;
+        }
+        let Some(preview) = self.deploy_preview.take() else {
+            return;
+        };
+        self.pushing = true;
+        self.flash = Some(("Pushing...".into(), Instant::now()));
+
+        let deploy_dir = preview.deploy_dir;
+        let result_slot = Arc::clone(&self.push_result);
+
+        std::thread::spawn(move || {
+            let result = ops::repo_commit_push(&deploy_dir);
+            if let Ok(mut guard) = result_slot.lock() {
+                *guard = Some(result);
+            }
+        });
+    }
+
+    fn poll_push_result(&mut self) {
+        let result = if let Ok(mut guard) = self.push_result.lock() {
+            guard.take()
+        } else {
+            return;
+        };
+        if let Some(result) = result {
+            self.pushing = false;
+            match result {
+                Ok(msg) => {
+                    self.flash = Some((msg, Instant::now()));
+                }
+                Err(err) => {
+                    let first_line = err.lines().next().unwrap_or(&err).to_string();
+                    self.flash = Some((format!("Push failed: {first_line}"), Instant::now()));
+                    self.last_error = Some(err);
+                }
+            }
+        }
+    }
+
     fn start_build(&mut self) {
         if self.building {
             return;
@@ -233,9 +328,9 @@ impl ListView {
                 self.render_delete_confirm(frame, frame.area(), id);
             }
 
-            // Deploy confirmation
-            if self.confirm_deploy {
-                self.render_deploy_confirm(frame, frame.area());
+            // Deploy preview (diff + confirm)
+            if self.deploy_preview.is_some() {
+                self.render_deploy_preview(frame, frame.area());
             }
 
             // Theme picker
@@ -271,7 +366,17 @@ impl ListView {
             sep.clone(),
         ];
 
-        if self.building {
+        if self.deploying {
+            spans.push(Span::styled(
+                "deploying...",
+                Style::default().fg(Color::Yellow),
+            ));
+        } else if self.pushing {
+            spans.push(Span::styled(
+                "pushing...",
+                Style::default().fg(Color::Yellow),
+            ));
+        } else if self.building {
             spans.push(Span::styled(
                 "building...",
                 Style::default().fg(Color::Yellow),
@@ -502,37 +607,45 @@ impl ListView {
         frame.render_widget(error, popup_area);
     }
 
-    fn render_deploy_confirm(&self, frame: &mut ratatui::Frame, area: Rect) {
-        let target = self
-            .deploy_dir
-            .as_deref()
-            .unwrap_or("(not configured)");
-        let text = vec![
+    fn render_deploy_preview(&self, frame: &mut ratatui::Frame, area: Rect) {
+        let Some(preview) = &self.deploy_preview else {
+            return;
+        };
+
+        let mut lines = vec![
+            Line::from(Span::styled(
+                format!(" Deploy to {}", preview.deploy_dir.display()),
+                Style::default().fg(Color::Yellow),
+            )),
             Line::from(""),
-            Line::from(format!(" Deploy to {target}?")),
-            Line::from(""),
-            Line::from(vec![
-                Span::styled(" y ", Style::default().fg(Color::Yellow).add_modifier(Modifier::BOLD)),
-                Span::raw("confirm  "),
-                Span::styled(" n ", Style::default().fg(Color::Green).add_modifier(Modifier::BOLD)),
-                Span::raw("cancel"),
-            ]),
         ];
 
-        let width = 60.min(area.width);
-        let height = 6.min(area.height);
+        for diff_line in preview.diff.lines().take(20) {
+            lines.push(Line::from(format!(" {diff_line}")));
+        }
+
+        lines.push(Line::from(""));
+        lines.push(Line::from(vec![
+            Span::styled(" y ", Style::default().fg(Color::Yellow).add_modifier(Modifier::BOLD)),
+            Span::raw("commit + push  "),
+            Span::styled(" Esc ", Style::default().fg(Color::Green).add_modifier(Modifier::BOLD)),
+            Span::raw("cancel"),
+        ]));
+
+        let width = (area.width - 4).min(80);
+        let height = (lines.len() as u16 + 2).min(area.height - 2);
         let x = area.x + (area.width.saturating_sub(width)) / 2;
         let y = area.y + (area.height.saturating_sub(height)) / 2;
         let popup_area = Rect::new(x, y, width, height);
 
-        let confirm = Paragraph::new(text).block(
+        let deploy = Paragraph::new(lines).block(
             Block::default()
                 .borders(Borders::ALL)
                 .border_style(Style::default().fg(Color::Yellow))
-                .title(" Confirm Deploy "),
+                .title(" Deploy Preview "),
         );
         frame.render_widget(ratatui::widgets::Clear, popup_area);
-        frame.render_widget(confirm, popup_area);
+        frame.render_widget(deploy, popup_area);
     }
 
     fn render_theme_picker(&self, frame: &mut ratatui::Frame, area: Rect) {
@@ -614,28 +727,16 @@ impl ListView {
             return Ok(None);
         }
 
-        // Deploy confirmation mode
-        if self.confirm_deploy {
+        // Deploy preview mode (diff shown, awaiting confirm)
+        if self.deploy_preview.is_some() {
             match code {
                 KeyCode::Char('y') => {
-                    self.confirm_deploy = false;
-                    if let Some(deploy_dir) = &self.deploy_dir {
-                        let dist_dir = ops::dist_dir_for_blog(&self.blog_dir);
-                        let deploy_path = PathBuf::from(deploy_dir);
-                        match ops::run_deploy(&dist_dir, &deploy_path) {
-                            Ok(msg) => {
-                                self.flash = Some((msg, Instant::now()));
-                            }
-                            Err(err) => {
-                                self.flash = Some((format!("Deploy failed: {err}"), Instant::now()));
-                                self.last_error = Some(err);
-                            }
-                        }
-                    }
+                    self.start_push();
                 }
-                _ => {
-                    self.confirm_deploy = false;
+                KeyCode::Esc => {
+                    self.deploy_preview = None;
                 }
+                _ => {}
             }
             return Ok(None);
         }
@@ -754,10 +855,8 @@ impl ListView {
                 let _ = std::process::Command::new("open").arg(&url).spawn();
             }
             KeyCode::Char('D') => {
-                if self.deploy_dir.is_some() {
-                    self.confirm_deploy = true;
-                } else {
-                    self.flash = Some(("No deploy_dir in blog.toml".into(), Instant::now()));
+                if !self.deploying {
+                    self.start_deploy();
                 }
             }
             KeyCode::Char('t') => {

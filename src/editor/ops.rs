@@ -118,6 +118,98 @@ pub fn run_deploy(dist_dir: &Path, deploy_dir: &Path) -> Result<String, String> 
     }
 }
 
+/// Get git diff --stat summary from the deploy directory.
+pub fn repo_diff(deploy_dir: &Path) -> Result<String, String> {
+    let output = std::process::Command::new("git")
+        .args(["diff", "--stat"])
+        .current_dir(deploy_dir)
+        .output()
+        .map_err(|e| format!("failed to run git diff: {e}"))?;
+
+    // Also check for untracked files
+    let untracked = std::process::Command::new("git")
+        .args(["ls-files", "--others", "--exclude-standard"])
+        .current_dir(deploy_dir)
+        .output()
+        .map_err(|e| format!("failed to check untracked files: {e}"))?;
+
+    let mut result = String::from_utf8_lossy(&output.stdout).to_string();
+    let new_files = String::from_utf8_lossy(&untracked.stdout);
+    if !new_files.is_empty() {
+        for file in new_files.lines() {
+            result.push_str(&format!(" {file} (new)\n"));
+        }
+    }
+    Ok(result.trim().to_string())
+}
+
+/// Commit all changes and push in the deploy directory.
+pub fn repo_commit_push(deploy_dir: &Path) -> Result<String, String> {
+    // Stage all changes
+    let add = std::process::Command::new("git")
+        .args(["add", "."])
+        .current_dir(deploy_dir)
+        .output()
+        .map_err(|e| format!("git add failed: {e}"))?;
+
+    if !add.status.success() {
+        let stderr = String::from_utf8_lossy(&add.stderr);
+        return Err(format!("git add failed: {stderr}"));
+    }
+
+    // Commit
+    let commit = std::process::Command::new("git")
+        .args(["commit", "-m", "deploy"])
+        .current_dir(deploy_dir)
+        .output()
+        .map_err(|e| format!("git commit failed: {e}"))?;
+
+    if !commit.status.success() {
+        let stderr = String::from_utf8_lossy(&commit.stderr);
+        return Err(format!("git commit failed: {stderr}"));
+    }
+
+    // Push
+    let push = std::process::Command::new("git")
+        .args(["push"])
+        .current_dir(deploy_dir)
+        .output()
+        .map_err(|e| format!("git push failed: {e}"))?;
+
+    if push.status.success() {
+        Ok("Pushed to remote".to_string())
+    } else {
+        let stderr = String::from_utf8_lossy(&push.stderr);
+        Err(format!("git push failed: {stderr}"))
+    }
+}
+
+/// Full deploy pipeline: build, rsync, return diff for confirmation.
+pub fn deploy_build_and_sync(blog_dir: &Path) -> Result<DeployPreview, String> {
+    let dist_dir = dist_dir_for_blog(blog_dir);
+    run_build(blog_dir, &dist_dir)?;
+
+    let config_path = blog_dir.join("blog.toml");
+    let config = crate::engine::config::BlogConfig::from_file(&config_path)?;
+    let deploy_dir = config
+        .deploy_dir
+        .ok_or("No deploy_dir configured in blog.toml")?;
+    let deploy_path = PathBuf::from(&deploy_dir);
+
+    run_deploy(&dist_dir, &deploy_path)?;
+    let diff = repo_diff(&deploy_path)?;
+
+    Ok(DeployPreview {
+        deploy_dir: deploy_path,
+        diff,
+    })
+}
+
+pub struct DeployPreview {
+    pub deploy_dir: PathBuf,
+    pub diff: String,
+}
+
 /// List available themes from the engine themes directory.
 pub fn available_themes() -> Vec<String> {
     let themes_dir = engine_dir().join("themes");
@@ -200,6 +292,76 @@ mod tests {
             "---\ntitle: Hello\npublished_at: 2026-01-01\nstatus: published\n---\n\nBody.\n",
         )
         .unwrap();
+    }
+
+    fn init_git_repo(dir: &Path) {
+        std::process::Command::new("git")
+            .args(["init"])
+            .current_dir(dir)
+            .output()
+            .unwrap();
+        std::process::Command::new("git")
+            .args(["config", "user.email", "test@test.com"])
+            .current_dir(dir)
+            .output()
+            .unwrap();
+        std::process::Command::new("git")
+            .args(["config", "user.name", "Test"])
+            .current_dir(dir)
+            .output()
+            .unwrap();
+        // Initial commit so HEAD exists
+        fs::write(dir.join(".gitkeep"), "").unwrap();
+        std::process::Command::new("git")
+            .args(["add", "."])
+            .current_dir(dir)
+            .output()
+            .unwrap();
+        std::process::Command::new("git")
+            .args(["commit", "-m", "init"])
+            .current_dir(dir)
+            .output()
+            .unwrap();
+    }
+
+    #[test]
+    fn repo_diff_shows_changed_files() {
+        let dir = tempdir();
+        init_git_repo(&dir);
+        fs::write(dir.join("index.html"), "<h1>New</h1>").unwrap();
+
+        let diff = repo_diff(&dir).unwrap();
+
+        assert!(diff.contains("index.html"));
+    }
+
+    #[test]
+    fn repo_diff_returns_empty_when_clean() {
+        let dir = tempdir();
+        init_git_repo(&dir);
+
+        let diff = repo_diff(&dir).unwrap();
+
+        assert!(diff.is_empty());
+    }
+
+    #[test]
+    fn repo_commit_push_commits_changes() {
+        let dir = tempdir();
+        init_git_repo(&dir);
+        fs::write(dir.join("index.html"), "<h1>Deploy</h1>").unwrap();
+
+        let result = repo_commit_push(&dir);
+
+        // Push will fail (no remote) but commit should succeed
+        // For this test, just check that the commit happened
+        let log = std::process::Command::new("git")
+            .args(["log", "--oneline", "-1"])
+            .current_dir(&dir)
+            .output()
+            .unwrap();
+        let msg = String::from_utf8_lossy(&log.stdout);
+        assert!(msg.contains("deploy"));
     }
 
     #[test]
