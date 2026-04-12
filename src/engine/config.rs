@@ -128,6 +128,7 @@ pub struct Post {
     pub date: String,
     pub description: String,
     pub image: Option<String>,
+    pub draft: bool,
     pub content: String,
     pub path: PathBuf,
 }
@@ -158,6 +159,7 @@ fn post_from_path(path: &Path) -> Result<Post, String> {
         date: frontmatter_date(&content).unwrap_or_default(),
         description: frontmatter("description", &content).unwrap_or_default(),
         image: frontmatter("image", &content),
+        draft: frontmatter("status", &content).as_deref() == Some("draft"),
         slug,
         path: path.to_path_buf(),
         content,

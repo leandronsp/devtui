@@ -37,6 +37,7 @@ pub fn build(blog_dir: &Path, dist_dir: &Path, engine_dir: &Path) -> Result<Buil
     fs::create_dir_all(&articles_dir).map_err(|e| e.to_string())?;
 
     let mut posts = config::collect_posts(&posts_dir)?;
+    posts.retain(|p| !p.draft);
 
     let (rebuilt_articles, sitemap_entries, skipped) = render_articles(
         &cfg, &posts, &articles_dir, articles_prefix, blog_dir, &theme_dir, engine_dir,
@@ -853,5 +854,22 @@ This is the second post.
         do_build(&blog, &dist);
         let html = fs::read_to_string(dist.join("2026-01-08-quote.html")).expect("read article");
         assert!(html.contains("<blockquote>"));
+    }
+
+    // --- Draft gating ---
+
+    #[test]
+    fn build_excludes_draft_post_from_html() {
+        let tmp = tempdir();
+        let (blog, dist) = setup_blog(&tmp);
+        fs::write(
+            blog.join("posts/2026-01-03-draft.md"),
+            "---\ntitle: Draft Post\npublished_at: 2026-01-03\nstatus: draft\n---\n\nThis is a draft.\n",
+        )
+        .expect("write draft post");
+        do_build(&blog, &dist);
+        assert!(!dist.join("2026-01-03-draft.html").exists());
+        assert!(dist.join("2026-01-01-hello.html").exists());
+        assert!(dist.join("2026-01-02-second.html").exists());
     }
 }

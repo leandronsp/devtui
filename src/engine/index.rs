@@ -157,6 +157,7 @@ mod tests {
             date: date.to_string(),
             description: String::new(),
             image: None,
+            draft: false,
             content: format!(
                 "---\ntitle: {title}\ndate: {date}\nlanguage: en\ntags: [\"rust\"]\n---\n\nBody.\n"
             ),

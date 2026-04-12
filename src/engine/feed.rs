@@ -134,6 +134,7 @@ mod tests {
             date: "2026-03-29".to_string(),
             description: "A test post".to_string(),
             image: None,
+            draft: false,
             content: "---\ntitle: Hello World\ndate: 2026-03-29\n---\n\nSome **bold** content.\n".to_string(),
             path: PathBuf::from("hello.md"),
         }];
@@ -162,6 +163,7 @@ mod tests {
                 date: "2026-03-29".to_string(),
                 description: String::new(),
                 image: None,
+                draft: false,
                 content: format!("---\ntitle: Post {i}\ndate: 2026-03-29\n---\n\nBody {i}.\n"),
                 path: PathBuf::from(format!("post-{i}.md")),
             })
@@ -188,6 +190,7 @@ mod tests {
             date: "2026-03-29".to_string(),
             description: String::new(),
             image: None,
+            draft: false,
             content: "---\ntitle: Hello\ndate: 2026-03-29\n---\n\nBody.\n".to_string(),
             path: PathBuf::from("hello.md"),
         }];
