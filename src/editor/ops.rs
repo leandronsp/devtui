@@ -96,6 +96,28 @@ fn content_type_header(value: &str) -> tiny_http::Header {
     tiny_http::Header::from_bytes("Content-Type", value).expect("valid Content-Type header")
 }
 
+/// Deploy: rsync dist contents to deploy_dir.
+pub fn run_deploy(dist_dir: &Path, deploy_dir: &Path) -> Result<String, String> {
+    if !dist_dir.exists() {
+        return Err(format!("dist directory not found: {}", dist_dir.display()));
+    }
+
+    let src = format!("{}/", dist_dir.display());
+    let dst = format!("{}/", deploy_dir.display());
+
+    let output = std::process::Command::new("rsync")
+        .args(["-a", &src, &dst])
+        .output()
+        .map_err(|e| format!("failed to run rsync: {e}"))?;
+
+    if output.status.success() {
+        Ok(format!("Deployed to {}", deploy_dir.display()))
+    } else {
+        let stderr = String::from_utf8_lossy(&output.stderr);
+        Err(format!("rsync failed: {stderr}"))
+    }
+}
+
 /// Build the blog: sync DB to filesystem, then run the engine build pipeline.
 pub fn run_build(blog_dir: &Path, dist_dir: &Path) -> Result<BuildReport, String> {
     super::sync_managed_blog(blog_dir).map_err(|e| e.to_string())?;
@@ -182,6 +204,30 @@ mod tests {
     fn format_built_ago_shows_hours() {
         let elapsed = std::time::Duration::from_secs(3700);
         assert_eq!(format_built_ago(elapsed), "built 1h ago");
+    }
+
+    #[test]
+    fn run_deploy_copies_dist_to_deploy_dir() {
+        let dist_dir = tempdir();
+        let deploy_dir = tempdir();
+        fs::write(dist_dir.join("index.html"), "<h1>Hello</h1>").unwrap();
+        fs::write(dist_dir.join("feed.xml"), "<rss/>").unwrap();
+
+        let result = run_deploy(&dist_dir, &deploy_dir);
+
+        assert!(result.is_ok(), "deploy failed: {result:?}");
+        assert!(deploy_dir.join("index.html").exists());
+        assert!(deploy_dir.join("feed.xml").exists());
+    }
+
+    #[test]
+    fn run_deploy_returns_error_for_missing_dist() {
+        let dist_dir = PathBuf::from("/nonexistent/path");
+        let deploy_dir = tempdir();
+
+        let result = run_deploy(&dist_dir, &deploy_dir);
+
+        assert!(result.is_err());
     }
 
     #[test]
