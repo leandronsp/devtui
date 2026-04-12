@@ -24,6 +24,7 @@ pub fn test_blog_config() -> BlogConfig {
         license: None,
         license_url: None,
         og_image: None,
+        deploy_dir: None,
         tags: None,
         links: None,
         guides: None,

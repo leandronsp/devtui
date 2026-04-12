@@ -1,5 +1,6 @@
 pub mod db;
 pub mod list;
+pub mod ops;
 pub mod preview;
 pub mod vim;
 
@@ -35,7 +36,7 @@ pub fn run_cms(blog_dir: PathBuf) -> io::Result<()> {
     let html_config = load_html_preview_config(&cfg, &blog_dir);
 
     let mut terminal = ratatui::init();
-    let result = cms_loop(&mut terminal, &conn, &blog_dir, html_config.as_ref());
+    let result = cms_loop(&mut terminal, &conn, &blog_dir, &cfg, html_config.as_ref());
     ratatui::restore();
     result
 }
@@ -104,22 +105,26 @@ fn cms_loop(
     terminal: &mut ratatui::DefaultTerminal,
     conn: &Connection,
     blog_dir: &Path,
+    config: &BlogConfig,
     html_config: Option<&HtmlPreviewConfig>,
 ) -> io::Result<()> {
-    loop {
-        let articles = db::list_articles(conn, None)
-            .map_err(|e| io::Error::other(e.to_string()))?;
+    let articles = db::list_articles(conn, None)
+        .map_err(|e| io::Error::other(e.to_string()))?;
 
-        let mut list_view = ListView::new(articles);
+    let mut list_view = ListView::new(blog_dir.to_path_buf(), articles, config);
+
+    loop {
         let action = list_view.run(terminal, conn)?;
 
         match action {
             ListAction::Quit => return Ok(()),
             ListAction::Edit(id) => {
                 edit_article(terminal, conn, blog_dir, id, html_config)?;
+                list_view.refresh(conn);
             }
             ListAction::New => {
                 new_article(terminal, conn, blog_dir, html_config)?;
+                list_view.refresh(conn);
             }
         }
     }

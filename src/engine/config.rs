@@ -27,6 +27,7 @@ pub struct BlogConfig {
     pub license: Option<String>,
     pub license_url: Option<String>,
     pub og_image: Option<String>,
+    pub deploy_dir: Option<String>,
     pub tags: Option<Vec<String>>,
     pub links: Option<Vec<Link>>,
     pub guides: Option<Vec<Guide>>,
@@ -251,6 +252,17 @@ lang = "en"
         assert!(config.theme.is_none());
         assert!(config.analytics_id.is_none());
         assert!(config.links.is_none());
+        assert!(config.deploy_dir.is_none());
+    }
+
+    #[test]
+    fn cfg_reads_deploy_dir_when_present() {
+        let tmp = tempdir();
+        let path = tmp.join("blog.toml");
+        let toml = format!("{}deploy_dir = \"/home/user/my-blog\"\n", blog_toml());
+        fs::write(&path, toml).unwrap();
+        let config = BlogConfig::from_file(&path).unwrap();
+        assert_eq!(config.deploy_dir.unwrap(), "/home/user/my-blog");
     }
 
     // --- Frontmatter ---

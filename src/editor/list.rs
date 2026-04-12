@@ -1,4 +1,8 @@
 use std::io;
+use std::path::PathBuf;
+use std::sync::atomic::{AtomicBool, Ordering};
+use std::sync::{Arc, Mutex};
+use std::thread::JoinHandle;
 use std::time::Instant;
 
 use crossterm::event::{self, Event, KeyCode, KeyModifiers};
@@ -12,6 +16,7 @@ use rusqlite::Connection;
 use std::time::Duration;
 
 use super::db::{self, Article, Status};
+use super::ops;
 
 /// Action returned from the list view to the dispatcher.
 pub enum ListAction {
@@ -21,22 +26,46 @@ pub enum ListAction {
 }
 
 pub struct ListView {
+    blog_dir: PathBuf,
     articles: Vec<Article>,
     table_state: TableState,
     search_query: String,
     search_active: bool,
-    flash: Option<(&'static str, Instant)>,
+    flash: Option<(String, Instant)>,
     show_help: bool,
     confirm_delete: Option<i64>,
+    building: bool,
+    build_result: Arc<Mutex<Option<Result<String, String>>>>,
+    last_built: Option<Instant>,
+    last_error: Option<String>,
+    show_error: bool,
+    serving: bool,
+    serve_after_build: bool,
+    serve_stop: Arc<AtomicBool>,
+    serve_handle: Option<JoinHandle<()>>,
+    deploying: bool,
+    deploy_result: Arc<Mutex<Option<Result<ops::DeployPreview, String>>>>,
+    deploy_preview: Option<ops::DeployPreview>,
+    pushing: bool,
+    push_result: Arc<Mutex<Option<Result<String, String>>>>,
+    deploy_status: Option<String>,
+    show_theme_picker: bool,
+    themes: Vec<String>,
+    theme_index: usize,
+    current_theme: String,
 }
 
 impl ListView {
-    pub fn new(articles: Vec<Article>) -> Self {
+    pub fn new(blog_dir: PathBuf, articles: Vec<Article>, config: &crate::engine::config::BlogConfig) -> Self {
         let mut table_state = TableState::default();
         if !articles.is_empty() {
             table_state.select(Some(0));
         }
+        let current_theme = config.theme.clone().unwrap_or_else(|| "paper".to_string());
+        let themes = ops::available_themes();
+        let theme_index = themes.iter().position(|t| t == &current_theme).unwrap_or(0);
         Self {
+            blog_dir,
             articles,
             table_state,
             search_query: String::new(),
@@ -44,6 +73,25 @@ impl ListView {
             flash: None,
             show_help: false,
             confirm_delete: None,
+            building: false,
+            build_result: Arc::new(Mutex::new(None)),
+            last_built: None,
+            last_error: None,
+            show_error: false,
+            serving: false,
+            serve_after_build: false,
+            serve_stop: Arc::new(AtomicBool::new(false)),
+            serve_handle: None,
+            deploying: false,
+            deploy_result: Arc::new(Mutex::new(None)),
+            deploy_preview: None,
+            pushing: false,
+            push_result: Arc::new(Mutex::new(None)),
+            deploy_status: None,
+            show_theme_picker: false,
+            themes,
+            theme_index,
+            current_theme,
         }
     }
 
@@ -53,6 +101,9 @@ impl ListView {
         conn: &Connection,
     ) -> io::Result<ListAction> {
         loop {
+            self.poll_build_result();
+            self.poll_deploy_result();
+            self.poll_push_result();
             self.draw(terminal)?;
 
             if event::poll(Duration::from_millis(50))? {
@@ -63,6 +114,198 @@ impl ListView {
                 }
             }
         }
+    }
+
+    fn poll_build_result(&mut self) {
+        let result = if let Ok(mut guard) = self.build_result.lock() {
+            guard.take()
+        } else {
+            return;
+        };
+        if let Some(result) = result {
+            self.building = false;
+            match result {
+                Ok(msg) => {
+                    self.flash = Some((msg, Instant::now()));
+                    self.last_built = Some(Instant::now());
+                    if self.serve_after_build {
+                        self.serve_after_build = false;
+                        self.spawn_serve();
+                    }
+                }
+                Err(err) => {
+                    self.serve_after_build = false;
+                    let first_line = err.lines().next().unwrap_or(&err).to_string();
+                    self.flash = Some((format!("Build failed: {first_line}"), Instant::now()));
+                    self.last_error = Some(err);
+                }
+            }
+        }
+    }
+
+    fn start_serve(&mut self) {
+        if self.serving {
+            return;
+        }
+        // Build first, then spawn server after build completes
+        self.serve_after_build = true;
+        self.start_build();
+    }
+
+    fn spawn_serve(&mut self) {
+        self.serving = true;
+        self.serve_stop.store(false, Ordering::Relaxed);
+
+        let dist_dir = ops::dist_dir_for_blog(&self.blog_dir);
+        let stop = Arc::clone(&self.serve_stop);
+
+        self.serve_handle = Some(std::thread::spawn(move || {
+            let _ = ops::run_serve(&dist_dir, stop);
+        }));
+
+        self.flash = Some((
+            format!("Serving at http://localhost:{}", ops::SERVE_PORT),
+            Instant::now(),
+        ));
+    }
+
+    fn stop_serve(&mut self) {
+        if !self.serving {
+            return;
+        }
+        self.serve_stop.store(true, Ordering::Relaxed);
+        if let Some(handle) = self.serve_handle.take() {
+            let _ = handle.join();
+        }
+        self.serving = false;
+        self.flash = Some(("Server stopped".into(), Instant::now()));
+    }
+
+    fn start_deploy(&mut self) {
+        if self.deploying || self.building {
+            return;
+        }
+        self.deploying = true;
+        self.flash = Some(("Deploying...".into(), Instant::now()));
+
+        let blog_dir = self.blog_dir.clone();
+        let result_slot = Arc::clone(&self.deploy_result);
+
+        std::thread::spawn(move || {
+            let result = ops::deploy_build_and_sync(&blog_dir);
+            if let Ok(mut guard) = result_slot.lock() {
+                *guard = Some(result);
+            }
+        });
+    }
+
+    fn poll_deploy_result(&mut self) {
+        let result = if let Ok(mut guard) = self.deploy_result.lock() {
+            guard.take()
+        } else {
+            return;
+        };
+        if let Some(result) = result {
+            self.deploying = false;
+            self.last_built = Some(Instant::now());
+            match result {
+                Ok(preview) => {
+                    if preview.diff.is_empty() {
+                        self.flash = Some(("Nothing to deploy".into(), Instant::now()));
+                    } else {
+                        self.deploy_preview = Some(preview);
+                        self.flash = None;
+                    }
+                }
+                Err(err) => {
+                    let first_line = err.lines().next().unwrap_or(&err).to_string();
+                    self.flash = Some((format!("Deploy failed: {first_line}"), Instant::now()));
+                    self.last_error = Some(err);
+                }
+            }
+        }
+    }
+
+    fn start_push(&mut self) {
+        if self.pushing {
+            return;
+        }
+        let Some(preview) = self.deploy_preview.take() else {
+            return;
+        };
+        self.pushing = true;
+        self.flash = Some(("Pushing...".into(), Instant::now()));
+
+        let deploy_dir = preview.deploy_dir;
+        let blog_dir = self.blog_dir.clone();
+        let result_slot = Arc::clone(&self.push_result);
+
+        std::thread::spawn(move || {
+            let result = ops::repo_commit_push(&deploy_dir);
+            if let Ok(push_result) = &result {
+                // Fetch CF status after successful push
+                let project = blog_dir
+                    .file_name()
+                    .map(|n| n.to_string_lossy().replace('.', "-"))
+                    .unwrap_or_default();
+                let status = ops::cf_deployment_status(&project)
+                    .unwrap_or_else(|e| format!("Could not fetch status: {e}"));
+                let msg = format!("{push_result}\n{status}");
+                if let Ok(mut guard) = result_slot.lock() {
+                    *guard = Some(Ok(msg));
+                }
+            } else if let Ok(mut guard) = result_slot.lock() {
+                *guard = Some(result);
+            }
+        });
+    }
+
+    fn poll_push_result(&mut self) {
+        let result = if let Ok(mut guard) = self.push_result.lock() {
+            guard.take()
+        } else {
+            return;
+        };
+        if let Some(result) = result {
+            self.pushing = false;
+            match result {
+                Ok(msg) => {
+                    self.deploy_status = Some(msg);
+                }
+                Err(err) => {
+                    let first_line = err.lines().next().unwrap_or(&err).to_string();
+                    self.flash = Some((format!("Push failed: {first_line}"), Instant::now()));
+                    self.last_error = Some(err);
+                }
+            }
+        }
+    }
+
+    fn start_build(&mut self) {
+        if self.building {
+            return;
+        }
+        self.building = true;
+
+        let blog_dir = self.blog_dir.clone();
+        let dist_dir = ops::dist_dir_for_blog(&self.blog_dir);
+        let result_slot = Arc::clone(&self.build_result);
+
+        std::thread::spawn(move || {
+            let start = Instant::now();
+            let result = ops::run_build(&blog_dir, &dist_dir);
+            let msg = match result {
+                Ok(report) => Ok(format!(
+                    "Built {} articles in {:.1}s",
+                    report.built,
+                    start.elapsed().as_secs_f64()
+                )),
+                Err(e) => Err(e),
+            };
+            if let Ok(mut guard) = result_slot.lock() {
+                *guard = Some(msg);
+            }
+        });
     }
 
     fn draw(&mut self, terminal: &mut ratatui::DefaultTerminal) -> io::Result<()> {
@@ -99,21 +342,94 @@ impl ListView {
             if let Some(id) = self.confirm_delete {
                 self.render_delete_confirm(frame, frame.area(), id);
             }
+
+            // Deploy preview (diff + confirm)
+            if self.deploy_preview.is_some() {
+                self.render_deploy_preview(frame, frame.area());
+            }
+
+            // Theme picker
+            if self.show_theme_picker {
+                self.render_theme_picker(frame, frame.area());
+            }
+
+            // Deploy status
+            if self.deploy_status.is_some() {
+                self.render_deploy_status(frame, frame.area());
+            }
+
+            // Error overlay
+            if self.show_error {
+                self.render_error_overlay(frame, frame.area());
+            }
         })?;
         Ok(())
     }
 
     fn render_header(&self, frame: &mut ratatui::Frame, area: Rect) {
+        let blog_name = self
+            .blog_dir
+            .file_name()
+            .map(|n| n.to_string_lossy().into_owned())
+            .unwrap_or_default();
+
+        let sep = Span::styled(" · ", Style::default().fg(Color::DarkGray));
+
         let mut spans = vec![
             Span::styled(" DevTUI CMS ", Style::default().fg(Color::Black).bg(Color::Cyan)),
-            Span::raw(format!("  {} articles", self.articles.len())),
+            Span::raw(format!("  {blog_name}")),
+            sep.clone(),
+            Span::styled(
+                format!("{} articles", self.articles.len()),
+                Style::default().fg(Color::DarkGray),
+            ),
+            sep.clone(),
         ];
 
-        if let Some((msg, _)) = &self.flash {
-            spans.push(Span::raw("  "));
+        if self.deploying {
             spans.push(Span::styled(
-                *msg,
-                Style::default().fg(Color::Green).add_modifier(Modifier::BOLD),
+                "deploying...",
+                Style::default().fg(Color::Yellow),
+            ));
+        } else if self.pushing {
+            spans.push(Span::styled(
+                "pushing...",
+                Style::default().fg(Color::Yellow),
+            ));
+        } else if self.building {
+            spans.push(Span::styled(
+                "building...",
+                Style::default().fg(Color::Yellow),
+            ));
+        } else if self.serving {
+            spans.push(Span::styled(
+                format!("serving :{}", ops::SERVE_PORT),
+                Style::default().fg(Color::Green),
+            ));
+        } else {
+            spans.push(Span::styled(
+                "server stopped",
+                Style::default().fg(Color::DarkGray),
+            ));
+        }
+
+        if let Some(built_at) = &self.last_built {
+            spans.push(sep);
+            spans.push(Span::styled(
+                ops::format_built_ago(built_at.elapsed()),
+                Style::default().fg(Color::DarkGray),
+            ));
+        }
+
+        if let Some((msg, _)) = &self.flash {
+            let color = if msg.starts_with("Build failed") {
+                Color::Red
+            } else {
+                Color::Green
+            };
+            spans.push(Span::styled(
+                format!("  {msg}"),
+                Style::default().fg(color).add_modifier(Modifier::BOLD),
             ));
         }
 
@@ -168,7 +484,7 @@ impl ListView {
         let widths = [
             Constraint::Length(7),
             Constraint::Length(3),
-            Constraint::Length(4),
+            Constraint::Length(6),
             Constraint::Length(12),
             Constraint::Min(20),
         ];
@@ -197,7 +513,7 @@ impl ListView {
             frame.render_widget(Paragraph::new(search), area);
         } else {
             let hints = Line::from(Span::styled(
-                " j/k:nav  Enter:edit  n:new  p:publish  i:pin  d:delete  /:search  ?:help  q:quit",
+                " j/k:nav  Enter:edit  n:new  p:pub  i:pin  d:del  b:build  s:serve  o:open  D:deploy  t:theme  e:errors  ?:help  q:quit",
                 Style::default().fg(Color::DarkGray),
             ));
             frame.render_widget(Paragraph::new(hints), area);
@@ -219,6 +535,12 @@ impl ListView {
             Line::from(" p            Toggle publish/draft"),
             Line::from(" i            Toggle pin"),
             Line::from(" d            Delete (with confirm)"),
+            Line::from(" b            Build blog"),
+            Line::from(" s            Start/stop server"),
+            Line::from(" o            Open in browser"),
+            Line::from(" D            Deploy (build + rsync)"),
+            Line::from(" t            Change theme"),
+            Line::from(" e            Show last error"),
             Line::from(" /            Search by title"),
             Line::from(" Esc          Clear search / close"),
             Line::from(" q            Quit"),
@@ -278,12 +600,196 @@ impl ListView {
         frame.render_widget(confirm, popup_area);
     }
 
+    fn render_error_overlay(&self, frame: &mut ratatui::Frame, area: Rect) {
+        let error_text = self
+            .last_error
+            .as_deref()
+            .unwrap_or("No errors");
+
+        let lines: Vec<Line> = error_text
+            .lines()
+            .map(|l| Line::from(format!(" {l}")))
+            .collect();
+
+        let width = (area.width - 4).min(80);
+        let height = (lines.len() as u16 + 2).min(area.height - 2);
+        let x = area.x + (area.width.saturating_sub(width)) / 2;
+        let y = area.y + (area.height.saturating_sub(height)) / 2;
+        let popup_area = Rect::new(x, y, width, height);
+
+        let error = Paragraph::new(lines).block(
+            Block::default()
+                .borders(Borders::ALL)
+                .border_style(Style::default().fg(Color::Red))
+                .title(" Error (Esc to close) "),
+        );
+        frame.render_widget(ratatui::widgets::Clear, popup_area);
+        frame.render_widget(error, popup_area);
+    }
+
+    fn render_deploy_preview(&self, frame: &mut ratatui::Frame, area: Rect) {
+        let Some(preview) = &self.deploy_preview else {
+            return;
+        };
+
+        let mut lines = vec![
+            Line::from(Span::styled(
+                format!(" Deploy to {}", preview.deploy_dir.display()),
+                Style::default().fg(Color::Yellow),
+            )),
+            Line::from(""),
+        ];
+
+        for diff_line in preview.diff.lines().take(20) {
+            lines.push(Line::from(format!(" {diff_line}")));
+        }
+
+        lines.push(Line::from(""));
+        lines.push(Line::from(vec![
+            Span::styled(" y ", Style::default().fg(Color::Yellow).add_modifier(Modifier::BOLD)),
+            Span::raw("commit + push  "),
+            Span::styled(" Esc ", Style::default().fg(Color::Green).add_modifier(Modifier::BOLD)),
+            Span::raw("cancel"),
+        ]));
+
+        let width = (area.width - 4).min(80);
+        let height = (lines.len() as u16 + 2).min(area.height - 2);
+        let x = area.x + (area.width.saturating_sub(width)) / 2;
+        let y = area.y + (area.height.saturating_sub(height)) / 2;
+        let popup_area = Rect::new(x, y, width, height);
+
+        let deploy = Paragraph::new(lines).block(
+            Block::default()
+                .borders(Borders::ALL)
+                .border_style(Style::default().fg(Color::Yellow))
+                .title(" Deploy Preview "),
+        );
+        frame.render_widget(ratatui::widgets::Clear, popup_area);
+        frame.render_widget(deploy, popup_area);
+    }
+
+    fn render_theme_picker(&self, frame: &mut ratatui::Frame, area: Rect) {
+        let mut lines = vec![
+            Line::from(""),
+            Line::from(Span::styled(
+                " Select Theme ",
+                Style::default().fg(Color::Cyan).add_modifier(Modifier::BOLD),
+            )),
+            Line::from(""),
+        ];
+
+        for (idx, theme) in self.themes.iter().enumerate() {
+            let marker = if idx == self.theme_index { "> " } else { "  " };
+            let current = if *theme == self.current_theme { " (current)" } else { "" };
+            let style = if idx == self.theme_index {
+                Style::default().fg(Color::White).add_modifier(Modifier::BOLD)
+            } else {
+                Style::default().fg(Color::DarkGray)
+            };
+            lines.push(Line::from(Span::styled(
+                format!(" {marker}{theme}{current}"),
+                style,
+            )));
+        }
+
+        lines.push(Line::from(""));
+        lines.push(Line::from(Span::styled(
+            " j/k:select  Enter:apply  Esc:cancel ",
+            Style::default().fg(Color::DarkGray),
+        )));
+
+        let width = 40.min(area.width);
+        let height = (lines.len() as u16 + 2).min(area.height);
+        let x = area.x + (area.width.saturating_sub(width)) / 2;
+        let y = area.y + (area.height.saturating_sub(height)) / 2;
+        let popup_area = Rect::new(x, y, width, height);
+
+        let picker = Paragraph::new(lines).block(
+            Block::default()
+                .borders(Borders::ALL)
+                .border_style(Style::default().fg(Color::Cyan))
+                .title(" Theme "),
+        );
+        frame.render_widget(ratatui::widgets::Clear, popup_area);
+        frame.render_widget(picker, popup_area);
+    }
+
+    fn render_deploy_status(&self, frame: &mut ratatui::Frame, area: Rect) {
+        let Some(status) = &self.deploy_status else {
+            return;
+        };
+
+        let mut lines = vec![
+            Line::from(Span::styled(
+                " Deploy Successful ",
+                Style::default().fg(Color::Green).add_modifier(Modifier::BOLD),
+            )),
+            Line::from(""),
+        ];
+
+        // Status contains push result + wrangler output separated by newline
+        for line in status.lines() {
+            // Parse wrangler table row if present
+            if line.contains('│') {
+                let fields: Vec<&str> = line.split('│').map(|s| s.trim()).filter(|s| !s.is_empty()).collect();
+                if fields.len() >= 5 {
+                    lines.push(Line::from(format!(" Environment: {}", fields[1])));
+                    lines.push(Line::from(format!(" Branch:      {}", fields[2])));
+                    lines.push(Line::from(format!(" Commit:      {}", fields[3])));
+                    lines.push(Line::from(format!(" URL:         {}", fields[4])));
+                    if fields.len() > 5 {
+                        lines.push(Line::from(format!(" Deployed:    {}", fields[5])));
+                    }
+                    continue;
+                }
+            }
+            if !line.is_empty() {
+                lines.push(Line::from(format!(" {line}")));
+            }
+        }
+
+        lines.push(Line::from(""));
+        lines.push(Line::from(Span::styled(
+            " Press any key to close ",
+            Style::default().fg(Color::DarkGray),
+        )));
+
+        let width = (area.width - 4).min(70);
+        let height = (lines.len() as u16 + 2).min(area.height - 2);
+        let x = area.x + (area.width.saturating_sub(width)) / 2;
+        let y = area.y + (area.height.saturating_sub(height)) / 2;
+        let popup_area = Rect::new(x, y, width, height);
+
+        let status_widget = Paragraph::new(lines).block(
+            Block::default()
+                .borders(Borders::ALL)
+                .border_style(Style::default().fg(Color::Green))
+                .title(" Deploy Status "),
+        );
+        frame.render_widget(ratatui::widgets::Clear, popup_area);
+        frame.render_widget(status_widget, popup_area);
+    }
+
     fn handle_key(
         &mut self,
         code: KeyCode,
         modifiers: KeyModifiers,
         conn: &Connection,
     ) -> io::Result<Option<ListAction>> {
+        // Deploy status modal
+        if self.deploy_status.is_some() {
+            self.deploy_status = None;
+            return Ok(None);
+        }
+
+        // Error overlay mode
+        if self.show_error {
+            if matches!(code, KeyCode::Esc) {
+                self.show_error = false;
+            }
+            return Ok(None);
+        }
+
         // Delete confirmation mode
         if let Some(id) = self.confirm_delete {
             match code {
@@ -292,13 +798,66 @@ impl ListView {
                     if self.selected_article().is_some()
                         && db::delete_article(conn, id).is_ok()
                     {
-                        self.flash = Some(("Deleted", Instant::now()));
+                        self.flash = Some(("Deleted".into(), Instant::now()));
                         self.refresh(conn);
                     }
                 }
                 _ => {
                     self.confirm_delete = None;
                 }
+            }
+            return Ok(None);
+        }
+
+        // Deploy preview mode (diff shown, awaiting confirm)
+        if self.deploy_preview.is_some() {
+            match code {
+                KeyCode::Char('y') => {
+                    self.start_push();
+                }
+                KeyCode::Esc => {
+                    self.deploy_preview = None;
+                }
+                _ => {}
+            }
+            return Ok(None);
+        }
+
+        // Theme picker mode
+        if self.show_theme_picker {
+            match code {
+                KeyCode::Char('j') | KeyCode::Down => {
+                    if self.theme_index + 1 < self.themes.len() {
+                        self.theme_index += 1;
+                    }
+                }
+                KeyCode::Char('k') | KeyCode::Up => {
+                    if self.theme_index > 0 {
+                        self.theme_index -= 1;
+                    }
+                }
+                KeyCode::Enter => {
+                    if let Some(theme) = self.themes.get(self.theme_index) {
+                        let theme = theme.clone();
+                        if theme != self.current_theme {
+                            if let Err(e) = ops::set_theme(&self.blog_dir, &theme) {
+                                self.flash = Some((format!("Theme error: {e}"), Instant::now()));
+                            } else {
+                                self.current_theme = theme.clone();
+                                self.flash = Some((format!("Theme set to {theme}"), Instant::now()));
+                                if self.serving {
+                                    self.stop_serve();
+                                    self.start_serve();
+                                }
+                            }
+                        }
+                    }
+                    self.show_theme_picker = false;
+                }
+                KeyCode::Esc => {
+                    self.show_theme_picker = false;
+                }
+                _ => {}
             }
             return Ok(None);
         }
@@ -335,7 +894,10 @@ impl ListView {
 
         // Normal mode
         match code {
-            KeyCode::Char('q') => return Ok(Some(ListAction::Quit)),
+            KeyCode::Char('q') => {
+                self.stop_serve();
+                return Ok(Some(ListAction::Quit));
+            }
             KeyCode::Char('j') | KeyCode::Down => self.move_selection(1),
             KeyCode::Char('k') | KeyCode::Up => self.move_selection(-1),
             KeyCode::Char('G') => {
@@ -359,6 +921,37 @@ impl ListView {
                     self.confirm_delete = Some(article.id);
                 }
             }
+            KeyCode::Char('b') => self.start_build(),
+            KeyCode::Char('s') => {
+                if self.serving {
+                    self.stop_serve();
+                } else {
+                    self.start_serve();
+                }
+            }
+            KeyCode::Char('o') => {
+                if !self.serving {
+                    self.start_serve();
+                }
+                let url = format!("http://localhost:{}", ops::SERVE_PORT);
+                let _ = std::process::Command::new("open").arg(&url).spawn();
+            }
+            KeyCode::Char('D') => {
+                if !self.deploying {
+                    self.start_deploy();
+                }
+            }
+            KeyCode::Char('t') => {
+                if !self.themes.is_empty() {
+                    self.theme_index = self.themes.iter().position(|t| t == &self.current_theme).unwrap_or(0);
+                    self.show_theme_picker = true;
+                }
+            }
+            KeyCode::Char('e') => {
+                if self.last_error.is_some() {
+                    self.show_error = true;
+                }
+            }
             KeyCode::Char('/') => {
                 self.search_active = true;
                 self.search_query.clear();
@@ -367,6 +960,7 @@ impl ListView {
                 self.show_help = true;
             }
             KeyCode::Char('c') if modifiers.contains(KeyModifiers::CONTROL) => {
+                self.stop_serve();
                 return Ok(Some(ListAction::Quit));
             }
             _ => {}
@@ -401,7 +995,7 @@ impl ListView {
                 }
             };
             if let Ok(msg) = result {
-                self.flash = Some((msg, Instant::now()));
+                self.flash = Some((msg.into(), Instant::now()));
                 self.refresh(conn);
             }
         }
@@ -417,13 +1011,13 @@ impl ListView {
                 db::pin(conn, id).map(|_| "Pinned")
             };
             if let Ok(msg) = result {
-                self.flash = Some((msg, Instant::now()));
+                self.flash = Some((msg.into(), Instant::now()));
                 self.refresh(conn);
             }
         }
     }
 
-    fn refresh(&mut self, conn: &Connection) {
+    pub fn refresh(&mut self, conn: &Connection) {
         self.refresh_with_selection(conn, true);
     }
 
@@ -447,5 +1041,146 @@ impl ListView {
         } else {
             self.table_state.select(Some(0));
         }
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    fn test_config() -> crate::engine::config::BlogConfig {
+        crate::engine::config::BlogConfig {
+            title: "Test".into(),
+            subtitle: None,
+            url: "https://test.com".into(),
+            author: "A".into(),
+            lang: "en".into(),
+            articles_path: None,
+            theme: Some("paper".into()),
+            analytics_id: None,
+            license: None,
+            license_url: None,
+            og_image: None,
+            deploy_dir: None,
+            tags: None,
+            links: None,
+            guides: None,
+        }
+    }
+
+    fn make_list_view() -> ListView {
+        ListView::new(PathBuf::from("blogs/test"), vec![], &test_config())
+    }
+
+    #[test]
+    fn poll_build_result_clears_building_flag_on_success() {
+        let mut view = make_list_view();
+        view.building = true;
+        *view.build_result.lock().unwrap() = Some(Ok("Built 1 articles in 0.1s".into()));
+        view.poll_build_result();
+        assert!(!view.building);
+    }
+
+    #[test]
+    fn poll_build_result_sets_flash_on_success() {
+        let mut view = make_list_view();
+        view.building = true;
+        *view.build_result.lock().unwrap() = Some(Ok("Built 3 articles in 0.5s".into()));
+        view.poll_build_result();
+        let (msg, _) = view.flash.as_ref().unwrap();
+        assert_eq!(msg, "Built 3 articles in 0.5s");
+    }
+
+    #[test]
+    fn poll_build_result_stores_error_on_failure() {
+        let mut view = make_list_view();
+        view.building = true;
+        *view.build_result.lock().unwrap() =
+            Some(Err("engine exploded\ndetails here".into()));
+        view.poll_build_result();
+        assert!(!view.building);
+        assert_eq!(
+            view.last_error.as_deref(),
+            Some("engine exploded\ndetails here")
+        );
+    }
+
+    #[test]
+    fn poll_build_result_shows_first_error_line_in_flash() {
+        let mut view = make_list_view();
+        view.building = true;
+        *view.build_result.lock().unwrap() =
+            Some(Err("first line\nsecond line\nthird".into()));
+        view.poll_build_result();
+        let (msg, _) = view.flash.as_ref().unwrap();
+        assert_eq!(msg, "Build failed: first line");
+    }
+
+    #[test]
+    fn start_build_guards_against_double_build() {
+        let mut view = make_list_view();
+        view.building = true;
+        let slot_before = Arc::strong_count(&view.build_result);
+        view.start_build();
+        // No new thread spawned, Arc count unchanged
+        assert_eq!(Arc::strong_count(&view.build_result), slot_before);
+    }
+
+    #[test]
+    fn poll_build_result_is_noop_when_no_result() {
+        let mut view = make_list_view();
+        view.building = true;
+        view.poll_build_result();
+        // building flag unchanged, no flash set
+        assert!(view.building);
+        assert!(view.flash.is_none());
+    }
+
+    #[test]
+    fn poll_build_result_sets_last_built_on_success() {
+        let mut view = make_list_view();
+        view.building = true;
+        *view.build_result.lock().unwrap() = Some(Ok("Built 1 articles in 0.1s".into()));
+        view.poll_build_result();
+        assert!(view.last_built.is_some());
+    }
+
+    #[test]
+    fn stop_serve_clears_serving_flag() {
+        let mut view = make_list_view();
+        view.serving = true;
+        view.stop_serve();
+        assert!(!view.serving);
+    }
+
+    #[test]
+    fn poll_build_result_spawns_serve_when_serve_after_build() {
+        let mut view = make_list_view();
+        view.building = true;
+        view.serve_after_build = true;
+        *view.build_result.lock().unwrap() = Some(Ok("Built 1 articles in 0.1s".into()));
+        view.poll_build_result();
+        assert!(view.serving);
+        assert!(!view.serve_after_build);
+        // Clean up the spawned server
+        view.stop_serve();
+    }
+
+    #[test]
+    fn poll_build_result_clears_serve_after_build_on_error() {
+        let mut view = make_list_view();
+        view.building = true;
+        view.serve_after_build = true;
+        *view.build_result.lock().unwrap() = Some(Err("build failed".into()));
+        view.poll_build_result();
+        assert!(!view.serving);
+        assert!(!view.serve_after_build);
+    }
+
+    #[test]
+    fn stop_serve_is_noop_when_not_serving() {
+        let mut view = make_list_view();
+        view.stop_serve();
+        assert!(!view.serving);
     }
 }

@@ -376,6 +376,12 @@ pub fn sync_to_filesystem(conn: &Connection, posts_dir: &Path) -> Result<(), Cms
     for article in list_articles(conn, None)? {
         let path = posts_dir.join(format!("{}.md", article.slug));
         let content = inject_status(&article.content, &article.status);
+        // Skip write when content unchanged to preserve mtime for incremental builds
+        if let Ok(existing) = std::fs::read_to_string(&path) {
+            if existing == content {
+                continue;
+            }
+        }
         std::fs::write(&path, content)?;
     }
     Ok(())
