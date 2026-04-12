@@ -27,6 +27,14 @@ enum SplitLayout {
     EditorOnly, // full editor, no preview
 }
 
+#[derive(Clone, Copy, PartialEq)]
+enum ScribeStatus {
+    Idle,
+    Checking,
+    CheckingSlow,
+    Error,
+}
+
 pub enum EditorResult {
     Quit,
 }
@@ -259,8 +267,7 @@ struct RunLoopState {
     scribe_session_name: String,
     /// Whether the overmind session has been started.
     scribe_session_started: bool,
-    /// Status message shown in the scribe panel header.
-    scribe_status: &'static str,
+    scribe_status: ScribeStatus,
     /// When the current scribe check started (for slow detection).
     scribe_check_started: Option<std::time::Instant>,
 }
@@ -285,7 +292,7 @@ impl RunLoopState {
             scribe_last_sent: String::new(),
             scribe_session_name: format!("scribe-{}", std::process::id()),
             scribe_session_started: false,
-            scribe_status: "idle",
+            scribe_status: ScribeStatus::Idle,
             scribe_check_started: None,
         }
     }
@@ -331,7 +338,7 @@ impl RunLoopState {
     fn poll_scribe_slow(&mut self) {
         if let Some(started) = self.scribe_check_started {
             if self.scribe_pending && started.elapsed() > Duration::from_secs(15) {
-                self.scribe_status = "checking... (slow)";
+                self.scribe_status = ScribeStatus::CheckingSlow;
             }
         }
     }
@@ -351,7 +358,7 @@ impl RunLoopState {
 
         self.scribe_idle_since = None;
         self.scribe_pending = true;
-        self.scribe_status = "checking...";
+        self.scribe_status = ScribeStatus::Checking;
         self.scribe_check_started = Some(std::time::Instant::now());
         self.scribe_last_sent = self.last_content.clone();
 
@@ -393,7 +400,7 @@ impl RunLoopState {
                 Ok(response) => {
                     let annotations = scribe::extract_annotations(&response);
                     self.scribe_lines = scribe::render_lines(&annotations);
-                    self.scribe_status = "idle";
+                    self.scribe_status = ScribeStatus::Idle;
                 }
                 Err(err) => {
                     log::warn!("scribe check failed: {err}");
@@ -401,7 +408,7 @@ impl RunLoopState {
                         Line::from(""),
                         Line::from(format!(" Error: {err}")),
                     ];
-                    self.scribe_status = "error";
+                    self.scribe_status = ScribeStatus::Error;
                     self.scribe_session_started = false;
                 }
             }
@@ -427,19 +434,19 @@ impl RunLoopState {
                 resize_pty(self.split_layout, terminal, pty_master, parser)?;
             }
 
-            // Refresh text preview
-            let (lines, offsets) = preview::render_with_offsets(&self.last_content, self.blog_author.as_deref());
-            self.cached_offsets = offsets;
-            self.cached_lines = lines;
+            if self.split_layout == SplitLayout::Vertical {
+                let (lines, offsets) = preview::render_with_offsets(&self.last_content, self.blog_author.as_deref());
+                self.cached_offsets = offsets;
+                self.cached_lines = lines;
 
-            // Follow cursor
-            let size = terminal.size()?;
-            let pw = (size.width / 2).saturating_sub(2) as usize;
-            let vr = size.height.saturating_sub(4) as usize;
-            self.preview_scroll = follow_editor_cursor(
-                vim_state.cursor_line, vim_state.total_lines,
-                &self.cached_lines, &self.cached_offsets, pw, vr,
-            );
+                let size = terminal.size()?;
+                let pw = (size.width / 2).saturating_sub(2) as usize;
+                let vr = size.height.saturating_sub(4) as usize;
+                self.preview_scroll = follow_editor_cursor(
+                    vim_state.cursor_line, vim_state.total_lines,
+                    &self.cached_lines, &self.cached_offsets, pw, vr,
+                );
+            }
         }
         self.was_modified = vim_state.modified;
         Ok(())
@@ -797,17 +804,18 @@ fn render_preview(
 fn render_scribe(
     frame: &mut ratatui::Frame,
     scribe_lines: &[Line<'static>],
-    status: &str,
+    status: ScribeStatus,
     area: ratatui::layout::Rect,
 ) {
-    let status_color = match status {
-        "checking..." => Color::Yellow,
-        "error" => Color::Red,
-        _ => Color::DarkGray,
+    let (status_label, status_color) = match status {
+        ScribeStatus::Idle => ("idle", Color::DarkGray),
+        ScribeStatus::Checking => ("checking...", Color::Yellow),
+        ScribeStatus::CheckingSlow => ("checking... (slow)", Color::Yellow),
+        ScribeStatus::Error => ("error", Color::Red),
     };
     let title = Line::from(vec![
         Span::raw(" SCRIBE "),
-        Span::styled(format!("[{status}]"), Style::default().fg(status_color)),
+        Span::styled(format!("[{status_label}]"), Style::default().fg(status_color)),
         Span::raw(" "),
     ]);
     let block = Block::default()
