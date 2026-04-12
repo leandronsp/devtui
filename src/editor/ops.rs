@@ -414,24 +414,24 @@ fn run_subscriber(
     let _ = child.wait();
 }
 
-/// Fire-and-forget: send a prompt to the scribe session.
-pub fn send_to_scribe(session_name: &str, prompt: &str) {
+/// Send a prompt to the scribe session. Returns error if overmind send fails,
+/// so the caller can report it to the UI via the result slot.
+pub fn send_to_scribe(session_name: &str, prompt: &str) -> Result<(), String> {
     let escaped = escape_for_overmind(prompt);
     log::info!("[scribe] sending ({} bytes)", escaped.len());
 
-    let result = std::process::Command::new("overmind")
+    let output = std::process::Command::new("overmind")
         .args(["send", session_name, &escaped])
-        .output();
+        .output()
+        .map_err(|e| format!("failed to send to overmind: {e}"))?;
 
-    match result {
-        Ok(output) if output.status.success() => {
-            log::info!("[scribe] sent");
-        }
-        Ok(output) => {
-            let stderr = String::from_utf8_lossy(&output.stderr);
-            log::error!("[scribe] send failed: {stderr}");
-        }
-        Err(e) => log::error!("[scribe] send failed: {e}"),
+    if output.status.success() {
+        log::info!("[scribe] sent");
+        Ok(())
+    } else {
+        let stderr = String::from_utf8_lossy(&output.stderr);
+        log::error!("[scribe] send failed: {stderr}");
+        Err(format!("overmind send failed: {stderr}"))
     }
 }
 

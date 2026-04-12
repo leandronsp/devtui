@@ -231,9 +231,11 @@ impl ScribeState {
         self.status_log.push(msg.to_string());
     }
 
-    /// Signal that document content changed. Resets the idle timer.
-    pub fn content_changed(&mut self) {
+    /// Content changed: reset idle timer and clear stale annotations.
+    pub fn content_invalidated(&mut self) {
         self.idle_since = Some(Instant::now());
+        self.annotations.clear();
+        self.status_log.clear();
     }
 
     /// Returns true when a check should fire: idle long enough, content
@@ -264,7 +266,6 @@ impl ScribeState {
         self.check_started = Some(Instant::now());
         self.last_sent = content.to_string();
         self.idle_since = None;
-        self.session_started = true;
 
         CheckRequest {
             session_name: self.session_name.clone(),
@@ -304,8 +305,17 @@ impl ScribeState {
         self.check_started = None;
     }
 
-    /// Pick up result from the background thread (non-blocking).
+    /// Pick up result from the subscriber thread (non-blocking).
+    /// Only processes results when a check is pending, preventing ghost
+    /// results from delayed subscriber events after clear_display.
     pub fn poll_result(&mut self) {
+        if !self.pending {
+            // Drain stale results so they don't fire on the next check.
+            if let Ok(mut guard) = self.result.try_lock() {
+                let _ = guard.take();
+            }
+            return;
+        }
         let result = if let Ok(mut guard) = self.result.try_lock() {
             guard.take()
         } else {
@@ -346,7 +356,7 @@ mod tests {
     #[test]
     fn should_check_returns_false_when_not_active() {
         let mut state = test_state();
-        state.content_changed();
+        state.content_invalidated();
         // Simulate elapsed time by setting idle_since in the past
         state.idle_since = Some(Instant::now() - Duration::from_secs(15));
         assert!(!state.should_check("hello", false));
@@ -355,7 +365,7 @@ mod tests {
     #[test]
     fn should_check_returns_false_when_pending() {
         let mut state = test_state();
-        state.content_changed();
+        state.content_invalidated();
         state.idle_since = Some(Instant::now() - Duration::from_secs(15));
         state.pending = true;
         assert!(!state.should_check("hello", true));
@@ -364,7 +374,7 @@ mod tests {
     #[test]
     fn should_check_returns_false_before_idle_threshold() {
         let mut state = test_state();
-        state.content_changed(); // just now
+        state.content_invalidated(); // just now
         assert!(!state.should_check("hello", true));
     }
 
@@ -377,7 +387,7 @@ mod tests {
     }
 
     #[test]
-    fn should_check_returns_true_when_idle_and_content_changed() {
+    fn should_check_returns_true_when_idle_and_content_invalidated() {
         let mut state = test_state();
         state.idle_since = Some(Instant::now() - Duration::from_secs(15));
         assert!(state.should_check("new content", true));
@@ -498,14 +508,36 @@ mod tests {
         assert_eq!(state.status, ScribeStatus::Checking);
     }
 
-    // --- content_changed ---
+    #[test]
+    fn poll_result_drains_stale_results_when_not_pending() {
+        let mut state = test_state();
+        // Simulate a stale result from a previous check.
+        if let Ok(mut slot) = state.result.lock() {
+            *slot = Some(Ok(r#"[{"line": 1, "tier": "error", "message": "stale"}]"#.to_string()));
+        }
+        // Not pending, so poll_result should drain and ignore.
+        state.poll_result();
+        assert!(state.annotations.is_empty());
+        assert_eq!(state.status, ScribeStatus::Idle);
+        // Slot should be empty now.
+        assert!(state.result.lock().unwrap().is_none());
+    }
+
+    // --- content_invalidated ---
 
     #[test]
-    fn content_changed_resets_idle_timer() {
+    fn content_invalidated_resets_idle_timer_and_clears_display() {
         let mut state = test_state();
-        assert!(state.idle_since.is_none());
-        state.content_changed();
+        state.annotations = vec![
+            Annotation { line: 1, tier: Tier::Error, message: "old".into() },
+        ];
+        state.status_log = vec!["old log".to_string()];
+
+        state.content_invalidated();
+
         assert!(state.idle_since.is_some());
+        assert!(state.annotations.is_empty());
+        assert!(state.status_log.is_empty());
     }
 
     // --- clear_display ---

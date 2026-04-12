@@ -284,9 +284,7 @@ impl RunLoopState {
                     self.last_content = new_content;
                     self.content_changed_at = Some(std::time::Instant::now());
                     self.preview_stale = true;
-                    self.scribe.content_changed();
-                    self.scribe.annotations.clear();
-                    self.scribe.status_log.clear();
+                    self.scribe.content_invalidated();
                 }
             }
         }
@@ -339,14 +337,20 @@ impl RunLoopState {
                 }
                 return;
             }
+            self.scribe.session_started = true;
         }
 
         // Fire-and-forget send. The subscriber thread picks up the response.
         let session_name = request.session_name.clone();
+        let result_slot = Arc::clone(&self.scribe.result);
         let prompt = scribe::build_check_prompt(&request.content, request.start_line);
         log::info!("[scribe] check started ({} bytes prompt)", prompt.len());
         thread::spawn(move || {
-            ops::send_to_scribe(&session_name, &prompt);
+            if let Err(err) = ops::send_to_scribe(&session_name, &prompt) {
+                if let Ok(mut slot) = result_slot.lock() {
+                    *slot = Some(Err(err));
+                }
+            }
         });
     }
 
