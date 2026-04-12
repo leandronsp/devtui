@@ -1,4 +1,5 @@
 use std::io;
+use std::path::PathBuf;
 use std::time::Instant;
 
 use crossterm::event::{self, Event, KeyCode, KeyModifiers};
@@ -21,22 +22,24 @@ pub enum ListAction {
 }
 
 pub struct ListView {
+    blog_dir: PathBuf,
     articles: Vec<Article>,
     table_state: TableState,
     search_query: String,
     search_active: bool,
-    flash: Option<(&'static str, Instant)>,
+    flash: Option<(String, Instant)>,
     show_help: bool,
     confirm_delete: Option<i64>,
 }
 
 impl ListView {
-    pub fn new(articles: Vec<Article>) -> Self {
+    pub fn new(blog_dir: PathBuf, articles: Vec<Article>) -> Self {
         let mut table_state = TableState::default();
         if !articles.is_empty() {
             table_state.select(Some(0));
         }
         Self {
+            blog_dir,
             articles,
             table_state,
             search_query: String::new(),
@@ -112,7 +115,7 @@ impl ListView {
         if let Some((msg, _)) = &self.flash {
             spans.push(Span::raw("  "));
             spans.push(Span::styled(
-                *msg,
+                msg.clone(),
                 Style::default().fg(Color::Green).add_modifier(Modifier::BOLD),
             ));
         }
@@ -292,7 +295,7 @@ impl ListView {
                     if self.selected_article().is_some()
                         && db::delete_article(conn, id).is_ok()
                     {
-                        self.flash = Some(("Deleted", Instant::now()));
+                        self.flash = Some(("Deleted".into(), Instant::now()));
                         self.refresh(conn);
                     }
                 }
@@ -401,7 +404,7 @@ impl ListView {
                 }
             };
             if let Ok(msg) = result {
-                self.flash = Some((msg, Instant::now()));
+                self.flash = Some((msg.into(), Instant::now()));
                 self.refresh(conn);
             }
         }
@@ -417,7 +420,7 @@ impl ListView {
                 db::pin(conn, id).map(|_| "Pinned")
             };
             if let Ok(msg) = result {
-                self.flash = Some((msg, Instant::now()));
+                self.flash = Some((msg.into(), Instant::now()));
                 self.refresh(conn);
             }
         }

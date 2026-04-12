@@ -111,7 +111,7 @@ fn cms_loop(
         let articles = db::list_articles(conn, None)
             .map_err(|e| io::Error::other(e.to_string()))?;
 
-        let mut list_view = ListView::new(articles);
+        let mut list_view = ListView::new(blog_dir.to_path_buf(), articles);
         let action = list_view.run(terminal, conn)?;
 
         match action {
