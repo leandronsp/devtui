@@ -285,6 +285,51 @@ pub fn run_build(blog_dir: &Path, dist_dir: &Path) -> Result<BuildReport, String
     crate::engine::build::build(blog_dir, dist_dir, &engine_dir())
 }
 
+/// Start an Overmind scribe session for the AI writing companion.
+pub fn start_scribe_session(session_name: &str) -> Result<String, String> {
+    let output = std::process::Command::new("overmind")
+        .args(["run", "--type", "session", "--name", session_name, "--provider", "claude", "--model", "sonnet"])
+        .output()
+        .map_err(|e| format!("failed to start overmind session: {e}"))?;
+
+    if output.status.success() {
+        Ok(session_name.to_string())
+    } else {
+        let stderr = String::from_utf8_lossy(&output.stderr);
+        Err(format!("overmind session start failed: {stderr}"))
+    }
+}
+
+/// Send content to the scribe session and return the raw response.
+pub fn send_to_scribe(session_name: &str, prompt: &str) -> Result<String, String> {
+    let output = std::process::Command::new("overmind")
+        .args(["send", session_name, prompt])
+        .output()
+        .map_err(|e| format!("failed to send to overmind: {e}"))?;
+
+    if output.status.success() {
+        Ok(String::from_utf8_lossy(&output.stdout).to_string())
+    } else {
+        let stderr = String::from_utf8_lossy(&output.stderr);
+        Err(format!("overmind send failed: {stderr}"))
+    }
+}
+
+/// Kill the scribe session on editor exit.
+pub fn kill_scribe_session(session_name: &str) -> Result<(), String> {
+    let output = std::process::Command::new("overmind")
+        .args(["kill", session_name])
+        .output()
+        .map_err(|e| format!("failed to kill overmind session: {e}"))?;
+
+    if output.status.success() {
+        Ok(())
+    } else {
+        let stderr = String::from_utf8_lossy(&output.stderr);
+        Err(format!("overmind kill failed: {stderr}"))
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;

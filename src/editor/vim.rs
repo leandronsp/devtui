@@ -15,7 +15,7 @@ use ratatui::{
 };
 use tui_term::widget::PseudoTerminal;
 
-use super::preview;
+use super::{ops, preview, scribe};
 
 const DRAFT_PATH: &str = "draft.md";
 const CONTENT_TMP: &str = "/tmp/devtui-content";
@@ -247,6 +247,20 @@ struct RunLoopState {
     blog_author: Option<String>,
     /// Rendered scribe annotation lines for the right pane.
     scribe_lines: Vec<Line<'static>>,
+    /// When content last changed (for scribe idle debounce).
+    scribe_idle_since: Option<std::time::Instant>,
+    /// True when a scribe check is in flight.
+    scribe_pending: bool,
+    /// Background thread deposits the overmind response here.
+    scribe_result: Arc<Mutex<Option<Result<String, String>>>>,
+    /// Last content sent to scribe, to avoid re-sending unchanged text.
+    scribe_last_sent: String,
+    /// Overmind session name for this editor instance.
+    scribe_session_name: String,
+    /// Whether the overmind session has been started.
+    scribe_session_started: bool,
+    /// Status message shown in the scribe panel header.
+    scribe_status: &'static str,
 }
 
 impl RunLoopState {
@@ -263,6 +277,13 @@ impl RunLoopState {
             was_modified: false,
             blog_author,
             scribe_lines: Vec::new(),
+            scribe_idle_since: None,
+            scribe_pending: false,
+            scribe_result: Arc::new(Mutex::new(None)),
+            scribe_last_sent: String::new(),
+            scribe_session_name: format!("scribe-{}", std::process::id()),
+            scribe_session_started: false,
+            scribe_status: "idle",
         }
     }
 
@@ -275,6 +296,7 @@ impl RunLoopState {
                     self.last_content = new_content;
                     self.content_changed_at = Some(std::time::Instant::now());
                     self.preview_stale = true;
+                    self.scribe_idle_since = Some(std::time::Instant::now());
                 }
             }
         }
@@ -300,6 +322,76 @@ impl RunLoopState {
             self.cached_lines = lines;
         }
         true
+    }
+
+    /// Scribe idle debounce: after 10 seconds of no content changes, send to overmind.
+    fn poll_scribe_check(&mut self) {
+        if self.split_layout != SplitLayout::Scribe || self.scribe_pending {
+            return;
+        }
+        let Some(idle_since) = self.scribe_idle_since else { return };
+        if idle_since.elapsed() < Duration::from_secs(10) {
+            return;
+        }
+        if self.last_content == self.scribe_last_sent {
+            return;
+        }
+
+        self.scribe_idle_since = None;
+        self.scribe_pending = true;
+        self.scribe_status = "checking...";
+        self.scribe_last_sent = self.last_content.clone();
+
+        let session_name = self.scribe_session_name.clone();
+        let session_started = self.scribe_session_started;
+        let content = self.last_content.clone();
+        let result_slot = Arc::clone(&self.scribe_result);
+
+        self.scribe_session_started = true;
+
+        thread::spawn(move || {
+            if !session_started {
+                if let Err(err) = ops::start_scribe_session(&session_name) {
+                    if let Ok(mut slot) = result_slot.lock() {
+                        *slot = Some(Err(err));
+                    }
+                    return;
+                }
+            }
+            let prompt = scribe::build_check_prompt(&content);
+            let result = ops::send_to_scribe(&session_name, &prompt);
+            if let Ok(mut slot) = result_slot.lock() {
+                *slot = Some(result);
+            }
+        });
+    }
+
+    /// Pick up the scribe response from the background thread.
+    fn poll_scribe_result(&mut self) {
+        let result = if let Ok(mut guard) = self.scribe_result.try_lock() {
+            guard.take()
+        } else {
+            return;
+        };
+        if let Some(result) = result {
+            self.scribe_pending = false;
+            match result {
+                Ok(response) => {
+                    let annotations = scribe::extract_annotations(&response);
+                    self.scribe_lines = scribe::render_lines(&annotations);
+                    self.scribe_status = "idle";
+                }
+                Err(err) => {
+                    log::warn!("scribe check failed: {err}");
+                    self.scribe_lines = vec![
+                        Line::from(""),
+                        Line::from(format!(" Error: {err}")),
+                    ];
+                    self.scribe_status = "error";
+                    self.scribe_session_started = false;
+                }
+            }
+        }
     }
 
     /// Detect a `:w` save (modified flag transitions true -> false). Shows "saved" flash,
@@ -439,7 +531,7 @@ impl RunLoopState {
                     ])
                     .split(main_area);
                     render_editor(frame, parser, mode_label, mode_st, title_message, post_title.as_deref(), is_draft, panes[0]);
-                    render_scribe(frame, &self.scribe_lines, panes[1]);
+                    render_scribe(frame, &self.scribe_lines, self.scribe_status, panes[1]);
                 }
                 SplitLayout::EditorOnly => {
                     render_editor(frame, parser, mode_label, mode_st, title_message, post_title.as_deref(), is_draft, main_area);
@@ -577,6 +669,8 @@ fn run_loop(
 
         state.poll_content_swap(content_swap);
         let content_updated = state.poll_preview_render();
+        state.poll_scribe_check();
+        state.poll_scribe_result();
         let vim_state = parse_title(parser);
         state.handle_save_detected(&vim_state, terminal, pty_master, parser)?;
         state.manage_flash();
@@ -600,6 +694,11 @@ fn run_loop(
                 _ => {}
             }
         }
+    }
+
+    // Clean up scribe session on exit
+    if state.scribe_session_started {
+        let _ = ops::kill_scribe_session(&state.scribe_session_name);
     }
 
     Ok(())
@@ -683,12 +782,23 @@ fn render_preview(
 fn render_scribe(
     frame: &mut ratatui::Frame,
     scribe_lines: &[Line<'static>],
+    status: &str,
     area: ratatui::layout::Rect,
 ) {
+    let status_color = match status {
+        "checking..." => Color::Yellow,
+        "error" => Color::Red,
+        _ => Color::DarkGray,
+    };
+    let title = Line::from(vec![
+        Span::raw(" SCRIBE "),
+        Span::styled(format!("[{status}]"), Style::default().fg(status_color)),
+        Span::raw(" "),
+    ]);
     let block = Block::default()
         .borders(Borders::ALL)
         .border_style(Style::default().fg(Color::DarkGray))
-        .title(" SCRIBE ");
+        .title(title);
 
     let content = if scribe_lines.is_empty() {
         vec![
