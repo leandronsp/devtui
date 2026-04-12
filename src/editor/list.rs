@@ -1,6 +1,8 @@
 use std::io;
 use std::path::PathBuf;
+use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::{Arc, Mutex};
+use std::thread::JoinHandle;
 use std::time::Instant;
 
 use crossterm::event::{self, Event, KeyCode, KeyModifiers};
@@ -34,8 +36,12 @@ pub struct ListView {
     confirm_delete: Option<i64>,
     building: bool,
     build_result: Arc<Mutex<Option<Result<String, String>>>>,
+    last_built: Option<Instant>,
     last_error: Option<String>,
     show_error: bool,
+    serving: bool,
+    serve_stop: Arc<AtomicBool>,
+    serve_handle: Option<JoinHandle<()>>,
 }
 
 impl ListView {
@@ -55,8 +61,12 @@ impl ListView {
             confirm_delete: None,
             building: false,
             build_result: Arc::new(Mutex::new(None)),
+            last_built: None,
             last_error: None,
             show_error: false,
+            serving: false,
+            serve_stop: Arc::new(AtomicBool::new(false)),
+            serve_handle: None,
         }
     }
 
@@ -90,6 +100,7 @@ impl ListView {
             match result {
                 Ok(msg) => {
                     self.flash = Some((msg, Instant::now()));
+                    self.last_built = Some(Instant::now());
                 }
                 Err(err) => {
                     let first_line = err.lines().next().unwrap_or(&err).to_string();
@@ -98,6 +109,42 @@ impl ListView {
                 }
             }
         }
+    }
+
+    fn start_serve(&mut self) {
+        if self.serving || self.building {
+            return;
+        }
+        // Build first, then serve
+        self.start_build();
+        // Actual serve spawn happens after build completes (in poll_build_result)
+        // For now, just start serving directly
+        self.serving = true;
+        self.serve_stop.store(false, Ordering::Relaxed);
+
+        let dist_dir = ops::dist_dir_for_blog(&self.blog_dir);
+        let stop = Arc::clone(&self.serve_stop);
+
+        self.serve_handle = Some(std::thread::spawn(move || {
+            let _ = ops::run_serve(&dist_dir, stop);
+        }));
+
+        self.flash = Some((
+            format!("Serving at http://localhost:{}", ops::SERVE_PORT),
+            Instant::now(),
+        ));
+    }
+
+    fn stop_serve(&mut self) {
+        if !self.serving {
+            return;
+        }
+        self.serve_stop.store(true, Ordering::Relaxed);
+        if let Some(handle) = self.serve_handle.take() {
+            let _ = handle.join();
+        }
+        self.serving = false;
+        self.flash = Some(("Server stopped".into(), Instant::now()));
     }
 
     fn start_build(&mut self) {
@@ -193,6 +240,20 @@ impl ListView {
             ));
         }
 
+        if self.serving {
+            spans.push(Span::styled(
+                format!("  serving :{}", ops::SERVE_PORT),
+                Style::default().fg(Color::Green),
+            ));
+        }
+
+        if let Some(built_at) = &self.last_built {
+            spans.push(Span::styled(
+                format!("  {}", ops::format_built_ago(built_at.elapsed())),
+                Style::default().fg(Color::DarkGray),
+            ));
+        }
+
         if let Some((msg, _)) = &self.flash {
             let color = if msg.starts_with("Build failed") {
                 Color::Red
@@ -285,7 +346,7 @@ impl ListView {
             frame.render_widget(Paragraph::new(search), area);
         } else {
             let hints = Line::from(Span::styled(
-                " j/k:nav  Enter:edit  n:new  p:pub  i:pin  d:del  b:build  e:errors  /:search  ?:help  q:quit",
+                " j/k:nav  Enter:edit  n:new  p:pub  i:pin  d:del  b:build  s:serve  o:open  e:errors  /:search  ?:help  q:quit",
                 Style::default().fg(Color::DarkGray),
             ));
             frame.render_widget(Paragraph::new(hints), area);
@@ -308,6 +369,8 @@ impl ListView {
             Line::from(" i            Toggle pin"),
             Line::from(" d            Delete (with confirm)"),
             Line::from(" b            Build blog"),
+            Line::from(" s            Start/stop server"),
+            Line::from(" o            Open in browser"),
             Line::from(" e            Show last error"),
             Line::from(" /            Search by title"),
             Line::from(" Esc          Clear search / close"),
@@ -460,7 +523,10 @@ impl ListView {
 
         // Normal mode
         match code {
-            KeyCode::Char('q') => return Ok(Some(ListAction::Quit)),
+            KeyCode::Char('q') => {
+                self.stop_serve();
+                return Ok(Some(ListAction::Quit));
+            }
             KeyCode::Char('j') | KeyCode::Down => self.move_selection(1),
             KeyCode::Char('k') | KeyCode::Up => self.move_selection(-1),
             KeyCode::Char('G') => {
@@ -485,6 +551,20 @@ impl ListView {
                 }
             }
             KeyCode::Char('b') => self.start_build(),
+            KeyCode::Char('s') => {
+                if self.serving {
+                    self.stop_serve();
+                } else {
+                    self.start_serve();
+                }
+            }
+            KeyCode::Char('o') => {
+                if !self.serving {
+                    self.start_serve();
+                }
+                let url = format!("http://localhost:{}", ops::SERVE_PORT);
+                let _ = std::process::Command::new("open").arg(&url).spawn();
+            }
             KeyCode::Char('e') => {
                 if self.last_error.is_some() {
                     self.show_error = true;
@@ -498,6 +578,7 @@ impl ListView {
                 self.show_help = true;
             }
             KeyCode::Char('c') if modifiers.contains(KeyModifiers::CONTROL) => {
+                self.stop_serve();
                 return Ok(Some(ListAction::Quit));
             }
             _ => {}
@@ -651,5 +732,29 @@ mod tests {
         // building flag unchanged, no flash set
         assert!(view.building);
         assert!(view.flash.is_none());
+    }
+
+    #[test]
+    fn poll_build_result_sets_last_built_on_success() {
+        let mut view = make_list_view();
+        view.building = true;
+        *view.build_result.lock().unwrap() = Some(Ok("Built 1 articles in 0.1s".into()));
+        view.poll_build_result();
+        assert!(view.last_built.is_some());
+    }
+
+    #[test]
+    fn stop_serve_clears_serving_flag() {
+        let mut view = make_list_view();
+        view.serving = true;
+        view.stop_serve();
+        assert!(!view.serving);
+    }
+
+    #[test]
+    fn stop_serve_is_noop_when_not_serving() {
+        let mut view = make_list_view();
+        view.stop_serve();
+        assert!(!view.serving);
     }
 }
