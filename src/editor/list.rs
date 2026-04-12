@@ -237,11 +237,24 @@ impl ListView {
         self.flash = Some(("Pushing...".into(), Instant::now()));
 
         let deploy_dir = preview.deploy_dir;
+        let blog_dir = self.blog_dir.clone();
         let result_slot = Arc::clone(&self.push_result);
 
         std::thread::spawn(move || {
             let result = ops::repo_commit_push(&deploy_dir);
-            if let Ok(mut guard) = result_slot.lock() {
+            if let Ok(push_result) = &result {
+                // Fetch CF status after successful push
+                let project = blog_dir
+                    .file_name()
+                    .map(|n| n.to_string_lossy().replace('.', "-"))
+                    .unwrap_or_default();
+                let status = ops::cf_deployment_status(&project)
+                    .unwrap_or_else(|e| format!("Could not fetch status: {e}"));
+                let msg = format!("{push_result}\n{status}");
+                if let Ok(mut guard) = result_slot.lock() {
+                    *guard = Some(Ok(msg));
+                }
+            } else if let Ok(mut guard) = result_slot.lock() {
                 *guard = Some(result);
             }
         });
@@ -256,15 +269,8 @@ impl ListView {
         if let Some(result) = result {
             self.pushing = false;
             match result {
-                Ok(_msg) => {
-                    let project = self
-                        .blog_dir
-                        .file_name()
-                        .map(|n| n.to_string_lossy().replace('.', "-"))
-                        .unwrap_or_default();
-                    let status = ops::cf_deployment_status(&project)
-                        .unwrap_or_else(|e| format!("Could not fetch status: {e}"));
-                    self.deploy_status = Some(status);
+                Ok(msg) => {
+                    self.deploy_status = Some(msg);
                 }
                 Err(err) => {
                     let first_line = err.lines().next().unwrap_or(&err).to_string();
@@ -713,9 +719,6 @@ impl ListView {
             return;
         };
 
-        // Parse the wrangler table row into readable fields
-        let fields: Vec<&str> = status.split('│').map(|s| s.trim()).filter(|s| !s.is_empty()).collect();
-
         let mut lines = vec![
             Line::from(Span::styled(
                 " Deploy Successful ",
@@ -724,14 +727,25 @@ impl ListView {
             Line::from(""),
         ];
 
-        if fields.len() >= 5 {
-            lines.push(Line::from(format!(" Environment: {}", fields[1])));
-            lines.push(Line::from(format!(" Branch:      {}", fields[2])));
-            lines.push(Line::from(format!(" Commit:      {}", fields[3])));
-            lines.push(Line::from(format!(" URL:         {}", fields[4])));
-            lines.push(Line::from(format!(" Status:      {}", fields[5])));
-        } else {
-            lines.push(Line::from(format!(" {status}")));
+        // Status contains push result + wrangler output separated by newline
+        for line in status.lines() {
+            // Parse wrangler table row if present
+            if line.contains('│') {
+                let fields: Vec<&str> = line.split('│').map(|s| s.trim()).filter(|s| !s.is_empty()).collect();
+                if fields.len() >= 5 {
+                    lines.push(Line::from(format!(" Environment: {}", fields[1])));
+                    lines.push(Line::from(format!(" Branch:      {}", fields[2])));
+                    lines.push(Line::from(format!(" Commit:      {}", fields[3])));
+                    lines.push(Line::from(format!(" URL:         {}", fields[4])));
+                    if fields.len() > 5 {
+                        lines.push(Line::from(format!(" Deployed:    {}", fields[5])));
+                    }
+                    continue;
+                }
+            }
+            if !line.is_empty() {
+                lines.push(Line::from(format!(" {line}")));
+            }
         }
 
         lines.push(Line::from(""));
