@@ -375,16 +375,8 @@ pub fn sync_to_filesystem(conn: &Connection, posts_dir: &Path) -> Result<(), Cms
     std::fs::create_dir_all(posts_dir)?;
     for article in list_articles(conn, None)? {
         let path = posts_dir.join(format!("{}.md", article.slug));
-        match article.status {
-            Status::Published => {
-                std::fs::write(&path, &article.content)?;
-            }
-            Status::Draft => {
-                if path.exists() {
-                    std::fs::remove_file(&path)?;
-                }
-            }
-        }
+        let content = inject_status(&article.content, &article.status);
+        std::fs::write(&path, content)?;
     }
     Ok(())
 }
@@ -429,12 +421,44 @@ pub fn build_markdown(article: &Article) -> String {
     if article.language != "en" {
         let _ = writeln!(md, "language: {}", article.language);
     }
+    let _ = writeln!(md, "status: {}", article.status);
     md.push_str("---\n\n");
     md.push_str(&article.content);
     md
 }
 
 // --- Helpers ---
+
+/// Update or insert the `status:` field in frontmatter to match the DB status.
+fn inject_status(content: &str, status: &Status) -> String {
+    let status_line = format!("status: {status}");
+    if !content.starts_with("---\n") {
+        return content.to_string();
+    }
+    let Some(end) = content[4..].find("\n---") else {
+        return content.to_string();
+    };
+    let fm_end = end + 4; // points to the \n before ---
+    let lines: Vec<&str> = content[4..fm_end].lines().collect();
+    let mut result = String::from("---\n");
+    let mut found = false;
+    for line in &lines {
+        if line.starts_with("status:") {
+            result.push_str(&status_line);
+            found = true;
+        } else {
+            result.push_str(line);
+        }
+        result.push('\n');
+    }
+    if !found {
+        result.push_str(&status_line);
+        result.push('\n');
+    }
+    // Skip the \n before ---, append from ---
+    result.push_str(&content[fm_end + 1..]);
+    result
+}
 
 fn slugify(title: &str) -> String {
     title
@@ -799,7 +823,9 @@ mod tests {
         let path = dir.join("hello-world.md");
         assert!(path.exists(), "expected {path:?} to exist");
         let contents = fs::read_to_string(&path).unwrap();
-        assert_eq!(contents, md, "content should be written verbatim");
+        assert!(contents.contains("title: Hello World"));
+        assert!(contents.contains("status: published"));
+        assert!(contents.contains("Body here."));
     }
 
     #[test]
@@ -816,21 +842,26 @@ mod tests {
     }
 
     #[test]
-    fn sync_removes_md_file_for_draft_article() {
+    fn sync_writes_draft_with_status_in_frontmatter() {
         let conn = test_db();
         let dir = tempdir();
         let article = create_article(&conn, "To Be Unpublished").unwrap();
-        update_content(&conn, article.id, "Content.").unwrap();
+        let md = "---\ntitle: To Be Unpublished\npublished_at: 2026-04-11\nstatus: published\n---\n\nContent.\n";
+        update_content(&conn, article.id, md).unwrap();
         publish(&conn, article.id).unwrap();
 
         sync_to_filesystem(&conn, &dir).unwrap();
         let path = dir.join("to-be-unpublished.md");
         assert!(path.exists());
+        let written = fs::read_to_string(&path).unwrap();
+        assert!(written.contains("status: published"));
 
         unpublish(&conn, article.id).unwrap();
         sync_to_filesystem(&conn, &dir).unwrap();
 
-        assert!(!path.exists(), "draft .md should be removed after sync");
+        assert!(path.exists(), "draft .md should still exist after sync");
+        let content = fs::read_to_string(&path).unwrap();
+        assert!(content.contains("status: draft"));
     }
 
     #[test]
@@ -1130,6 +1161,59 @@ mod tests {
         assert!(md.contains("Hello world."));
         // language "en" should NOT appear (it's the default)
         assert!(!md.contains("language:"));
+    }
+
+    #[test]
+    fn build_markdown_includes_status() {
+        let article = Article {
+            id: 1,
+            title: "Draft".to_string(),
+            slug: "draft".to_string(),
+            content: "WIP.".to_string(),
+            status: Status::Draft,
+            language: "en".to_string(),
+            pinned: false,
+            tags: vec![],
+            published_at: None,
+            created_at: "2026-04-11".to_string(),
+            updated_at: "2026-04-11".to_string(),
+        };
+        let md = build_markdown(&article);
+        assert!(md.contains("status: draft"));
+
+        let published = Article {
+            status: Status::Published,
+            ..article
+        };
+        let md = build_markdown(&published);
+        assert!(md.contains("status: published"));
+    }
+
+    // --- inject_status ---
+
+    #[test]
+    fn inject_status_appends_when_missing() {
+        let content = "---\ntitle: Hello\n---\n\nbody";
+        let result = inject_status(content, &Status::Draft);
+        assert!(result.contains("status: draft"));
+        assert!(result.contains("title: Hello"));
+        assert!(result.contains("body"));
+    }
+
+    #[test]
+    fn inject_status_replaces_existing() {
+        let content = "---\ntitle: Hello\nstatus: published\n---\n\nbody";
+        let result = inject_status(content, &Status::Draft);
+        assert!(result.contains("status: draft"));
+        assert!(!result.contains("status: published"));
+    }
+
+    #[test]
+    fn inject_status_handles_frontmatter_only() {
+        let content = "---\ntitle: Hello\n---\n";
+        let result = inject_status(content, &Status::Draft);
+        assert!(result.contains("status: draft"));
+        assert!(result.contains("title: Hello"));
     }
 
 }
