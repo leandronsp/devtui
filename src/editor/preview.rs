@@ -31,7 +31,7 @@ fn frontmatter_date(content: &str) -> Option<String> {
     }
 }
 
-fn frontmatter_field(content: &str, field: &str) -> Option<String> {
+pub(crate) fn frontmatter_field(content: &str, field: &str) -> Option<String> {
     let rest = content.strip_prefix("---\n")?;
     let end = rest.find("\n---\n")?;
     let prefix = format!("{field}:");

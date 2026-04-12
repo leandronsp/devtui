@@ -9,7 +9,7 @@ use crossterm::event::{self, Event, KeyCode, KeyModifiers};
 use portable_pty::{CommandBuilder, NativePtySystem, PtySize, PtySystem};
 use ratatui::{
     layout::{Constraint, Layout, Rect},
-    style::{Color, Style},
+    style::{Color, Modifier, Style},
     text::{Line, Span},
     widgets::{Block, Borders, Paragraph, Wrap},
 };
@@ -530,6 +530,11 @@ impl RunLoopState {
             let main_area = status_split[0];
             let status_area = status_split[1];
 
+            let post_title = super::preview::frontmatter_field(&self.last_content, "title");
+            let is_draft = super::preview::frontmatter_field(&self.last_content, "status")
+                .map(|s| s.eq_ignore_ascii_case("draft"))
+                .unwrap_or(false);
+
             match self.split_layout {
                 SplitLayout::Vertical => {
                     let panes = Layout::horizontal([
@@ -537,7 +542,7 @@ impl RunLoopState {
                         Constraint::Percentage(50),
                     ])
                     .split(main_area);
-                    render_editor(frame, parser, mode_label, mode_st, title_message, panes[0]);
+                    render_editor(frame, parser, mode_label, mode_st, title_message, post_title.as_deref(), is_draft, panes[0]);
                     render_preview(
                         frame, &self.cached_lines, scroll.clamped_scroll, self.preview_mode,
                         preview_mode_label, &self.kitty_image,
@@ -546,7 +551,7 @@ impl RunLoopState {
                     preview_area = panes[1];
                 }
                 SplitLayout::EditorOnly => {
-                    render_editor(frame, parser, mode_label, mode_st, title_message, main_area);
+                    render_editor(frame, parser, mode_label, mode_st, title_message, post_title.as_deref(), is_draft, main_area);
                 }
             }
 
@@ -757,12 +762,15 @@ fn run_loop(
     Ok(())
 }
 
+#[allow(clippy::too_many_arguments)]
 fn render_editor(
     frame: &mut ratatui::Frame,
     parser: &Arc<RwLock<vt100::Parser>>,
     mode_label: &str,
     mode_st: Style,
     title_message: &str,
+    post_title: Option<&str>,
+    is_draft: bool,
     area: ratatui::layout::Rect,
 ) {
     let mut title_spans = vec![
@@ -770,11 +778,33 @@ fn render_editor(
         Span::raw(" EDITOR"),
     ];
 
+    if is_draft {
+        title_spans.push(Span::raw(" "));
+        title_spans.push(Span::styled(
+            "DRAFT",
+            Style::default().fg(Color::Yellow).add_modifier(Modifier::BOLD),
+        ));
+    }
+
     if !title_message.is_empty() {
         title_spans.push(Span::raw(" "));
         title_spans.push(Span::styled(
             title_message.to_string(),
             Style::default().fg(Color::Yellow),
+        ));
+    }
+
+    if let Some(title) = post_title {
+        let max_len = area.width.saturating_sub(30) as usize;
+        let display = if title.len() > max_len && max_len > 3 {
+            format!("{}...", &title[..max_len - 3])
+        } else {
+            title.to_string()
+        };
+        title_spans.push(Span::raw(" "));
+        title_spans.push(Span::styled(
+            display,
+            Style::default().fg(Color::DarkGray),
         ));
     }
 
