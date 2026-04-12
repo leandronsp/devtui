@@ -27,14 +27,6 @@ enum SplitLayout {
     EditorOnly, // full editor, no preview
 }
 
-#[derive(Clone, Copy, PartialEq)]
-enum ScribeStatus {
-    Idle,
-    Checking,
-    CheckingSlow,
-    Error,
-}
-
 pub enum EditorResult {
     Quit,
 }
@@ -255,27 +247,7 @@ struct RunLoopState {
     /// Blog author from blog.toml; rendered in preview header when post has no
     /// `author:` frontmatter field.
     blog_author: Option<String>,
-    /// Raw annotations from the last scribe check.
-    scribe_annotations: Vec<scribe::Annotation>,
-    /// When content last changed (for scribe idle debounce).
-    scribe_idle_since: Option<std::time::Instant>,
-    /// True when a scribe check is in flight.
-    scribe_pending: bool,
-    /// Background thread deposits the overmind response here.
-    scribe_result: Arc<Mutex<Option<Result<String, String>>>>,
-    /// Last content sent to scribe, to avoid re-sending unchanged text.
-    scribe_last_sent: String,
-    /// Overmind session name for this editor instance.
-    scribe_session_name: String,
-    /// Whether the overmind session has been started.
-    scribe_session_started: bool,
-    scribe_status: ScribeStatus,
-    /// When the current scribe check started (for slow detection).
-    scribe_check_started: Option<std::time::Instant>,
-    /// When the last scribe response was received.
-    scribe_last_response: Option<std::time::Instant>,
-    /// Error message from the last failed scribe check.
-    scribe_error: Option<String>,
+    scribe: scribe::ScribeState,
 }
 
 impl RunLoopState {
@@ -291,17 +263,7 @@ impl RunLoopState {
             flash: None,
             was_modified: false,
             blog_author,
-            scribe_annotations: Vec::new(),
-            scribe_idle_since: None,
-            scribe_pending: false,
-            scribe_result: Arc::new(Mutex::new(None)),
-            scribe_last_sent: String::new(),
-            scribe_session_name: format!("scribe-{}", std::process::id()),
-            scribe_session_started: false,
-            scribe_status: ScribeStatus::Idle,
-            scribe_check_started: None,
-            scribe_last_response: None,
-            scribe_error: None,
+            scribe: scribe::ScribeState::new(format!("scribe-{}", std::process::id())),
         }
     }
 
@@ -314,7 +276,7 @@ impl RunLoopState {
                     self.last_content = new_content;
                     self.content_changed_at = Some(std::time::Instant::now());
                     self.preview_stale = true;
-                    self.scribe_idle_since = Some(std::time::Instant::now());
+                    self.scribe.content_changed();
                 }
             }
         }
@@ -342,84 +304,31 @@ impl RunLoopState {
         true
     }
 
-    /// Update scribe status to "slow" if check has been running >15 seconds.
-    fn poll_scribe_slow(&mut self) {
-        if let Some(started) = self.scribe_check_started {
-            if self.scribe_pending && started.elapsed() > Duration::from_secs(15) {
-                self.scribe_status = ScribeStatus::CheckingSlow;
-            }
-        }
-    }
-
-    /// Scribe idle debounce: after 10 seconds of no content changes, send to overmind.
+    /// Scribe: check if idle debounce fired, spawn background thread if so.
     fn poll_scribe_check(&mut self) {
-        if self.split_layout != SplitLayout::Scribe || self.scribe_pending {
-            return;
-        }
-        let Some(idle_since) = self.scribe_idle_since else { return };
-        if idle_since.elapsed() < Duration::from_secs(10) {
-            return;
-        }
-        if self.last_content == self.scribe_last_sent {
+        let is_active = self.split_layout == SplitLayout::Scribe;
+        if !self.scribe.should_check(&self.last_content, is_active) {
             return;
         }
 
-        self.scribe_idle_since = None;
-        self.scribe_pending = true;
-        self.scribe_status = ScribeStatus::Checking;
-        self.scribe_check_started = Some(std::time::Instant::now());
-        self.scribe_last_sent = self.last_content.clone();
-
-        let session_name = self.scribe_session_name.clone();
-        let session_started = self.scribe_session_started;
-        let content = self.last_content.clone();
-        let result_slot = Arc::clone(&self.scribe_result);
-
-        self.scribe_session_started = true;
+        let request = self.scribe.begin_check(&self.last_content);
+        let result_slot = Arc::clone(&self.scribe.result);
 
         thread::spawn(move || {
-            if !session_started {
-                if let Err(err) = ops::start_scribe_session(&session_name) {
+            if request.session_needs_start {
+                if let Err(err) = ops::start_scribe_session(&request.session_name) {
                     if let Ok(mut slot) = result_slot.lock() {
                         *slot = Some(Err(err));
                     }
                     return;
                 }
             }
-            let prompt = scribe::build_check_prompt(&content);
-            let result = ops::send_to_scribe(&session_name, &prompt);
+            let prompt = scribe::build_check_prompt(&request.content);
+            let result = ops::send_to_scribe(&request.session_name, &prompt);
             if let Ok(mut slot) = result_slot.lock() {
                 *slot = Some(result);
             }
         });
-    }
-
-    /// Pick up the scribe response from the background thread.
-    fn poll_scribe_result(&mut self) {
-        let result = if let Ok(mut guard) = self.scribe_result.try_lock() {
-            guard.take()
-        } else {
-            return;
-        };
-        if let Some(result) = result {
-            self.scribe_pending = false;
-            self.scribe_check_started = None;
-            match result {
-                Ok(response) => {
-                    self.scribe_annotations = scribe::extract_annotations(&response);
-                    self.scribe_error = None;
-                    self.scribe_status = ScribeStatus::Idle;
-                    self.scribe_last_response = Some(std::time::Instant::now());
-                }
-                Err(err) => {
-                    log::warn!("scribe check failed: {err}");
-                    self.scribe_annotations = Vec::new();
-                    self.scribe_error = Some(err);
-                    self.scribe_status = ScribeStatus::Error;
-                    self.scribe_session_started = false;
-                }
-            }
-        }
     }
 
     /// Detect a `:w` save (modified flag transitions true -> false). Shows "saved" flash,
@@ -564,12 +473,12 @@ impl RunLoopState {
                     let visible_start = vim_state.first_visible_line as u16;
                     let visible_end = (vim_state.first_visible_line + vim_rows) as u16;
                     let scribe_lines = scribe::render_lines_with_focus(
-                        &self.scribe_annotations, visible_start, visible_end,
+                        &self.scribe.annotations, visible_start, visible_end,
                     );
                     render_scribe(
-                        frame, &scribe_lines, self.scribe_status,
-                        &self.scribe_session_name, self.scribe_last_response,
-                        self.scribe_error.as_deref(), panes[1],
+                        frame, &scribe_lines, self.scribe.status,
+                        &self.scribe.session_name, self.scribe.last_response,
+                        self.scribe.error.as_deref(), panes[1],
                     );
                 }
                 SplitLayout::EditorOnly => {
@@ -709,8 +618,8 @@ fn run_loop(
         state.poll_content_swap(content_swap);
         let content_updated = state.poll_preview_render();
         state.poll_scribe_check();
-        state.poll_scribe_slow();
-        state.poll_scribe_result();
+        state.scribe.update_slow();
+        state.scribe.poll_result();
         let vim_state = parse_title(parser);
         state.handle_save_detected(&vim_state, terminal, pty_master, parser)?;
         state.manage_flash();
@@ -737,8 +646,8 @@ fn run_loop(
     }
 
     // Clean up scribe session on exit
-    if state.scribe_session_started {
-        let _ = ops::kill_scribe_session(&state.scribe_session_name);
+    if state.scribe.session_started {
+        let _ = ops::kill_scribe_session(&state.scribe.session_name);
     }
 
     Ok(())
@@ -822,17 +731,17 @@ fn render_preview(
 fn render_scribe(
     frame: &mut ratatui::Frame,
     scribe_lines: &[Line<'static>],
-    status: ScribeStatus,
+    status: scribe::ScribeStatus,
     session_name: &str,
     last_response: Option<std::time::Instant>,
     error: Option<&str>,
     area: ratatui::layout::Rect,
 ) {
     let (status_label, status_color) = match status {
-        ScribeStatus::Idle => ("idle", Color::DarkGray),
-        ScribeStatus::Checking => ("checking...", Color::Yellow),
-        ScribeStatus::CheckingSlow => ("checking... (slow)", Color::Yellow),
-        ScribeStatus::Error => ("error", Color::Red),
+        scribe::ScribeStatus::Idle => ("idle", Color::DarkGray),
+        scribe::ScribeStatus::Checking => ("checking...", Color::Yellow),
+        scribe::ScribeStatus::CheckingSlow => ("checking... (slow)", Color::Yellow),
+        scribe::ScribeStatus::Error => ("error", Color::Red),
     };
     let elapsed = last_response
         .map(|t| format!(" {}s ago", t.elapsed().as_secs()))

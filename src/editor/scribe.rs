@@ -1,3 +1,6 @@
+use std::sync::{Arc, Mutex};
+use std::time::{Duration, Instant};
+
 use ratatui::style::{Color, Style};
 use ratatui::text::{Line, Span};
 use serde::Deserialize;
@@ -155,9 +158,323 @@ pub fn render_lines(annotations: &[Annotation]) -> Vec<Line<'static>> {
         .collect()
 }
 
+#[derive(Clone, Copy, PartialEq, Debug)]
+pub enum ScribeStatus {
+    Idle,
+    Checking,
+    CheckingSlow,
+    Error,
+}
+
+/// Scribe session info needed by the background thread to call overmind.
+pub struct CheckRequest {
+    pub session_name: String,
+    pub session_needs_start: bool,
+    pub content: String,
+}
+
+/// All mutable scribe state, extracted for testability.
+pub struct ScribeState {
+    pub annotations: Vec<Annotation>,
+    pub status: ScribeStatus,
+    pub session_name: String,
+    pub session_started: bool,
+    pub error: Option<String>,
+    pub last_response: Option<Instant>,
+    pub result: Arc<Mutex<Option<Result<String, String>>>>,
+    idle_since: Option<Instant>,
+    pending: bool,
+    last_sent: String,
+    check_started: Option<Instant>,
+}
+
+const IDLE_THRESHOLD: Duration = Duration::from_secs(10);
+const SLOW_THRESHOLD: Duration = Duration::from_secs(15);
+
+impl ScribeState {
+    pub fn new(session_name: String) -> Self {
+        Self {
+            annotations: Vec::new(),
+            status: ScribeStatus::Idle,
+            session_name,
+            session_started: false,
+            error: None,
+            last_response: None,
+            result: Arc::new(Mutex::new(None)),
+            idle_since: None,
+            pending: false,
+            last_sent: String::new(),
+            check_started: None,
+        }
+    }
+
+    /// Signal that document content changed. Resets the idle timer.
+    pub fn content_changed(&mut self) {
+        self.idle_since = Some(Instant::now());
+    }
+
+    /// Returns true when a check should fire: idle long enough, content
+    /// different from last send, and no check in flight.
+    pub fn should_check(&self, content: &str, is_scribe_active: bool) -> bool {
+        if !is_scribe_active || self.pending {
+            return false;
+        }
+        let Some(idle_since) = self.idle_since else { return false };
+        if idle_since.elapsed() < IDLE_THRESHOLD {
+            return false;
+        }
+        content != self.last_sent
+    }
+
+    /// Prepare a check request. Transitions state to pending.
+    pub fn begin_check(&mut self, content: &str) -> CheckRequest {
+        let needs_start = !self.session_started;
+        self.pending = true;
+        self.status = ScribeStatus::Checking;
+        self.check_started = Some(Instant::now());
+        self.last_sent = content.to_string();
+        self.idle_since = None;
+        self.session_started = true;
+
+        CheckRequest {
+            session_name: self.session_name.clone(),
+            session_needs_start: needs_start,
+            content: content.to_string(),
+        }
+    }
+
+    /// Process a successful response from overmind.
+    pub fn handle_response(&mut self, response: &str) {
+        self.annotations = extract_annotations(response);
+        self.error = None;
+        self.status = ScribeStatus::Idle;
+        self.pending = false;
+        self.check_started = None;
+        self.last_response = Some(Instant::now());
+    }
+
+    /// Process a failed overmind call.
+    pub fn handle_error(&mut self, err: String) {
+        log::warn!("scribe check failed: {err}");
+        self.annotations = Vec::new();
+        self.error = Some(err);
+        self.status = ScribeStatus::Error;
+        self.pending = false;
+        self.check_started = None;
+        self.session_started = false;
+    }
+
+    /// Pick up result from the background thread (non-blocking).
+    pub fn poll_result(&mut self) {
+        let result = if let Ok(mut guard) = self.result.try_lock() {
+            guard.take()
+        } else {
+            return;
+        };
+        if let Some(result) = result {
+            match result {
+                Ok(response) => self.handle_response(&response),
+                Err(err) => self.handle_error(err),
+            }
+        }
+    }
+
+    /// Update status to slow if check has been running too long.
+    pub fn update_slow(&mut self) {
+        if let Some(started) = self.check_started {
+            if self.pending && started.elapsed() > SLOW_THRESHOLD {
+                self.status = ScribeStatus::CheckingSlow;
+            }
+        }
+    }
+
+    pub fn is_pending(&self) -> bool {
+        self.pending
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    fn test_state() -> ScribeState {
+        ScribeState::new("scribe-test".to_string())
+    }
+
+    // --- should_check ---
+
+    #[test]
+    fn should_check_returns_false_when_not_active() {
+        let mut state = test_state();
+        state.content_changed();
+        // Simulate elapsed time by setting idle_since in the past
+        state.idle_since = Some(Instant::now() - Duration::from_secs(15));
+        assert!(!state.should_check("hello", false));
+    }
+
+    #[test]
+    fn should_check_returns_false_when_pending() {
+        let mut state = test_state();
+        state.content_changed();
+        state.idle_since = Some(Instant::now() - Duration::from_secs(15));
+        state.pending = true;
+        assert!(!state.should_check("hello", true));
+    }
+
+    #[test]
+    fn should_check_returns_false_before_idle_threshold() {
+        let mut state = test_state();
+        state.content_changed(); // just now
+        assert!(!state.should_check("hello", true));
+    }
+
+    #[test]
+    fn should_check_returns_false_when_content_unchanged() {
+        let mut state = test_state();
+        state.last_sent = "hello".to_string();
+        state.idle_since = Some(Instant::now() - Duration::from_secs(15));
+        assert!(!state.should_check("hello", true));
+    }
+
+    #[test]
+    fn should_check_returns_true_when_idle_and_content_changed() {
+        let mut state = test_state();
+        state.idle_since = Some(Instant::now() - Duration::from_secs(15));
+        assert!(state.should_check("new content", true));
+    }
+
+    // --- begin_check ---
+
+    #[test]
+    fn begin_check_transitions_to_pending() {
+        let mut state = test_state();
+        let request = state.begin_check("some content");
+        assert!(state.is_pending());
+        assert_eq!(state.status, ScribeStatus::Checking);
+        assert_eq!(request.content, "some content");
+        assert_eq!(request.session_name, "scribe-test");
+    }
+
+    #[test]
+    fn begin_check_first_time_needs_session_start() {
+        let mut state = test_state();
+        let request = state.begin_check("content");
+        assert!(request.session_needs_start);
+        // Second time should not need start
+        state.pending = false;
+        let request2 = state.begin_check("content2");
+        assert!(!request2.session_needs_start);
+    }
+
+    #[test]
+    fn begin_check_stores_last_sent() {
+        let mut state = test_state();
+        state.begin_check("sent content");
+        assert_eq!(state.last_sent, "sent content");
+    }
+
+    // --- handle_response ---
+
+    #[test]
+    fn handle_response_parses_annotations() {
+        let mut state = test_state();
+        state.pending = true;
+        let response = r#"[{"line": 5, "tier": "error", "message": "typo"}]"#;
+        state.handle_response(response);
+        assert_eq!(state.annotations.len(), 1);
+        assert_eq!(state.annotations[0].line, 5);
+        assert_eq!(state.status, ScribeStatus::Idle);
+        assert!(!state.is_pending());
+        assert!(state.last_response.is_some());
+        assert!(state.error.is_none());
+    }
+
+    // --- handle_error ---
+
+    #[test]
+    fn handle_error_stores_error_and_resets_session() {
+        let mut state = test_state();
+        state.pending = true;
+        state.session_started = true;
+        state.handle_error("overmind crashed".to_string());
+        assert!(!state.is_pending());
+        assert!(!state.session_started);
+        assert_eq!(state.status, ScribeStatus::Error);
+        assert_eq!(state.error.as_deref(), Some("overmind crashed"));
+        assert!(state.annotations.is_empty());
+    }
+
+    // --- update_slow ---
+
+    #[test]
+    fn update_slow_sets_checking_slow_after_threshold() {
+        let mut state = test_state();
+        state.pending = true;
+        state.check_started = Some(Instant::now() - Duration::from_secs(20));
+        state.status = ScribeStatus::Checking;
+        state.update_slow();
+        assert_eq!(state.status, ScribeStatus::CheckingSlow);
+    }
+
+    #[test]
+    fn update_slow_does_nothing_before_threshold() {
+        let mut state = test_state();
+        state.pending = true;
+        state.check_started = Some(Instant::now());
+        state.status = ScribeStatus::Checking;
+        state.update_slow();
+        assert_eq!(state.status, ScribeStatus::Checking);
+    }
+
+    // --- poll_result ---
+
+    #[test]
+    fn poll_result_handles_success() {
+        let mut state = test_state();
+        state.pending = true;
+        if let Ok(mut slot) = state.result.lock() {
+            *slot = Some(Ok(r#"[{"line": 1, "tier": "hint", "message": "rephrase"}]"#.to_string()));
+        }
+        state.poll_result();
+        assert!(!state.is_pending());
+        assert_eq!(state.annotations.len(), 1);
+        assert_eq!(state.status, ScribeStatus::Idle);
+    }
+
+    #[test]
+    fn poll_result_handles_error() {
+        let mut state = test_state();
+        state.pending = true;
+        state.session_started = true;
+        if let Ok(mut slot) = state.result.lock() {
+            *slot = Some(Err("connection failed".to_string()));
+        }
+        state.poll_result();
+        assert!(!state.is_pending());
+        assert!(!state.session_started);
+        assert_eq!(state.status, ScribeStatus::Error);
+        assert_eq!(state.error.as_deref(), Some("connection failed"));
+    }
+
+    #[test]
+    fn poll_result_is_noop_when_no_result() {
+        let mut state = test_state();
+        state.pending = true;
+        state.status = ScribeStatus::Checking;
+        state.poll_result();
+        assert!(state.is_pending());
+        assert_eq!(state.status, ScribeStatus::Checking);
+    }
+
+    // --- content_changed ---
+
+    #[test]
+    fn content_changed_resets_idle_timer() {
+        let mut state = test_state();
+        assert!(state.idle_since.is_none());
+        state.content_changed();
+        assert!(state.idle_since.is_some());
+    }
 
     #[test]
     fn render_lines_with_focus_sorts_visible_first() {
