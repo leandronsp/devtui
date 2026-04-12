@@ -98,6 +98,38 @@ mod tests {
     }
 
     #[test]
+    fn normalize_leaves_canonical_leandronsp_post_unchanged() {
+        let input = "---\n\
+title: \"A brief history\"\n\
+slug: \"a-brief-history\"\n\
+published_at: \"2022-07-12 06:11:29Z\"\n\
+language: \"en\"\n\
+status: \"published\"\n\
+tags: [\"unix\", \"linux\"]\n\
+---\n\n\
+Body text.\n";
+        // canonical order is title, slug(after description), published_at, language, tags(before image), status
+        let expected = "---\n\
+title: \"A brief history\"\n\
+slug: \"a-brief-history\"\n\
+published_at: \"2022-07-12 06:11:29Z\"\n\
+language: \"en\"\n\
+tags: [\"unix\", \"linux\"]\n\
+status: \"published\"\n\
+---\n\n\
+Body text.\n";
+        assert_eq!(normalize_frontmatter(input), expected);
+    }
+
+    #[test]
+    fn normalize_rewrites_minimal_acme_post_to_canonical() {
+        let input = "---\ntitle: Why I Live in the Terminal\ndate: 2026-03-28\n---\n\nBody.\n";
+        let expected =
+            "---\ntitle: \"Why I Live in the Terminal\"\npublished_at: \"2026-03-28\"\n---\n\nBody.\n";
+        assert_eq!(normalize_frontmatter(input), expected);
+    }
+
+    #[test]
     fn normalize_passes_through_unknown_fields() {
         let input = "---\ntitle: Foo\ncustom: bar\n---\n";
         let expected = "---\ntitle: \"Foo\"\ncustom: \"bar\"\n---\n";
