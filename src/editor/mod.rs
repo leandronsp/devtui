@@ -2,6 +2,7 @@ pub mod db;
 pub mod list;
 pub mod ops;
 pub mod preview;
+pub mod scribe;
 pub mod vim;
 
 use std::io;
