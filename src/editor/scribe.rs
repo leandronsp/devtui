@@ -63,6 +63,45 @@ pub fn parse_annotations(json: &str) -> Vec<Annotation> {
     annotations
 }
 
+/// Build the prompt sent to the AI writing companion.
+pub fn build_check_prompt(content: &str) -> String {
+    format!(
+        r#"Review this markdown document for grammar, spelling, factual accuracy, and coherence.
+Detect the language (English or Portuguese) and check accordingly.
+Skip content inside fenced code blocks.
+
+Return ONLY a JSON array of annotations, no other text. Each annotation:
+{{"line": <number>, "tier": "<error|hint|research>", "message": "<description>"}}
+
+Tiers:
+- "error": grammar, spelling, wrong word. Include the fix.
+- "hint": better phrasing, missing context, factual checks.
+- "research": related references, supporting data.
+
+If no issues found, return an empty array: []
+
+Document:
+{content}"#
+    )
+}
+
+/// Extract JSON annotations from a potentially noisy AI response.
+/// Looks for the first `[` to last `]` substring and parses it.
+pub fn extract_annotations(response: &str) -> Vec<Annotation> {
+    let start = match response.find('[') {
+        Some(pos) => pos,
+        None => return Vec::new(),
+    };
+    let end = match response.rfind(']') {
+        Some(pos) => pos,
+        None => return Vec::new(),
+    };
+    if end <= start {
+        return Vec::new();
+    }
+    parse_annotations(&response[start..=end])
+}
+
 /// Render annotations as ratatui lines for the scribe panel.
 pub fn render_lines(annotations: &[Annotation]) -> Vec<Line<'static>> {
     annotations
@@ -81,6 +120,41 @@ pub fn render_lines(annotations: &[Annotation]) -> Vec<Line<'static>> {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn build_check_prompt_includes_content_and_json_instruction() {
+        let content = "# Hello\n\nSome text here.";
+        let prompt = build_check_prompt(content);
+        assert!(prompt.contains("# Hello"));
+        assert!(prompt.contains("Some text here."));
+        assert!(prompt.contains("JSON"));
+    }
+
+    #[test]
+    fn build_check_prompt_instructs_to_skip_code_blocks() {
+        let prompt = build_check_prompt("some text");
+        assert!(prompt.contains("code block"));
+    }
+
+    #[test]
+    fn extract_annotations_from_noisy_response() {
+        let response = r#"Here are the annotations I found:
+
+[{"line": 3, "tier": "error", "message": "typo: 'teh' should be 'the'"}]
+
+Let me know if you need more details."#;
+
+        let annotations = extract_annotations(response);
+        assert_eq!(annotations.len(), 1);
+        assert_eq!(annotations[0].line, 3);
+        assert_eq!(annotations[0].tier, Tier::Error);
+    }
+
+    #[test]
+    fn extract_annotations_returns_empty_on_no_json() {
+        let annotations = extract_annotations("No issues found in this document.");
+        assert!(annotations.is_empty());
+    }
 
     #[test]
     fn render_lines_produces_annotated_output() {
