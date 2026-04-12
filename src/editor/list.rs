@@ -233,32 +233,40 @@ impl ListView {
             .map(|n| n.to_string_lossy().into_owned())
             .unwrap_or_default();
 
+        let sep = Span::styled(" · ", Style::default().fg(Color::DarkGray));
+
         let mut spans = vec![
             Span::styled(" DevTUI CMS ", Style::default().fg(Color::Black).bg(Color::Cyan)),
             Span::raw(format!("  {blog_name}")),
+            sep.clone(),
             Span::styled(
-                format!("  {} articles", self.articles.len()),
+                format!("{} articles", self.articles.len()),
                 Style::default().fg(Color::DarkGray),
             ),
+            sep.clone(),
         ];
 
         if self.building {
             spans.push(Span::styled(
-                "  building...",
+                "building...",
                 Style::default().fg(Color::Yellow),
             ));
-        }
-
-        if self.serving {
+        } else if self.serving {
             spans.push(Span::styled(
-                format!("  serving :{}", ops::SERVE_PORT),
+                format!("serving :{}", ops::SERVE_PORT),
                 Style::default().fg(Color::Green),
+            ));
+        } else {
+            spans.push(Span::styled(
+                "server stopped",
+                Style::default().fg(Color::DarkGray),
             ));
         }
 
         if let Some(built_at) = &self.last_built {
+            spans.push(sep);
             spans.push(Span::styled(
-                format!("  {}", ops::format_built_ago(built_at.elapsed())),
+                ops::format_built_ago(built_at.elapsed()),
                 Style::default().fg(Color::DarkGray),
             ));
         }
@@ -326,7 +334,7 @@ impl ListView {
         let widths = [
             Constraint::Length(7),
             Constraint::Length(3),
-            Constraint::Length(4),
+            Constraint::Length(6),
             Constraint::Length(12),
             Constraint::Min(20),
         ];
@@ -644,7 +652,7 @@ impl ListView {
         }
     }
 
-    fn refresh(&mut self, conn: &Connection) {
+    pub fn refresh(&mut self, conn: &Connection) {
         self.refresh_with_selection(conn, true);
     }
 

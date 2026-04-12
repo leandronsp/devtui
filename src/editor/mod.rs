@@ -107,20 +107,23 @@ fn cms_loop(
     blog_dir: &Path,
     html_config: Option<&HtmlPreviewConfig>,
 ) -> io::Result<()> {
-    loop {
-        let articles = db::list_articles(conn, None)
-            .map_err(|e| io::Error::other(e.to_string()))?;
+    let articles = db::list_articles(conn, None)
+        .map_err(|e| io::Error::other(e.to_string()))?;
 
-        let mut list_view = ListView::new(blog_dir.to_path_buf(), articles);
+    let mut list_view = ListView::new(blog_dir.to_path_buf(), articles);
+
+    loop {
         let action = list_view.run(terminal, conn)?;
 
         match action {
             ListAction::Quit => return Ok(()),
             ListAction::Edit(id) => {
                 edit_article(terminal, conn, blog_dir, id, html_config)?;
+                list_view.refresh(conn);
             }
             ListAction::New => {
                 new_article(terminal, conn, blog_dir, html_config)?;
+                list_view.refresh(conn);
             }
         }
     }

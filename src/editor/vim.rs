@@ -134,18 +134,12 @@ pub fn run(
         }
     });
 
-    let file_display = file_path
-        .file_name()
-        .map(|n| n.to_string_lossy().to_string())
-        .unwrap_or_else(|| file_path.display().to_string());
-
     run_loop(
         terminal,
         &parser,
         &mut pty_writer,
         &pty_pair.master,
         &vim_exited,
-        &file_display,
         &content_swap,
         html_config,
     )?;
@@ -398,7 +392,6 @@ impl RunLoopState {
         parser: &Arc<RwLock<vt100::Parser>>,
         vim_state: &VimState,
         scroll: &ScrollInfo,
-        file_display: &str,
         has_browser: bool,
     ) -> io::Result<()> {
         let (mode_label, mode_st) = mode_style(vim_state.mode);
@@ -448,8 +441,7 @@ impl RunLoopState {
             };
             let status = Line::from(Span::styled(
                 format!(
-                    " {} | DevTUI [{layout_label}] ^G:layout{browser_hint}{scroll_hint}",
-                    file_display,
+                    " DevTUI [{layout_label}] ^G:layout{browser_hint}{scroll_hint}",
                 ),
                 Style::default().fg(Color::DarkGray),
             ));
@@ -547,7 +539,6 @@ fn run_loop(
     pty_writer: &mut Box<dyn Write + Send>,
     pty_master: &Box<dyn portable_pty::MasterPty + Send>,
     vim_exited: &Arc<AtomicBool>,
-    file_display: &str,
     content_swap: &Arc<Mutex<Option<String>>>,
     html_config: Option<&HtmlPreviewConfig>,
 ) -> io::Result<()> {
@@ -565,7 +556,7 @@ fn run_loop(
         state.handle_save_detected(&vim_state, terminal, pty_master, parser)?;
         state.manage_flash();
         let scroll = state.calculate_scroll(terminal, &vim_state, content_updated)?;
-        state.draw_frame(terminal, parser, &vim_state, &scroll, file_display, html_config.is_some())?;
+        state.draw_frame(terminal, parser, &vim_state, &scroll, html_config.is_some())?;
 
         if event::poll(Duration::from_millis(30))? {
             match event::read()? {
