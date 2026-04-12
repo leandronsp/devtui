@@ -80,6 +80,18 @@ pub fn run_serve(dist_dir: &Path, stop: Arc<AtomicBool>) -> Result<(), String> {
     Ok(())
 }
 
+/// Format elapsed time since last build for display in the header.
+pub fn format_built_ago(elapsed: std::time::Duration) -> String {
+    let secs = elapsed.as_secs();
+    if secs < 60 {
+        format!("built {secs}s ago")
+    } else if secs < 3600 {
+        format!("built {}m ago", secs / 60)
+    } else {
+        format!("built {}h ago", secs / 3600)
+    }
+}
+
 fn content_type_header(value: &str) -> tiny_http::Header {
     tiny_http::Header::from_bytes("Content-Type", value).expect("valid Content-Type header")
 }
@@ -152,6 +164,24 @@ mod tests {
 
         let result = handle.join().expect("serve thread panicked");
         assert!(result.is_ok(), "serve returned error: {result:?}");
+    }
+
+    #[test]
+    fn format_built_ago_shows_seconds() {
+        let elapsed = std::time::Duration::from_secs(12);
+        assert_eq!(format_built_ago(elapsed), "built 12s ago");
+    }
+
+    #[test]
+    fn format_built_ago_shows_minutes() {
+        let elapsed = std::time::Duration::from_secs(125);
+        assert_eq!(format_built_ago(elapsed), "built 2m ago");
+    }
+
+    #[test]
+    fn format_built_ago_shows_hours() {
+        let elapsed = std::time::Duration::from_secs(3700);
+        assert_eq!(format_built_ago(elapsed), "built 1h ago");
     }
 
     #[test]
