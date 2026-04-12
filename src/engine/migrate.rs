@@ -60,6 +60,15 @@ mod tests {
     }
 
     #[test]
+    fn normalize_is_idempotent_on_canonical_input() {
+        let canonical = "---\ntitle: \"Foo\"\npublished_at: \"2026-03-28\"\n---\n\nBody\n";
+        let once = normalize_frontmatter(canonical);
+        let twice = normalize_frontmatter(&once);
+        assert_eq!(once, canonical);
+        assert_eq!(twice, canonical);
+    }
+
+    #[test]
     fn normalize_does_not_touch_body_text() {
         let input = "---\ndate: 2026-03-28\n---\n\nthe date: was yesterday\n";
         let expected = "---\npublished_at: \"2026-03-28\"\n---\n\nthe date: was yesterday\n";
