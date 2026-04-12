@@ -261,6 +261,8 @@ struct RunLoopState {
     scribe_session_started: bool,
     /// Status message shown in the scribe panel header.
     scribe_status: &'static str,
+    /// When the current scribe check started (for slow detection).
+    scribe_check_started: Option<std::time::Instant>,
 }
 
 impl RunLoopState {
@@ -284,6 +286,7 @@ impl RunLoopState {
             scribe_session_name: format!("scribe-{}", std::process::id()),
             scribe_session_started: false,
             scribe_status: "idle",
+            scribe_check_started: None,
         }
     }
 
@@ -324,6 +327,15 @@ impl RunLoopState {
         true
     }
 
+    /// Update scribe status to "slow" if check has been running >15 seconds.
+    fn poll_scribe_slow(&mut self) {
+        if let Some(started) = self.scribe_check_started {
+            if self.scribe_pending && started.elapsed() > Duration::from_secs(15) {
+                self.scribe_status = "checking... (slow)";
+            }
+        }
+    }
+
     /// Scribe idle debounce: after 10 seconds of no content changes, send to overmind.
     fn poll_scribe_check(&mut self) {
         if self.split_layout != SplitLayout::Scribe || self.scribe_pending {
@@ -340,6 +352,7 @@ impl RunLoopState {
         self.scribe_idle_since = None;
         self.scribe_pending = true;
         self.scribe_status = "checking...";
+        self.scribe_check_started = Some(std::time::Instant::now());
         self.scribe_last_sent = self.last_content.clone();
 
         let session_name = self.scribe_session_name.clone();
@@ -375,6 +388,7 @@ impl RunLoopState {
         };
         if let Some(result) = result {
             self.scribe_pending = false;
+            self.scribe_check_started = None;
             match result {
                 Ok(response) => {
                     let annotations = scribe::extract_annotations(&response);
@@ -670,6 +684,7 @@ fn run_loop(
         state.poll_content_swap(content_swap);
         let content_updated = state.poll_preview_render();
         state.poll_scribe_check();
+        state.poll_scribe_slow();
         state.poll_scribe_result();
         let vim_state = parse_title(parser);
         state.handle_save_detected(&vim_state, terminal, pty_master, parser)?;
