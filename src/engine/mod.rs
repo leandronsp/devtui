@@ -5,6 +5,7 @@ pub mod feed;
 pub mod index;
 pub mod links;
 pub mod markdown;
+pub mod migrate;
 pub mod minify;
 pub mod seo;
 pub mod template;
