@@ -1,5 +1,6 @@
 use std::io;
 use std::path::PathBuf;
+use std::sync::{Arc, Mutex};
 use std::time::Instant;
 
 use crossterm::event::{self, Event, KeyCode, KeyModifiers};
@@ -13,6 +14,7 @@ use rusqlite::Connection;
 use std::time::Duration;
 
 use super::db::{self, Article, Status};
+use super::ops;
 
 /// Action returned from the list view to the dispatcher.
 pub enum ListAction {
@@ -30,6 +32,10 @@ pub struct ListView {
     flash: Option<(String, Instant)>,
     show_help: bool,
     confirm_delete: Option<i64>,
+    building: bool,
+    build_result: Arc<Mutex<Option<Result<String, String>>>>,
+    last_error: Option<String>,
+    show_error: bool,
 }
 
 impl ListView {
@@ -47,6 +53,10 @@ impl ListView {
             flash: None,
             show_help: false,
             confirm_delete: None,
+            building: false,
+            build_result: Arc::new(Mutex::new(None)),
+            last_error: None,
+            show_error: false,
         }
     }
 
@@ -56,6 +66,7 @@ impl ListView {
         conn: &Connection,
     ) -> io::Result<ListAction> {
         loop {
+            self.poll_build_result();
             self.draw(terminal)?;
 
             if event::poll(Duration::from_millis(50))? {
@@ -66,6 +77,54 @@ impl ListView {
                 }
             }
         }
+    }
+
+    fn poll_build_result(&mut self) {
+        let result = if let Ok(mut guard) = self.build_result.lock() {
+            guard.take()
+        } else {
+            return;
+        };
+        if let Some(result) = result {
+            self.building = false;
+            match result {
+                Ok(msg) => {
+                    self.flash = Some((msg, Instant::now()));
+                }
+                Err(err) => {
+                    let first_line = err.lines().next().unwrap_or(&err).to_string();
+                    self.flash = Some((format!("Build failed: {first_line}"), Instant::now()));
+                    self.last_error = Some(err);
+                }
+            }
+        }
+    }
+
+    fn start_build(&mut self) {
+        if self.building {
+            return;
+        }
+        self.building = true;
+
+        let blog_dir = self.blog_dir.clone();
+        let dist_dir = ops::dist_dir_for_blog(&self.blog_dir);
+        let result_slot = Arc::clone(&self.build_result);
+
+        std::thread::spawn(move || {
+            let start = Instant::now();
+            let result = ops::run_build(&blog_dir, &dist_dir);
+            let msg = match result {
+                Ok(report) => Ok(format!(
+                    "Built {} articles in {:.1}s",
+                    report.built,
+                    start.elapsed().as_secs_f64()
+                )),
+                Err(e) => Err(e),
+            };
+            if let Ok(mut guard) = result_slot.lock() {
+                *guard = Some(msg);
+            }
+        });
     }
 
     fn draw(&mut self, terminal: &mut ratatui::DefaultTerminal) -> io::Result<()> {
@@ -102,21 +161,47 @@ impl ListView {
             if let Some(id) = self.confirm_delete {
                 self.render_delete_confirm(frame, frame.area(), id);
             }
+
+            // Error overlay
+            if self.show_error {
+                self.render_error_overlay(frame, frame.area());
+            }
         })?;
         Ok(())
     }
 
     fn render_header(&self, frame: &mut ratatui::Frame, area: Rect) {
+        let blog_name = self
+            .blog_dir
+            .file_name()
+            .map(|n| n.to_string_lossy().into_owned())
+            .unwrap_or_default();
+
         let mut spans = vec![
             Span::styled(" DevTUI CMS ", Style::default().fg(Color::Black).bg(Color::Cyan)),
-            Span::raw(format!("  {} articles", self.articles.len())),
+            Span::raw(format!("  {blog_name}")),
+            Span::styled(
+                format!("  {} articles", self.articles.len()),
+                Style::default().fg(Color::DarkGray),
+            ),
         ];
 
-        if let Some((msg, _)) = &self.flash {
-            spans.push(Span::raw("  "));
+        if self.building {
             spans.push(Span::styled(
-                msg.clone(),
-                Style::default().fg(Color::Green).add_modifier(Modifier::BOLD),
+                "  building...",
+                Style::default().fg(Color::Yellow),
+            ));
+        }
+
+        if let Some((msg, _)) = &self.flash {
+            let color = if msg.starts_with("Build failed") {
+                Color::Red
+            } else {
+                Color::Green
+            };
+            spans.push(Span::styled(
+                format!("  {msg}"),
+                Style::default().fg(color).add_modifier(Modifier::BOLD),
             ));
         }
 
@@ -200,7 +285,7 @@ impl ListView {
             frame.render_widget(Paragraph::new(search), area);
         } else {
             let hints = Line::from(Span::styled(
-                " j/k:nav  Enter:edit  n:new  p:publish  i:pin  d:delete  /:search  ?:help  q:quit",
+                " j/k:nav  Enter:edit  n:new  p:pub  i:pin  d:del  b:build  e:errors  /:search  ?:help  q:quit",
                 Style::default().fg(Color::DarkGray),
             ));
             frame.render_widget(Paragraph::new(hints), area);
@@ -222,6 +307,8 @@ impl ListView {
             Line::from(" p            Toggle publish/draft"),
             Line::from(" i            Toggle pin"),
             Line::from(" d            Delete (with confirm)"),
+            Line::from(" b            Build blog"),
+            Line::from(" e            Show last error"),
             Line::from(" /            Search by title"),
             Line::from(" Esc          Clear search / close"),
             Line::from(" q            Quit"),
@@ -281,12 +368,47 @@ impl ListView {
         frame.render_widget(confirm, popup_area);
     }
 
+    fn render_error_overlay(&self, frame: &mut ratatui::Frame, area: Rect) {
+        let error_text = self
+            .last_error
+            .as_deref()
+            .unwrap_or("No errors");
+
+        let lines: Vec<Line> = error_text
+            .lines()
+            .map(|l| Line::from(format!(" {l}")))
+            .collect();
+
+        let width = (area.width - 4).min(80);
+        let height = (lines.len() as u16 + 2).min(area.height - 2);
+        let x = area.x + (area.width.saturating_sub(width)) / 2;
+        let y = area.y + (area.height.saturating_sub(height)) / 2;
+        let popup_area = Rect::new(x, y, width, height);
+
+        let error = Paragraph::new(lines).block(
+            Block::default()
+                .borders(Borders::ALL)
+                .border_style(Style::default().fg(Color::Red))
+                .title(" Error (Esc to close) "),
+        );
+        frame.render_widget(ratatui::widgets::Clear, popup_area);
+        frame.render_widget(error, popup_area);
+    }
+
     fn handle_key(
         &mut self,
         code: KeyCode,
         modifiers: KeyModifiers,
         conn: &Connection,
     ) -> io::Result<Option<ListAction>> {
+        // Error overlay mode
+        if self.show_error {
+            if matches!(code, KeyCode::Esc) {
+                self.show_error = false;
+            }
+            return Ok(None);
+        }
+
         // Delete confirmation mode
         if let Some(id) = self.confirm_delete {
             match code {
@@ -360,6 +482,12 @@ impl ListView {
             KeyCode::Char('d') => {
                 if let Some(article) = self.selected_article() {
                     self.confirm_delete = Some(article.id);
+                }
+            }
+            KeyCode::Char('b') => self.start_build(),
+            KeyCode::Char('e') => {
+                if self.last_error.is_some() {
+                    self.show_error = true;
                 }
             }
             KeyCode::Char('/') => {
@@ -450,5 +578,78 @@ impl ListView {
         } else {
             self.table_state.select(Some(0));
         }
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    fn make_list_view() -> ListView {
+        ListView::new(PathBuf::from("blogs/test"), vec![])
+    }
+
+    #[test]
+    fn poll_build_result_clears_building_flag_on_success() {
+        let mut view = make_list_view();
+        view.building = true;
+        *view.build_result.lock().unwrap() = Some(Ok("Built 1 articles in 0.1s".into()));
+        view.poll_build_result();
+        assert!(!view.building);
+    }
+
+    #[test]
+    fn poll_build_result_sets_flash_on_success() {
+        let mut view = make_list_view();
+        view.building = true;
+        *view.build_result.lock().unwrap() = Some(Ok("Built 3 articles in 0.5s".into()));
+        view.poll_build_result();
+        let (msg, _) = view.flash.as_ref().unwrap();
+        assert_eq!(msg, "Built 3 articles in 0.5s");
+    }
+
+    #[test]
+    fn poll_build_result_stores_error_on_failure() {
+        let mut view = make_list_view();
+        view.building = true;
+        *view.build_result.lock().unwrap() =
+            Some(Err("engine exploded\ndetails here".into()));
+        view.poll_build_result();
+        assert!(!view.building);
+        assert_eq!(
+            view.last_error.as_deref(),
+            Some("engine exploded\ndetails here")
+        );
+    }
+
+    #[test]
+    fn poll_build_result_shows_first_error_line_in_flash() {
+        let mut view = make_list_view();
+        view.building = true;
+        *view.build_result.lock().unwrap() =
+            Some(Err("first line\nsecond line\nthird".into()));
+        view.poll_build_result();
+        let (msg, _) = view.flash.as_ref().unwrap();
+        assert_eq!(msg, "Build failed: first line");
+    }
+
+    #[test]
+    fn start_build_guards_against_double_build() {
+        let mut view = make_list_view();
+        view.building = true;
+        let slot_before = Arc::strong_count(&view.build_result);
+        view.start_build();
+        // No new thread spawned, Arc count unchanged
+        assert_eq!(Arc::strong_count(&view.build_result), slot_before);
+    }
+
+    #[test]
+    fn poll_build_result_is_noop_when_no_result() {
+        let mut view = make_list_view();
+        view.building = true;
+        view.poll_build_result();
+        // building flag unchanged, no flash set
+        assert!(view.building);
+        assert!(view.flash.is_none());
     }
 }
