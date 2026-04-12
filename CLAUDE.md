@@ -72,7 +72,7 @@ Blog selects theme via `theme = "paper"` in `blog.toml`. Default theme is `paper
 
 ### Blog Content (blogs/, gitignored)
 
-- **`blogs/<name>/blog.toml`** — Site config (title, subtitle, url, author, date_field, lang, theme).
+- **`blogs/<name>/blog.toml`** — Site config (title, subtitle, url, author, lang, theme).
 - **`blogs/<name>/posts/`** — Markdown posts with YAML frontmatter.
 - **`blogs/<name>/templates/`** — Optional template overrides.
 
@@ -136,7 +136,6 @@ Each blog has a `blog.toml` with:
 - `title`, `subtitle` — displayed on index and in meta tags
 - `url` — canonical base URL for SEO
 - `author` — used in meta tags and JSON-LD
-- `date_field` — which frontmatter field holds the date (e.g. `date` or `published_at`)
 - `lang` — HTML lang attribute
 - `theme` — CSS theme (default: `paper`). Available: `paper`, `terminal`
 - `og_image` — Open Graph image URL for social media previews (optional, site-wide default)

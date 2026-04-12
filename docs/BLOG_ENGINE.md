@@ -29,7 +29,6 @@ title = "My Site"
 subtitle = "a blog about things"
 url = "https://my-site.com"
 author = "Your Name"
-date_field = "date"
 lang = "en"
 
 # optional
