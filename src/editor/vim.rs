@@ -23,6 +23,7 @@ const CONTENT_TMP: &str = "/tmp/devtui-content";
 #[derive(Clone, Copy, PartialEq)]
 enum SplitLayout {
     Vertical,   // editor left, preview right (50/50)
+    Scribe,     // editor left, scribe panel right (50/50)
     EditorOnly, // full editor, no preview
 }
 
@@ -222,7 +223,7 @@ fn mode_style(mode: &str) -> (&str, Style) {
 fn vim_size(layout: SplitLayout, width: u16, height: u16) -> (u16, u16) {
     let rows = height.saturating_sub(3); // status bar + borders
     match layout {
-        SplitLayout::Vertical => ((width / 2).saturating_sub(2), rows),
+        SplitLayout::Vertical | SplitLayout::Scribe => ((width / 2).saturating_sub(2), rows),
         SplitLayout::EditorOnly => (width.saturating_sub(2), rows),
     }
 }
@@ -244,6 +245,8 @@ struct RunLoopState {
     /// Blog author from blog.toml; rendered in preview header when post has no
     /// `author:` frontmatter field.
     blog_author: Option<String>,
+    /// Rendered scribe annotation lines for the right pane.
+    scribe_lines: Vec<Line<'static>>,
 }
 
 impl RunLoopState {
@@ -259,6 +262,7 @@ impl RunLoopState {
             flash: None,
             was_modified: false,
             blog_author,
+            scribe_lines: Vec::new(),
         }
     }
 
@@ -290,7 +294,7 @@ impl RunLoopState {
         self.preview_stale = false;
         self.content_changed_at = None;
 
-        if self.split_layout != SplitLayout::EditorOnly {
+        if self.split_layout == SplitLayout::Vertical {
             let (lines, offsets) = preview::render_with_offsets(&self.last_content, self.blog_author.as_deref());
             self.cached_offsets = offsets;
             self.cached_lines = lines;
@@ -364,7 +368,7 @@ impl RunLoopState {
         content_updated: bool,
     ) -> io::Result<ScrollInfo> {
         let pane_width = match self.split_layout {
-            SplitLayout::Vertical => (terminal.size()?.width / 2).saturating_sub(2),
+            SplitLayout::Vertical | SplitLayout::Scribe => (terminal.size()?.width / 2).saturating_sub(2),
             SplitLayout::EditorOnly => 1,
         } as usize;
         let visual_lines: usize = self.cached_lines.iter().map(|line| {
@@ -398,6 +402,7 @@ impl RunLoopState {
         let title_message = self.title_message(vim_state);
         let layout_label = match self.split_layout {
             SplitLayout::Vertical => "|",
+            SplitLayout::Scribe => "S",
             SplitLayout::EditorOnly => "[]",
         };
 
@@ -427,6 +432,15 @@ impl RunLoopState {
                     render_editor(frame, parser, mode_label, mode_st, title_message, post_title.as_deref(), is_draft, panes[0]);
                     render_preview(frame, &self.cached_lines, scroll.clamped_scroll, panes[1]);
                 }
+                SplitLayout::Scribe => {
+                    let panes = Layout::horizontal([
+                        Constraint::Percentage(50),
+                        Constraint::Percentage(50),
+                    ])
+                    .split(main_area);
+                    render_editor(frame, parser, mode_label, mode_st, title_message, post_title.as_deref(), is_draft, panes[0]);
+                    render_scribe(frame, &self.scribe_lines, panes[1]);
+                }
                 SplitLayout::EditorOnly => {
                     render_editor(frame, parser, mode_label, mode_st, title_message, post_title.as_deref(), is_draft, main_area);
                 }
@@ -434,14 +448,15 @@ impl RunLoopState {
 
             // Status bar
             let browser_hint = if has_browser { " ^O:browser" } else { "" };
-            let scroll_hint = if self.split_layout != SplitLayout::EditorOnly {
+            let scroll_hint = if self.split_layout == SplitLayout::Vertical {
                 " ^F:follow-cursor ^J/^K:scroll"
             } else {
                 ""
             };
+            let scribe_hint = " ^T:scribe";
             let status = Line::from(Span::styled(
                 format!(
-                    " DevTUI [{layout_label}] ^G:layout{browser_hint}{scroll_hint}",
+                    " DevTUI [{layout_label}] ^G:layout{scribe_hint}{browser_hint}{scroll_hint}",
                 ),
                 Style::default().fg(Color::DarkGray),
             ));
@@ -466,14 +481,15 @@ impl RunLoopState {
     ) -> io::Result<bool> {
         let ctrl = key.modifiers.contains(KeyModifiers::CONTROL);
 
-        // Ctrl+G: toggle layout
+        // Ctrl+G: cycle layout (preview -> scribe -> editor-only -> preview)
         if key.code == KeyCode::Char('g') && ctrl {
             self.split_layout = match self.split_layout {
-                SplitLayout::Vertical => SplitLayout::EditorOnly,
+                SplitLayout::Vertical => SplitLayout::Scribe,
+                SplitLayout::Scribe => SplitLayout::EditorOnly,
                 SplitLayout::EditorOnly => SplitLayout::Vertical,
             };
             resize_pty(self.split_layout, terminal, pty_master, parser)?;
-            if self.split_layout != SplitLayout::EditorOnly && self.cached_lines.is_empty() {
+            if self.split_layout == SplitLayout::Vertical && self.cached_lines.is_empty() {
                 let (lines, offsets) = preview::render_with_offsets(&self.last_content, self.blog_author.as_deref());
                 self.cached_offsets = offsets;
                 self.cached_lines = lines;
@@ -481,8 +497,17 @@ impl RunLoopState {
             return Ok(false);
         }
 
+        // Ctrl+T: switch directly to scribe panel
+        if key.code == KeyCode::Char('t') && ctrl {
+            if self.split_layout != SplitLayout::Scribe {
+                self.split_layout = SplitLayout::Scribe;
+                resize_pty(self.split_layout, terminal, pty_master, parser)?;
+            }
+            return Ok(false);
+        }
+
         // Ctrl+F: follow editor cursor in preview
-        if key.code == KeyCode::Char('f') && ctrl && self.split_layout != SplitLayout::EditorOnly {
+        if key.code == KeyCode::Char('f') && ctrl && self.split_layout == SplitLayout::Vertical {
             self.preview_scroll = follow_editor_cursor(
                 vim_state.cursor_line, vim_state.total_lines,
                 &self.cached_lines, &self.cached_offsets, scroll.pane_width, scroll.visible_rows,
@@ -502,13 +527,13 @@ impl RunLoopState {
         }
 
         // Ctrl+J: scroll preview down
-        if key.code == KeyCode::Char('j') && ctrl && self.split_layout != SplitLayout::EditorOnly {
+        if key.code == KeyCode::Char('j') && ctrl && self.split_layout == SplitLayout::Vertical {
             self.preview_scroll = self.preview_scroll.saturating_add(3).min(scroll.max_scroll);
             return Ok(false);
         }
 
         // Ctrl+K: scroll preview up
-        if key.code == KeyCode::Char('k') && ctrl && self.split_layout != SplitLayout::EditorOnly {
+        if key.code == KeyCode::Char('k') && ctrl && self.split_layout == SplitLayout::Vertical {
             self.preview_scroll = self.preview_scroll.saturating_sub(3);
             return Ok(false);
         }
@@ -653,6 +678,34 @@ fn render_preview(
         .wrap(Wrap { trim: false })
         .scroll((scroll, 0));
     frame.render_widget(preview_widget, area);
+}
+
+fn render_scribe(
+    frame: &mut ratatui::Frame,
+    scribe_lines: &[Line<'static>],
+    area: ratatui::layout::Rect,
+) {
+    let block = Block::default()
+        .borders(Borders::ALL)
+        .border_style(Style::default().fg(Color::DarkGray))
+        .title(" SCRIBE ");
+
+    let content = if scribe_lines.is_empty() {
+        vec![
+            Line::from(""),
+            Line::from(Span::styled(
+                " Waiting for content...",
+                Style::default().fg(Color::DarkGray),
+            )),
+        ]
+    } else {
+        scribe_lines.to_vec()
+    };
+
+    let widget = Paragraph::new(content)
+        .block(block)
+        .wrap(Wrap { trim: false });
+    frame.render_widget(widget, area);
 }
 
 /// Calculate text preview scroll position to follow the cursor line.
