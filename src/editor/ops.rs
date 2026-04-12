@@ -118,6 +118,51 @@ pub fn run_deploy(dist_dir: &Path, deploy_dir: &Path) -> Result<String, String> 
     }
 }
 
+/// List available themes from the engine themes directory.
+pub fn available_themes() -> Vec<String> {
+    let themes_dir = engine_dir().join("themes");
+    let mut themes = Vec::new();
+    if let Ok(entries) = std::fs::read_dir(&themes_dir) {
+        for entry in entries.flatten() {
+            if entry.path().is_dir() {
+                if let Some(name) = entry.file_name().to_str() {
+                    themes.push(name.to_string());
+                }
+            }
+        }
+    }
+    themes.sort();
+    themes
+}
+
+/// Update the theme in blog.toml. Replaces or appends `theme = "..."`.
+pub fn set_theme(blog_dir: &Path, theme: &str) -> Result<(), String> {
+    let toml_path = blog_dir.join("blog.toml");
+    let content = std::fs::read_to_string(&toml_path)
+        .map_err(|e| format!("failed to read blog.toml: {e}"))?;
+
+    let new_line = format!("theme = \"{theme}\"");
+    let new_content = if content.lines().any(|l| l.trim_start().starts_with("theme")) {
+        content
+            .lines()
+            .map(|l| {
+                if l.trim_start().starts_with("theme") {
+                    new_line.as_str()
+                } else {
+                    l
+                }
+            })
+            .collect::<Vec<_>>()
+            .join("\n")
+            + "\n"
+    } else {
+        format!("{content}{new_line}\n")
+    };
+
+    std::fs::write(&toml_path, new_content)
+        .map_err(|e| format!("failed to write blog.toml: {e}"))
+}
+
 /// Build the blog: sync DB to filesystem, then run the engine build pipeline.
 pub fn run_build(blog_dir: &Path, dist_dir: &Path) -> Result<BuildReport, String> {
     super::sync_managed_blog(blog_dir).map_err(|e| e.to_string())?;
@@ -204,6 +249,45 @@ mod tests {
     fn format_built_ago_shows_hours() {
         let elapsed = std::time::Duration::from_secs(3700);
         assert_eq!(format_built_ago(elapsed), "built 1h ago");
+    }
+
+    #[test]
+    fn set_theme_replaces_existing_theme() {
+        let blog_dir = tempdir();
+        fs::write(
+            blog_dir.join("blog.toml"),
+            "title = \"Test\"\ntheme = \"paper\"\nurl = \"https://t.com\"\n",
+        )
+        .unwrap();
+
+        set_theme(&blog_dir, "terminal").unwrap();
+
+        let content = fs::read_to_string(blog_dir.join("blog.toml")).unwrap();
+        assert!(content.contains("theme = \"terminal\""));
+        assert!(!content.contains("theme = \"paper\""));
+    }
+
+    #[test]
+    fn set_theme_appends_when_missing() {
+        let blog_dir = tempdir();
+        fs::write(
+            blog_dir.join("blog.toml"),
+            "title = \"Test\"\nurl = \"https://t.com\"\n",
+        )
+        .unwrap();
+
+        set_theme(&blog_dir, "newspaper").unwrap();
+
+        let content = fs::read_to_string(blog_dir.join("blog.toml")).unwrap();
+        assert!(content.contains("theme = \"newspaper\""));
+    }
+
+    #[test]
+    fn available_themes_returns_theme_names() {
+        let themes = available_themes();
+        assert!(themes.contains(&"paper".to_string()));
+        assert!(themes.contains(&"terminal".to_string()));
+        assert!(themes.contains(&"newspaper".to_string()));
     }
 
     #[test]
