@@ -2,8 +2,19 @@ pub fn normalize_frontmatter(content: &str) -> String {
     let Some((frontmatter, body)) = split_frontmatter(content) else {
         return content.to_string();
     };
-    let rewritten = frontmatter.replace("date:", "published_at:");
+    let rewritten: String = frontmatter
+        .lines()
+        .map(rewrite_line)
+        .map(|line| format!("{line}\n"))
+        .collect();
     format!("---\n{rewritten}---\n{body}")
+}
+
+fn rewrite_line(line: &str) -> String {
+    if let Some(rest) = line.strip_prefix("date:") {
+        return format!("published_at:{rest}");
+    }
+    line.to_string()
 }
 
 fn split_frontmatter(content: &str) -> Option<(String, String)> {
@@ -22,6 +33,13 @@ mod tests {
     fn normalize_renames_date_to_published_at() {
         let input = "---\ndate: 2026-03-28\n---\n";
         let expected = "---\npublished_at: 2026-03-28\n---\n";
+        assert_eq!(normalize_frontmatter(input), expected);
+    }
+
+    #[test]
+    fn normalize_only_renames_exact_date_field() {
+        let input = "---\nlast_date: 2026-03-28\n---\n";
+        let expected = "---\nlast_date: 2026-03-28\n---\n";
         assert_eq!(normalize_frontmatter(input), expected);
     }
 
