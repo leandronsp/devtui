@@ -41,6 +41,7 @@ pub fn run(
     terminal: &mut ratatui::DefaultTerminal,
     file_path: PathBuf,
     html_config: Option<&HtmlPreviewConfig>,
+    scribe: &mut scribe::ScribeState,
 ) -> io::Result<(EditorResult, String)> {
     if !file_path.exists() {
         std::fs::write(&file_path, "")?;
@@ -143,6 +144,7 @@ pub fn run(
         &vim_exited,
         &content_swap,
         html_config,
+        scribe,
     )?;
 
     // Read final content from the actual file vim was editing.
@@ -240,6 +242,10 @@ struct RunLoopState {
     preview_scroll: u16,
     /// Set when content changes; cleared after 100ms debounce fires.
     content_changed_at: Option<std::time::Instant>,
+    /// Last known first visible line from vim titlestring (1-based).
+    last_first_visible_line: usize,
+    /// Last known visible row count from terminal height.
+    last_visible_rows: usize,
     preview_stale: bool,
     flash: Option<(&'static str, std::time::Instant)>,
     /// Tracks modified state across frames to detect :w saves.
@@ -251,7 +257,7 @@ struct RunLoopState {
 }
 
 impl RunLoopState {
-    fn new(blog_author: Option<String>) -> Self {
+    fn new(blog_author: Option<String>, scribe: scribe::ScribeState) -> Self {
         Self {
             last_content: String::new(),
             cached_lines: Vec::new(),
@@ -263,7 +269,9 @@ impl RunLoopState {
             flash: None,
             was_modified: false,
             blog_author,
-            scribe: scribe::ScribeState::new(format!("scribe-{}", std::process::id())),
+            last_first_visible_line: 1,
+            last_visible_rows: 40,
+            scribe,
         }
     }
 
@@ -277,6 +285,8 @@ impl RunLoopState {
                     self.content_changed_at = Some(std::time::Instant::now());
                     self.preview_stale = true;
                     self.scribe.content_changed();
+                    self.scribe.annotations.clear();
+                    self.scribe.status_log.clear();
                 }
             }
         }
@@ -305,29 +315,38 @@ impl RunLoopState {
     }
 
     /// Scribe: check if idle debounce fired, spawn background thread if so.
+    /// Sends only the visible portion of the document to keep the prompt small.
     fn poll_scribe_check(&mut self) {
         let is_active = self.split_layout == SplitLayout::Scribe;
         if !self.scribe.should_check(&self.last_content, is_active) {
             return;
         }
 
-        let request = self.scribe.begin_check(&self.last_content);
-        let result_slot = Arc::clone(&self.scribe.result);
+        let lines: Vec<&str> = self.last_content.lines().collect();
+        let start = self.last_first_visible_line.saturating_sub(1); // 0-based index
+        let end = (start + self.last_visible_rows).min(lines.len());
+        let visible_content = lines[start..end].join("\n");
+        let start_line = start + 1; // 1-based for the prompt
 
-        thread::spawn(move || {
-            if request.session_needs_start {
-                if let Err(err) = ops::start_scribe_session(&request.session_name) {
-                    if let Ok(mut slot) = result_slot.lock() {
-                        *slot = Some(Err(err));
-                    }
-                    return;
+        let request = self.scribe.begin_check(&visible_content, start_line);
+
+        // Start session + subscriber on first check.
+        if request.session_needs_start {
+            let result_slot = Arc::clone(&self.scribe.result);
+            if let Err(err) = ops::start_scribe_session(&request.session_name, result_slot) {
+                if let Ok(mut slot) = self.scribe.result.lock() {
+                    *slot = Some(Err(err));
                 }
+                return;
             }
-            let prompt = scribe::build_check_prompt(&request.content);
-            let result = ops::send_to_scribe(&request.session_name, &prompt);
-            if let Ok(mut slot) = result_slot.lock() {
-                *slot = Some(result);
-            }
+        }
+
+        // Fire-and-forget send. The subscriber thread picks up the response.
+        let session_name = request.session_name.clone();
+        let prompt = scribe::build_check_prompt(&request.content, request.start_line);
+        log::info!("[scribe] check started ({} bytes prompt)", prompt.len());
+        thread::spawn(move || {
+            ops::send_to_scribe(&session_name, &prompt);
         });
     }
 
@@ -478,7 +497,8 @@ impl RunLoopState {
                     render_scribe(
                         frame, &scribe_lines, self.scribe.status,
                         &self.scribe.session_name, self.scribe.last_response,
-                        self.scribe.error.as_deref(), panes[1],
+                        self.scribe.error.as_deref(), &self.scribe.status_log,
+                        panes[1],
                     );
                 }
                 SplitLayout::EditorOnly => {
@@ -606,9 +626,13 @@ fn run_loop(
     vim_exited: &Arc<AtomicBool>,
     content_swap: &Arc<Mutex<Option<String>>>,
     html_config: Option<&HtmlPreviewConfig>,
+    scribe: &mut scribe::ScribeState,
 ) -> io::Result<()> {
     let blog_author = html_config.map(|c| c.blog_config.author.clone());
-    let mut state = RunLoopState::new(blog_author);
+    let placeholder = scribe::ScribeState::new(String::new());
+    let mut owned_scribe = std::mem::replace(scribe, placeholder);
+    owned_scribe.clear_display();
+    let mut state = RunLoopState::new(blog_author, owned_scribe);
 
     loop {
         if vim_exited.load(Ordering::Relaxed) {
@@ -621,6 +645,10 @@ fn run_loop(
         state.scribe.update_slow();
         state.scribe.poll_result();
         let vim_state = parse_title(parser);
+        state.last_first_visible_line = vim_state.first_visible_line;
+        if let Ok(size) = terminal.size() {
+            state.last_visible_rows = size.height.saturating_sub(4) as usize;
+        }
         state.handle_save_detected(&vim_state, terminal, pty_master, parser)?;
         state.manage_flash();
         let scroll = state.calculate_scroll(terminal, &vim_state, content_updated)?;
@@ -645,10 +673,9 @@ fn run_loop(
         }
     }
 
-    // Clean up scribe session on exit
-    if state.scribe.session_started {
-        let _ = ops::kill_scribe_session(&state.scribe.session_name);
-    }
+    // Move scribe state back so it survives across articles.
+    // Session kill happens at process exit, not article exit.
+    *scribe = state.scribe;
 
     Ok(())
 }
@@ -728,6 +755,7 @@ fn render_preview(
     frame.render_widget(preview_widget, area);
 }
 
+#[allow(clippy::too_many_arguments)]
 fn render_scribe(
     frame: &mut ratatui::Frame,
     scribe_lines: &[Line<'static>],
@@ -735,6 +763,7 @@ fn render_scribe(
     session_name: &str,
     last_response: Option<std::time::Instant>,
     error: Option<&str>,
+    status_log: &[String],
     area: ratatui::layout::Rect,
 ) {
     let (status_label, status_color) = match status {
@@ -757,24 +786,20 @@ fn render_scribe(
         .border_style(Style::default().fg(Color::DarkGray))
         .title(title);
 
+    let dim = Style::default().fg(Color::DarkGray);
     let content = if let Some(err) = error {
         vec![
             Line::from(""),
-            Line::from(Span::styled(
-                format!(" Error: {err}"),
-                Style::default().fg(Color::Red),
-            )),
+            Line::from(Span::styled(format!(" Error: {err}"), Style::default().fg(Color::Red))),
         ]
-    } else if scribe_lines.is_empty() {
-        vec![
-            Line::from(""),
-            Line::from(Span::styled(
-                " Waiting for content...",
-                Style::default().fg(Color::DarkGray),
-            )),
-        ]
-    } else {
+    } else if !scribe_lines.is_empty() {
         scribe_lines.to_vec()
+    } else if !status_log.is_empty() {
+        status_log.iter()
+            .map(|msg| Line::from(Span::styled(format!(" {msg}"), dim)))
+            .collect()
+    } else {
+        vec![Line::from(Span::styled(" Waiting for content...", dim))]
     };
 
     let widget = Paragraph::new(content)

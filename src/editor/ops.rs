@@ -310,102 +310,138 @@ fn ensure_overmind_daemon() -> Result<(), String> {
     }
 }
 
-/// Start an Overmind scribe session for the AI writing companion.
-pub fn start_scribe_session(session_name: &str) -> Result<String, String> {
+/// Escape a prompt for overmind CLI which silently drops multiline arguments.
+/// Replaces actual newlines with literal `\n` so the message stays single-line.
+/// The AI model interprets `\n` as line boundaries.
+pub fn escape_for_overmind(message: &str) -> String {
+    message.replace('\n', "\\n")
+}
+
+/// Start an Overmind scribe session and spawn a long-running subscriber thread.
+///
+/// The subscriber reads `overmind subscribe` events for the session's lifetime
+/// and pushes assistant text into `result_slot` as it arrives.
+/// Returns after the session is started and the subscriber is running.
+pub fn start_scribe_session(
+    session_name: &str,
+    result_slot: Arc<std::sync::Mutex<Option<Result<String, String>>>>,
+) -> Result<String, String> {
     ensure_overmind_daemon()?;
 
+    log::info!("[scribe] starting session: {session_name}");
     let output = std::process::Command::new("overmind")
-        .args(["run", "--type", "session", "--name", session_name, "--provider", "claude", "--model", "sonnet"])
+        .args(["run", "--type", "session", "--name", session_name, "--provider", "claude", "--model", "haiku"])
         .output()
         .map_err(|e| format!("failed to start overmind session: {e}"))?;
 
-    if output.status.success() {
-        Ok(session_name.to_string())
-    } else {
-        let stderr = String::from_utf8_lossy(&output.stderr);
-        Err(format!("overmind session start failed: {stderr}"))
-    }
-}
-
-/// Send content to the scribe session and wait for the AI response.
-///
-/// `overmind send` is fire-and-forget. The response arrives asynchronously
-/// in the session logs. This function sends the message, then polls
-/// `overmind logs` until the AI response appears after the `[human]` marker.
-pub fn send_to_scribe(session_name: &str, prompt: &str) -> Result<String, String> {
-    let output = std::process::Command::new("overmind")
-        .args(["send", session_name, prompt])
-        .output()
-        .map_err(|e| format!("failed to send to overmind: {e}"))?;
-
     if !output.status.success() {
         let stderr = String::from_utf8_lossy(&output.stderr);
-        return Err(format!("overmind send failed: {stderr}"));
+        log::error!("[scribe] session start failed: {stderr}");
+        return Err(format!("overmind session start failed: {stderr}"));
     }
+    log::info!("[scribe] session started");
 
-    // Poll logs until the AI response stabilizes (unchanged for 2 consecutive polls).
-    // The response streams incrementally, so we wait until it stops growing.
-    let deadline = std::time::Instant::now() + std::time::Duration::from_secs(60);
-    let mut prev_response = String::new();
-    loop {
-        if std::time::Instant::now() > deadline {
-            return Err("scribe response timed out after 60s".to_string());
-        }
+    // Spawn the long-running subscriber thread.
+    let name = session_name.to_string();
+    std::thread::spawn(move || {
+        run_subscriber(&name, &result_slot);
+    });
 
-        std::thread::sleep(std::time::Duration::from_secs(2));
-
-        let response = extract_response_from_logs(session_name)?;
-        if !response.is_empty() && response == prev_response {
-            return Ok(response);
-        }
-        prev_response = response;
-    }
+    Ok(session_name.to_string())
 }
 
-/// Read session logs and extract the AI response after the last `[human]` marker.
-fn extract_response_from_logs(session_name: &str) -> Result<String, String> {
-    let output = std::process::Command::new("overmind")
-        .args(["logs", session_name])
-        .output()
-        .map_err(|e| format!("failed to read overmind logs: {e}"))?;
+/// Long-running subscriber. Reads NDJSON events from `overmind subscribe`
+/// and pushes assistant text into the result slot for the main loop to pick up.
+fn run_subscriber(
+    session_name: &str,
+    result_slot: &Arc<std::sync::Mutex<Option<Result<String, String>>>>,
+) {
+    use std::io::BufRead;
 
-    if !output.status.success() {
-        let stderr = String::from_utf8_lossy(&output.stderr);
-        return Err(format!("overmind logs failed: {stderr}"));
-    }
-
-    let logs = String::from_utf8_lossy(&output.stdout);
-    Ok(parse_last_response(&logs))
-}
-
-/// Parse the AI response from overmind session logs.
-/// Logs format: `[human] <message>` followed by response lines without prefix.
-/// Returns everything after the last `[human]` line.
-pub fn parse_last_response(logs: &str) -> String {
-    let lines: Vec<&str> = logs.lines().collect();
-    let last_human = lines.iter().rposition(|l| l.starts_with("[human]"));
-    let response = match last_human {
-        Some(idx) => lines[idx + 1..].join("\n"),
-        None => return String::new(),
+    log::info!("[scribe] subscriber starting for {session_name}");
+    let mut child = match std::process::Command::new("overmind")
+        .args(["subscribe", session_name])
+        .stdout(std::process::Stdio::piped())
+        .stderr(std::process::Stdio::null())
+        .spawn()
+    {
+        Ok(c) => c,
+        Err(e) => {
+            log::error!("[scribe] subscriber spawn failed: {e}");
+            return;
+        }
     };
-    // Overmind logs escape quotes as \". Unescape for JSON parsing.
-    response.replace("\\\"", "\"")
+
+    let stdout = match child.stdout.take() {
+        Some(s) => s,
+        None => return,
+    };
+
+    let reader = std::io::BufReader::new(stdout);
+    for line in reader.lines() {
+        let line = match line {
+            Ok(l) => l,
+            Err(_) => break,
+        };
+
+        let event: serde_json::Value = match serde_json::from_str(&line) {
+            Ok(v) => v,
+            Err(_) => continue,
+        };
+
+        if event["type"].as_str() != Some("assistant") {
+            continue;
+        }
+
+        let content = match event["message"]["content"].as_array() {
+            Some(c) => c,
+            None => continue,
+        };
+
+        for item in content {
+            if item["type"].as_str() == Some("text") {
+                if let Some(text) = item["text"].as_str() {
+                    log::info!("[scribe] subscriber got text: {} bytes", text.len());
+                    if let Ok(mut slot) = result_slot.lock() {
+                        *slot = Some(Ok(text.to_string()));
+                    }
+                }
+            }
+        }
+    }
+
+    log::info!("[scribe] subscriber exited");
+    let _ = child.wait();
+}
+
+/// Fire-and-forget: send a prompt to the scribe session.
+pub fn send_to_scribe(session_name: &str, prompt: &str) {
+    let escaped = escape_for_overmind(prompt);
+    log::info!("[scribe] sending ({} bytes)", escaped.len());
+
+    let result = std::process::Command::new("overmind")
+        .args(["send", session_name, &escaped])
+        .output();
+
+    match result {
+        Ok(output) if output.status.success() => {
+            log::info!("[scribe] sent");
+        }
+        Ok(output) => {
+            let stderr = String::from_utf8_lossy(&output.stderr);
+            log::error!("[scribe] send failed: {stderr}");
+        }
+        Err(e) => log::error!("[scribe] send failed: {e}"),
+    }
 }
 
 /// Kill the scribe session on editor exit.
-pub fn kill_scribe_session(session_name: &str) -> Result<(), String> {
-    let output = std::process::Command::new("overmind")
+pub fn kill_scribe_session(session_name: &str) {
+    let _ = std::process::Command::new("overmind")
         .args(["kill", session_name])
-        .output()
-        .map_err(|e| format!("failed to kill overmind session: {e}"))?;
-
-    if output.status.success() {
-        Ok(())
-    } else {
-        let stderr = String::from_utf8_lossy(&output.stderr);
-        Err(format!("overmind kill failed: {stderr}"))
-    }
+        .output();
 }
+
 
 #[cfg(test)]
 mod tests {
@@ -497,7 +533,7 @@ mod tests {
         init_git_repo(&dir);
         fs::write(dir.join("index.html"), "<h1>Deploy</h1>").unwrap();
 
-        let result = repo_commit_push(&dir);
+        let _result = repo_commit_push(&dir);
 
         // Push will fail (no remote) but commit should succeed
         // For this test, just check that the commit happened
@@ -623,34 +659,17 @@ mod tests {
     }
 
     #[test]
-    fn parse_last_response_extracts_ai_reply() {
-        let logs = "[human] say hello\nhello world\nhow are you?";
-        assert_eq!(parse_last_response(logs), "hello world\nhow are you?");
+    fn escape_for_overmind_replaces_newlines_with_literal_backslash_n() {
+        let prompt = "line1\nline2\nline3";
+        let escaped = escape_for_overmind(prompt);
+        assert!(!escaped.contains('\n'));
+        assert_eq!(escaped, "line1\\nline2\\nline3");
     }
 
     #[test]
-    fn parse_last_response_returns_empty_when_no_response_yet() {
-        let logs = "[human] say hello";
-        assert_eq!(parse_last_response(logs), "");
-    }
-
-    #[test]
-    fn parse_last_response_uses_last_human_marker() {
-        let logs = "[human] first question\nold answer\n[human] second question\nnew answer";
-        assert_eq!(parse_last_response(logs), "new answer");
-    }
-
-    #[test]
-    fn parse_last_response_returns_empty_on_no_logs() {
-        assert_eq!(parse_last_response(""), "");
-    }
-
-    #[test]
-    fn parse_last_response_unescapes_backslash_quotes() {
-        let logs = r#"[human] check this
-[{\"line\":1,\"tier\":\"error\",\"message\":\"typo\"}]"#;
-        let response = parse_last_response(logs);
-        assert_eq!(response, r#"[{"line":1,"tier":"error","message":"typo"}]"#);
+    fn escape_for_overmind_preserves_single_line_input() {
+        let prompt = "no newlines here";
+        assert_eq!(escape_for_overmind(prompt), "no newlines here");
     }
 
     #[test]

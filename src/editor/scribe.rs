@@ -68,24 +68,29 @@ pub fn parse_annotations(json: &str) -> Vec<Annotation> {
 }
 
 /// Build the prompt sent to the AI writing companion.
-pub fn build_check_prompt(content: &str) -> String {
+/// `start_line` is the 1-based line number of the first line in `content`,
+/// used so the AI returns absolute line numbers matching the full document.
+pub fn build_check_prompt(content: &str, start_line: usize) -> String {
+    let numbered: String = content
+        .lines()
+        .enumerate()
+        .map(|(i, line)| format!("{}: {line}", start_line + i))
+        .collect::<Vec<_>>()
+        .join("\n");
+
     format!(
-        r#"Review this markdown document for grammar, spelling, factual accuracy, and coherence.
-Detect the language (English or Portuguese) and check accordingly.
-Skip content inside fenced code blocks.
+        r#"Proofread this markdown. Lines are numbered. Detect language automatically.
+Skip fenced code blocks. Be concise. Max 15 words per message.
 
-Return ONLY a JSON array of annotations, no other text. Each annotation:
-{{"line": <number>, "tier": "<error|hint|research>", "message": "<description>"}}
+Return ONLY a JSON array, no other text:
+[{{"line": N, "tier": "error|hint", "message": "..."}}]
 
-Tiers:
-- "error": grammar, spelling, wrong word. Include the fix.
-- "hint": better phrasing, missing context, factual checks.
-- "research": related references, supporting data.
+error = typo, grammar, wrong word. Show the fix.
+hint = awkward phrasing, factual issue. Suggest briefly.
 
-If no issues found, return an empty array: []
+If clean, return []
 
-Document:
-{content}"#
+{numbered}"#
     )
 }
 
@@ -166,11 +171,12 @@ pub enum ScribeStatus {
     Error,
 }
 
-/// Scribe session info needed by the background thread to call overmind.
+/// Info needed by the background thread to run a scribe check.
 pub struct CheckRequest {
     pub session_name: String,
     pub session_needs_start: bool,
     pub content: String,
+    pub start_line: usize,
 }
 
 /// All mutable scribe state, extracted for testability.
@@ -182,6 +188,7 @@ pub struct ScribeState {
     pub error: Option<String>,
     pub last_response: Option<Instant>,
     pub result: Arc<Mutex<Option<Result<String, String>>>>,
+    pub status_log: Vec<String>,
     idle_since: Option<Instant>,
     pending: bool,
     last_sent: String,
@@ -201,11 +208,27 @@ impl ScribeState {
             error: None,
             last_response: None,
             result: Arc::new(Mutex::new(None)),
+            status_log: Vec::new(),
             idle_since: None,
             pending: false,
             last_sent: String::new(),
             check_started: None,
         }
+    }
+
+    /// Clear display state when switching articles. Keeps session alive.
+    pub fn clear_display(&mut self) {
+        self.annotations.clear();
+        self.status_log.clear();
+        self.error = None;
+        self.last_response = None;
+        self.last_sent.clear();
+        self.idle_since = None;
+        self.status = ScribeStatus::Idle;
+    }
+
+    pub fn push_log(&mut self, msg: &str) {
+        self.status_log.push(msg.to_string());
     }
 
     /// Signal that document content changed. Resets the idle timer.
@@ -227,10 +250,17 @@ impl ScribeState {
     }
 
     /// Prepare a check request. Transitions state to pending.
-    pub fn begin_check(&mut self, content: &str) -> CheckRequest {
+    /// `content` is the visible portion of the document.
+    /// `start_line` is the 1-based line number of the first line in `content`.
+    pub fn begin_check(&mut self, content: &str, start_line: usize) -> CheckRequest {
         let needs_start = !self.session_started;
         self.pending = true;
         self.status = ScribeStatus::Checking;
+        self.status_log.clear();
+        if needs_start {
+            self.status_log.push("Starting session...".to_string());
+        }
+        self.status_log.push("Sending to scribe...".to_string());
         self.check_started = Some(Instant::now());
         self.last_sent = content.to_string();
         self.idle_since = None;
@@ -240,12 +270,21 @@ impl ScribeState {
             session_name: self.session_name.clone(),
             session_needs_start: needs_start,
             content: content.to_string(),
+            start_line,
         }
     }
 
     /// Process a successful response from overmind.
     pub fn handle_response(&mut self, response: &str) {
+        log::info!("[scribe] handle_response: {} bytes", response.len());
         self.annotations = extract_annotations(response);
+        let count = self.annotations.len();
+        let elapsed = self.check_started
+            .map(|t| format!(" ({:.1}s)", t.elapsed().as_secs_f32()))
+            .unwrap_or_default();
+        log::info!("[scribe] parsed {count} annotations");
+        self.status_log.clear();
+        self.status_log.push(format!("{count} annotations{elapsed}"));
         self.error = None;
         self.status = ScribeStatus::Idle;
         self.pending = false;
@@ -256,12 +295,13 @@ impl ScribeState {
     /// Process a failed overmind call.
     pub fn handle_error(&mut self, err: String) {
         log::warn!("scribe check failed: {err}");
-        self.annotations = Vec::new();
+        self.status_log.clear();
+        self.status_log.push(format!("Error: {err}"));
+        self.annotations.clear();
         self.error = Some(err);
         self.status = ScribeStatus::Error;
         self.pending = false;
         self.check_started = None;
-        self.session_started = false;
     }
 
     /// Pick up result from the background thread (non-blocking).
@@ -348,28 +388,24 @@ mod tests {
     #[test]
     fn begin_check_transitions_to_pending() {
         let mut state = test_state();
-        let request = state.begin_check("some content");
+        let request = state.begin_check("some content", 1);
         assert!(state.is_pending());
         assert_eq!(state.status, ScribeStatus::Checking);
         assert_eq!(request.content, "some content");
-        assert_eq!(request.session_name, "scribe-test");
+        assert_eq!(request.start_line, 1);
     }
 
     #[test]
-    fn begin_check_first_time_needs_session_start() {
+    fn begin_check_preserves_start_line() {
         let mut state = test_state();
-        let request = state.begin_check("content");
-        assert!(request.session_needs_start);
-        // Second time should not need start
-        state.pending = false;
-        let request2 = state.begin_check("content2");
-        assert!(!request2.session_needs_start);
+        let request = state.begin_check("content", 42);
+        assert_eq!(request.start_line, 42);
     }
 
     #[test]
     fn begin_check_stores_last_sent() {
         let mut state = test_state();
-        state.begin_check("sent content");
+        state.begin_check("sent content", 1);
         assert_eq!(state.last_sent, "sent content");
     }
 
@@ -392,13 +428,11 @@ mod tests {
     // --- handle_error ---
 
     #[test]
-    fn handle_error_stores_error_and_resets_session() {
+    fn handle_error_stores_error_and_resets_pending() {
         let mut state = test_state();
         state.pending = true;
-        state.session_started = true;
         state.handle_error("overmind crashed".to_string());
         assert!(!state.is_pending());
-        assert!(!state.session_started);
         assert_eq!(state.status, ScribeStatus::Error);
         assert_eq!(state.error.as_deref(), Some("overmind crashed"));
         assert!(state.annotations.is_empty());
@@ -445,13 +479,11 @@ mod tests {
     fn poll_result_handles_error() {
         let mut state = test_state();
         state.pending = true;
-        state.session_started = true;
         if let Ok(mut slot) = state.result.lock() {
             *slot = Some(Err("connection failed".to_string()));
         }
         state.poll_result();
         assert!(!state.is_pending());
-        assert!(!state.session_started);
         assert_eq!(state.status, ScribeStatus::Error);
         assert_eq!(state.error.as_deref(), Some("connection failed"));
     }
@@ -474,6 +506,90 @@ mod tests {
         assert!(state.idle_since.is_none());
         state.content_changed();
         assert!(state.idle_since.is_some());
+    }
+
+    // --- clear_display ---
+
+    #[test]
+    fn clear_display_resets_annotations_and_log_but_keeps_session() {
+        let mut state = test_state();
+        state.session_started = true;
+        state.annotations = vec![
+            Annotation { line: 1, tier: Tier::Error, message: "typo".into() },
+        ];
+        state.status_log = vec!["5 annotations (2.1s)".to_string()];
+        state.error = Some("old error".to_string());
+        state.last_sent = "old content".to_string();
+        state.status = ScribeStatus::Error;
+
+        state.clear_display();
+
+        assert!(state.annotations.is_empty());
+        assert!(state.status_log.is_empty());
+        assert!(state.error.is_none());
+        assert!(state.last_sent.is_empty());
+        assert_eq!(state.status, ScribeStatus::Idle);
+        // Session stays alive
+        assert!(state.session_started);
+        assert_eq!(state.session_name, "scribe-test");
+    }
+
+    // --- push_log ---
+
+    #[test]
+    fn push_log_appends_messages() {
+        let mut state = test_state();
+        state.push_log("Starting session...");
+        state.push_log("Sending...");
+        assert_eq!(state.status_log.len(), 2);
+        assert_eq!(state.status_log[0], "Starting session...");
+        assert_eq!(state.status_log[1], "Sending...");
+    }
+
+    // --- status_log lifecycle ---
+
+    #[test]
+    fn begin_check_populates_status_log() {
+        let mut state = test_state();
+        state.begin_check("content", 1);
+        assert!(!state.status_log.is_empty());
+        assert!(state.status_log.iter().any(|l| l.contains("Sending")));
+    }
+
+    #[test]
+    fn begin_check_first_time_logs_session_start() {
+        let mut state = test_state();
+        state.begin_check("content", 1);
+        assert!(state.status_log.iter().any(|l| l.contains("Starting session")));
+    }
+
+    #[test]
+    fn begin_check_warm_session_skips_session_start_log() {
+        let mut state = test_state();
+        state.session_started = true;
+        state.begin_check("content", 1);
+        assert!(!state.status_log.iter().any(|l| l.contains("Starting session")));
+    }
+
+    #[test]
+    fn handle_response_clears_log_and_shows_count() {
+        let mut state = test_state();
+        state.pending = true;
+        state.check_started = Some(Instant::now());
+        state.status_log = vec!["Sending...".to_string()];
+        state.handle_response(r#"[{"line": 1, "tier": "error", "message": "fix"}]"#);
+        assert_eq!(state.status_log.len(), 1);
+        assert!(state.status_log[0].contains("1 annotation"));
+    }
+
+    #[test]
+    fn handle_error_clears_log_and_shows_error() {
+        let mut state = test_state();
+        state.pending = true;
+        state.status_log = vec!["Sending...".to_string()];
+        state.handle_error("timeout".to_string());
+        assert_eq!(state.status_log.len(), 1);
+        assert!(state.status_log[0].contains("Error: timeout"));
     }
 
     #[test]
@@ -520,7 +636,7 @@ mod tests {
     #[test]
     fn build_check_prompt_includes_content_and_json_instruction() {
         let content = "# Hello\n\nSome text here.";
-        let prompt = build_check_prompt(content);
+        let prompt = build_check_prompt(content, 1);
         assert!(prompt.contains("# Hello"));
         assert!(prompt.contains("Some text here."));
         assert!(prompt.contains("JSON"));
@@ -528,8 +644,17 @@ mod tests {
 
     #[test]
     fn build_check_prompt_instructs_to_skip_code_blocks() {
-        let prompt = build_check_prompt("some text");
+        let prompt = build_check_prompt("some text", 1);
         assert!(prompt.contains("code block"));
+    }
+
+    #[test]
+    fn build_check_prompt_includes_line_numbers_starting_from_offset() {
+        let content = "first line\nsecond line\nthird line";
+        let prompt = build_check_prompt(content, 20);
+        assert!(prompt.contains("20: first line"));
+        assert!(prompt.contains("21: second line"));
+        assert!(prompt.contains("22: third line"));
     }
 
     #[test]
