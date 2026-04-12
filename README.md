@@ -1,10 +1,10 @@
 # DevTUI
 
-Terminal markdown editor with live preview + multi-site static blog engine.
+Terminal markdown editor with live preview, AI writing companion, and multi-site static blog engine. Built in Rust with ratatui.
 
 ## Editor
 
-Embeds vim via PTY with real-time markdown preview. Left pane is full vim. Right pane renders the markdown as you type.
+Embeds vim via PTY with real-time markdown preview. Left pane is full vim. Right pane renders markdown as you type.
 
 ```bash
 make editor.cms.<name>                                   # CMS list view for a blog (k9s-style)
@@ -19,7 +19,27 @@ Run `make blog.list` to see available blog names.
 
 Position sync uses vim's `titlestring` (zero file I/O). Content sync debounced via `CursorHold`. Mode detected from the terminal title.
 
-All vim keybindings work. `Ctrl+D`/`Ctrl+U` for half-page scroll, `G`/`gg` for top/bottom, `:w` to save, `:q` to quit.
+### Controls
+
+- All vim keybindings work
+- `Ctrl+D`/`Ctrl+U` -- half-page scroll
+- `G`/`gg` -- top/bottom
+- `Ctrl+T` -- toggle scribe panel (AI writing companion)
+- `Ctrl+G` -- cycle layouts: preview / scribe / editor only
+- `:w` -- save, `:q` -- quit
+
+### Scribe (AI Writing Companion)
+
+Toggle with `Ctrl+T`. The scribe panel sends the visible portion of your document to an AI model and displays grammar, spelling, and factual annotations in real time.
+
+- Annotations appear as the AI responds (no polling, event-streamed via overmind subscribe)
+- Error tier: typos, grammar, wrong words. Shows the fix.
+- Hint tier: awkward phrasing, factual issues. Brief suggestions.
+- Visible lines only. Annotations reference absolute line numbers.
+- Session persists across articles within a DevTUI instance.
+- Clears automatically on content change and article switch.
+
+Requires [overmind](https://github.com/leandronsp/overmind) installed. The scribe panel is hidden if overmind is not available.
 
 ## Blog Engine
 
@@ -58,6 +78,8 @@ make lint                     # clippy
 - [ratatui](https://ratatui.rs/) + [crossterm](https://github.com/crossterm-rs/crossterm) -- TUI framework
 - [portable-pty](https://docs.rs/portable-pty) + [vt100](https://docs.rs/vt100) + [tui-term](https://docs.rs/tui-term) -- vim PTY embedding
 - [pulldown-cmark](https://github.com/raphlinus/pulldown-cmark) -- markdown parsing
+- [serde_json](https://docs.rs/serde_json) -- annotation JSON parsing (scribe)
+- [overmind](https://github.com/leandronsp/overmind) -- AI agent orchestrator (scribe, optional)
 
 ### Engine
 
