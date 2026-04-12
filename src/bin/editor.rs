@@ -28,6 +28,19 @@ fn main() -> io::Result<()> {
         return devtui::editor::import_blog(&blog_dir);
     }
 
+    // Normalize frontmatter to canonical schema: devtui --migrate-frontmatter <blog_dir>
+    if args.len() >= 3 && args[1] == "--migrate-frontmatter" {
+        let blog_dir = PathBuf::from(&args[2]);
+        let posts_dir = blog_dir.join("posts");
+        let report = devtui::engine::migrate::migrate_posts(&posts_dir)?;
+        println!("  rewritten {} posts", report.rewritten.len());
+        println!("  skipped {} posts (already canonical)", report.skipped.len());
+        for path in &report.rewritten {
+            println!("    {}", path.display());
+        }
+        return Ok(());
+    }
+
     // Legacy mode: devtui [file.md]
     let file_path = args
         .get(1)
