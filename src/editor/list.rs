@@ -48,6 +48,7 @@ pub struct ListView {
     deploy_preview: Option<ops::DeployPreview>,
     pushing: bool,
     push_result: Arc<Mutex<Option<Result<String, String>>>>,
+    deploy_status: Option<String>,
     show_theme_picker: bool,
     themes: Vec<String>,
     theme_index: usize,
@@ -86,6 +87,7 @@ impl ListView {
             deploy_preview: None,
             pushing: false,
             push_result: Arc::new(Mutex::new(None)),
+            deploy_status: None,
             show_theme_picker: false,
             themes,
             theme_index,
@@ -254,8 +256,15 @@ impl ListView {
         if let Some(result) = result {
             self.pushing = false;
             match result {
-                Ok(msg) => {
-                    self.flash = Some((msg, Instant::now()));
+                Ok(_msg) => {
+                    let project = self
+                        .blog_dir
+                        .file_name()
+                        .map(|n| n.to_string_lossy().replace('.', "-"))
+                        .unwrap_or_default();
+                    let status = ops::cf_deployment_status(&project)
+                        .unwrap_or_else(|e| format!("Could not fetch status: {e}"));
+                    self.deploy_status = Some(status);
                 }
                 Err(err) => {
                     let first_line = err.lines().next().unwrap_or(&err).to_string();
@@ -336,6 +345,11 @@ impl ListView {
             // Theme picker
             if self.show_theme_picker {
                 self.render_theme_picker(frame, frame.area());
+            }
+
+            // Deploy status
+            if self.deploy_status.is_some() {
+                self.render_deploy_status(frame, frame.area());
             }
 
             // Error overlay
@@ -694,12 +708,66 @@ impl ListView {
         frame.render_widget(picker, popup_area);
     }
 
+    fn render_deploy_status(&self, frame: &mut ratatui::Frame, area: Rect) {
+        let Some(status) = &self.deploy_status else {
+            return;
+        };
+
+        // Parse the wrangler table row into readable fields
+        let fields: Vec<&str> = status.split('│').map(|s| s.trim()).filter(|s| !s.is_empty()).collect();
+
+        let mut lines = vec![
+            Line::from(Span::styled(
+                " Deploy Successful ",
+                Style::default().fg(Color::Green).add_modifier(Modifier::BOLD),
+            )),
+            Line::from(""),
+        ];
+
+        if fields.len() >= 5 {
+            lines.push(Line::from(format!(" Environment: {}", fields[1])));
+            lines.push(Line::from(format!(" Branch:      {}", fields[2])));
+            lines.push(Line::from(format!(" Commit:      {}", fields[3])));
+            lines.push(Line::from(format!(" URL:         {}", fields[4])));
+            lines.push(Line::from(format!(" Status:      {}", fields[5])));
+        } else {
+            lines.push(Line::from(format!(" {status}")));
+        }
+
+        lines.push(Line::from(""));
+        lines.push(Line::from(Span::styled(
+            " Press any key to close ",
+            Style::default().fg(Color::DarkGray),
+        )));
+
+        let width = (area.width - 4).min(70);
+        let height = (lines.len() as u16 + 2).min(area.height - 2);
+        let x = area.x + (area.width.saturating_sub(width)) / 2;
+        let y = area.y + (area.height.saturating_sub(height)) / 2;
+        let popup_area = Rect::new(x, y, width, height);
+
+        let status_widget = Paragraph::new(lines).block(
+            Block::default()
+                .borders(Borders::ALL)
+                .border_style(Style::default().fg(Color::Green))
+                .title(" Deploy Status "),
+        );
+        frame.render_widget(ratatui::widgets::Clear, popup_area);
+        frame.render_widget(status_widget, popup_area);
+    }
+
     fn handle_key(
         &mut self,
         code: KeyCode,
         modifiers: KeyModifiers,
         conn: &Connection,
     ) -> io::Result<Option<ListAction>> {
+        // Deploy status modal
+        if self.deploy_status.is_some() {
+            self.deploy_status = None;
+            return Ok(None);
+        }
+
         // Error overlay mode
         if self.show_error {
             if matches!(code, KeyCode::Esc) {

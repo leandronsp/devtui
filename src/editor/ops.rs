@@ -210,6 +210,30 @@ pub struct DeployPreview {
     pub diff: String,
 }
 
+/// Check latest Cloudflare Pages deployment status.
+pub fn cf_deployment_status(project_name: &str) -> Result<String, String> {
+    let output = std::process::Command::new("wrangler")
+        .args(["pages", "deployment", "list", "--project-name", project_name])
+        .output()
+        .map_err(|e| format!("failed to run wrangler: {e}"))?;
+
+    let stdout = String::from_utf8_lossy(&output.stdout);
+    // Parse the table output to extract the first deployment row
+    let lines: Vec<&str> = stdout.lines().collect();
+    for line in &lines {
+        if line.contains("Production") || line.contains("Preview") {
+            return Ok(line.to_string());
+        }
+    }
+
+    if output.status.success() {
+        Ok("No deployments found".to_string())
+    } else {
+        let stderr = String::from_utf8_lossy(&output.stderr);
+        Err(format!("wrangler failed: {stderr}"))
+    }
+}
+
 /// List available themes from the engine themes directory.
 pub fn available_themes() -> Vec<String> {
     let themes_dir = engine_dir().join("themes");
