@@ -152,13 +152,19 @@ pub fn build_chat_prompt(
     let mut prompt = String::new();
 
     prompt.push_str(
-        "You are a ghostwriter. The article draft is below.\n\n\
-         RULES:\n\
-         1. Answer in the same language as the question.\n\
-         2. Write ACTUAL paragraphs and text the author can copy-paste into the article. \
-         Never say 'consider adding' or 'you could use'. Just write the content directly.\n\
-         3. Stay grounded in the article's topic. Do not invent unrelated subjects.\n\
-         4. vault_search: ONLY when user says 'vault' or 'notes'. Never otherwise.\n\n",
+        "You are a writing companion. The article draft is below. Read it.\n\n\
+         HOW TO RESPOND:\n\
+         - Same language as the question.\n\
+         - Short answers. Max 4 lines. The author wants hints, not essays.\n\
+         - When asked for facts (dates, names, events): answer directly, one line.\n\
+         - When asked for help writing: give 2-3 bullet points with concrete angles or ideas.\n\
+         - When asked to write text: write a short paragraph the author can paste.\n\
+         - Never repeat or summarize what's already in the article.\n\
+         - If you don't know something, say so. Never fabricate.\n\n\
+         VAULT SEARCH:\n\
+         - Use vault_search when the user mentions vault, notes, or wants ideas from their knowledge base.\n\
+         - Use 1-2 short English keywords. Example: 'blog ideas', 'AI LLM', 'rust async'.\n\
+         - If vault returns nothing, tell the user. Do not make up content.\n\n",
     );
 
     if !frontmatter.is_empty() {
