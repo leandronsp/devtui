@@ -251,9 +251,9 @@ struct RunLoopState {
     /// Blog author from blog.toml; rendered in preview header when post has no
     /// `author:` frontmatter field.
     blog_author: Option<String>,
-    chat: super::chat::ChatState,
-    chat_focused: bool,
-    chat_result: std::sync::Arc<Mutex<Option<Result<String, String>>>>,
+    /// Embedded Claude Code agent (spawned lazily on first Ctrl+Y).
+    agent: Option<super::chat::AgentState>,
+    agent_focused: bool,
 }
 
 impl RunLoopState {
@@ -271,9 +271,8 @@ impl RunLoopState {
             blog_author,
             last_first_visible_line: 1,
             last_visible_rows: 40,
-            chat: super::chat::ChatState::new(),
-            chat_focused: false,
-            chat_result: Arc::new(Mutex::new(None)),
+            agent: None,
+            agent_focused: false,
         }
     }
 
@@ -313,48 +312,18 @@ impl RunLoopState {
         true
     }
 
-    /// Poll for chat LLM response (non-blocking).
-    fn poll_chat_result(&mut self) {
-        if !self.chat.pending {
-            return;
-        }
-        let result = if let Ok(mut guard) = self.chat_result.try_lock() {
-            guard.take()
-        } else {
-            return;
-        };
-        if let Some(result) = result {
-            match result {
-                Ok(response) => {
-                    self.chat.add_assistant_message(&response);
-                }
-                Err(err) => {
-                    self.chat.add_assistant_message(&format!("Error: {err}"));
-                }
-            }
-            self.chat.pending = false;
-            self.preview_scroll = 0; // reset to auto-scroll on new message
-        }
-    }
-
-    /// Detect a `:w` save (modified flag transitions true -> false). Shows "saved" flash,
-    /// reopens the preview pane if it was hidden, and triggers a preview refresh.
+    /// Detect a `:w` save (modified flag transitions true -> false). Shows "saved" flash
+    /// and refreshes preview if already visible. Does not reopen a hidden preview.
     #[allow(clippy::borrowed_box)]
     fn handle_save_detected(
         &mut self,
         vim_state: &VimState,
         terminal: &mut ratatui::DefaultTerminal,
-        pty_master: &Box<dyn portable_pty::MasterPty + Send>,
-        parser: &Arc<RwLock<vt100::Parser>>,
+        _pty_master: &Box<dyn portable_pty::MasterPty + Send>,
+        _parser: &Arc<RwLock<vt100::Parser>>,
     ) -> io::Result<()> {
         if self.was_modified && !vim_state.modified {
             self.flash = Some(("saved", std::time::Instant::now()));
-
-            // Open preview if hidden
-            if self.split_layout == SplitLayout::EditorOnly {
-                self.split_layout = SplitLayout::Vertical;
-                resize_pty(self.split_layout, terminal, pty_master, parser)?;
-            }
 
             if self.split_layout == SplitLayout::Vertical {
                 let (lines, offsets) = preview::render_with_offsets(&self.last_content, self.blog_author.as_deref());
@@ -474,7 +443,7 @@ impl RunLoopState {
                     ])
                     .split(main_area);
                     render_editor(frame, parser, mode_label, mode_st, title_message, post_title.as_deref(), is_draft, panes[0]);
-                    render_chat(frame, &self.chat, self.chat_focused, self.preview_scroll, panes[1]);
+                    render_agent(frame, &self.agent, self.agent_focused, panes[1]);
                 }
                 SplitLayout::EditorOnly => {
                     render_editor(frame, parser, mode_label, mode_st, title_message, post_title.as_deref(), is_draft, main_area);
@@ -495,7 +464,7 @@ impl RunLoopState {
             };
             let status = Line::from(Span::styled(
                 format!(
-                    " DevTUI [{layout_label}] ^P:preview ^Y:chat{browser_hint}{follow_hint}{scroll_hint}",
+                    " DevTUI [{layout_label}] ^G:cycle ^P:preview ^Y:agent{browser_hint}{follow_hint}{scroll_hint} ^R:restart",
                 ),
                 Style::default().fg(Color::DarkGray),
             ));
@@ -520,62 +489,74 @@ impl RunLoopState {
     ) -> io::Result<bool> {
         let ctrl = key.modifiers.contains(KeyModifiers::CONTROL);
 
-        // Chat input: when focused, keys go to chat. Esc unfocuses.
-        if self.split_layout == SplitLayout::Chat && self.chat_focused {
-            match key.code {
-                KeyCode::Esc => {
-                    self.chat_focused = false;
-                }
-                KeyCode::Enter => {
-                    if !self.chat.input.is_empty() && !self.chat.pending {
-                        let question = self.chat.input.clone();
-                        self.chat.input.clear();
-                        self.chat.add_user_message(&question);
-                        self.chat.pending = true;
-                        self.preview_scroll = 0; // auto-scroll to show new message
-
-                        let lines: Vec<&str> = self.last_content.lines().collect();
-                        let visible_start = self.last_first_visible_line.saturating_sub(1);
-                        let visible_end = (visible_start + self.last_visible_rows).min(lines.len());
-                        // Margin: 30 lines before and after the visible area
-                        let margin_start = visible_start.saturating_sub(30);
-                        let margin_end = (visible_end + 30).min(lines.len());
-                        let visible_window = lines[margin_start..margin_end].join("\n");
-                        let frontmatter = super::chat::extract_frontmatter(&self.last_content);
-                        let messages = self.chat.messages.clone();
-                        let chat_result = Arc::clone(&self.chat_result);
-                        thread::spawn(move || {
-                            let prompt = super::chat::build_chat_prompt(
-                                &frontmatter,
-                                &visible_window,
-                                None,
-                                &messages,
-                                &question,
-                            );
-                            let result = match super::llm::provider_from_env() {
-                                Ok(provider) => super::llm::call_llm_with_tools(&provider, &prompt),
-                                Err(err) => Err(err),
-                            };
-                            if let Ok(mut slot) = chat_result.lock() {
-                                *slot = Some(result);
-                            }
-                        });
+        // Agent pane: when focused, forward all keystrokes to Claude Code PTY.
+        // Ctrl+Y unfocuses (back to vim). Ctrl+R restarts the agent.
+        if self.split_layout == SplitLayout::Chat && self.agent_focused {
+            if key.code == KeyCode::Char('y') && ctrl {
+                self.agent_focused = false;
+                return Ok(false);
+            }
+            // Ctrl+R: kill and respawn the agent
+            if key.code == KeyCode::Char('r') && ctrl {
+                let term_size = terminal.size()?;
+                let (cols, rows) = vim_size(SplitLayout::Chat, term_size.width, term_size.height);
+                self.agent = None; // drop kills the old process
+                match super::chat::AgentState::spawn(rows, cols) {
+                    Ok(agent) => self.agent = Some(agent),
+                    Err(e) => {
+                        self.flash = Some(("restart failed", std::time::Instant::now()));
+                        log::error!("Failed to respawn claude: {e}");
                     }
                 }
-                KeyCode::Backspace => {
-                    self.chat.input.pop();
-                }
-                KeyCode::Char('j') if ctrl => {
-                    self.preview_scroll = self.preview_scroll.saturating_add(3);
-                }
-                KeyCode::Char('k') if ctrl => {
-                    self.preview_scroll = self.preview_scroll.saturating_sub(3);
-                }
-                KeyCode::Char(c) if !ctrl => {
-                    self.chat.input.push(c);
-                }
-                _ => {}
+                return Ok(false);
             }
+            if let Some(agent) = &mut self.agent {
+                if let Some(bytes) = key_to_bytes(key.code, key.modifiers) {
+                    let _ = agent.write(&bytes);
+                }
+            }
+            return Ok(false);
+        }
+
+        // Ctrl+G: cycle layouts (Vertical -> Chat -> EditorOnly -> Vertical)
+        if key.code == KeyCode::Char('g') && ctrl {
+            match self.split_layout {
+                SplitLayout::Vertical => {
+                    self.split_layout = SplitLayout::Chat;
+                    self.agent_focused = true;
+                    // Spawn agent lazily on first use
+                    if self.agent.is_none() {
+                        let term_size = terminal.size()?;
+                        let (cols, rows) = vim_size(SplitLayout::Chat, term_size.width, term_size.height);
+                        match super::chat::AgentState::spawn(rows, cols) {
+                            Ok(agent) => self.agent = Some(agent),
+                            Err(e) => {
+                                self.flash = Some(("claude not found", std::time::Instant::now()));
+                                log::error!("Failed to spawn claude: {e}");
+                                self.split_layout = SplitLayout::Vertical;
+                            }
+                        }
+                    } else if let Some(agent) = &self.agent {
+                        let term_size = terminal.size()?;
+                        let (cols, rows) = vim_size(SplitLayout::Chat, term_size.width, term_size.height);
+                        agent.resize(rows, cols);
+                    }
+                }
+                SplitLayout::Chat => {
+                    self.split_layout = SplitLayout::EditorOnly;
+                    self.agent_focused = false;
+                }
+                SplitLayout::EditorOnly => {
+                    self.split_layout = SplitLayout::Vertical;
+                    self.preview_scroll = 0;
+                    if self.cached_lines.is_empty() {
+                        let (lines, offsets) = preview::render_with_offsets(&self.last_content, self.blog_author.as_deref());
+                        self.cached_offsets = offsets;
+                        self.cached_lines = lines;
+                    }
+                }
+            }
+            resize_pty(self.split_layout, terminal, pty_master, parser)?;
             return Ok(false);
         }
 
@@ -596,15 +577,34 @@ impl RunLoopState {
             return Ok(false);
         }
 
-        // Ctrl+Y: open chat + focus, or toggle focus if already open
+        // Ctrl+Y: open agent pane + focus, or toggle focus if already open
         if key.code == KeyCode::Char('y') && ctrl {
             if self.split_layout != SplitLayout::Chat {
                 self.split_layout = SplitLayout::Chat;
-                self.chat_focused = true;
-                self.preview_scroll = 0;
+                self.agent_focused = true;
                 resize_pty(self.split_layout, terminal, pty_master, parser)?;
+
+                // Spawn agent lazily on first use
+                if self.agent.is_none() {
+                    let term_size = terminal.size()?;
+                    let (cols, rows) = vim_size(SplitLayout::Chat, term_size.width, term_size.height);
+                    match super::chat::AgentState::spawn(rows, cols) {
+                        Ok(agent) => self.agent = Some(agent),
+                        Err(e) => {
+                            self.flash = Some(("claude not found", std::time::Instant::now()));
+                            log::error!("Failed to spawn claude: {e}");
+                            self.split_layout = SplitLayout::Vertical;
+                            resize_pty(self.split_layout, terminal, pty_master, parser)?;
+                            return Ok(false);
+                        }
+                    }
+                } else if let Some(agent) = &self.agent {
+                    let term_size = terminal.size()?;
+                    let (cols, rows) = vim_size(SplitLayout::Chat, term_size.width, term_size.height);
+                    agent.resize(rows, cols);
+                }
             } else {
-                self.chat_focused = !self.chat_focused;
+                self.agent_focused = !self.agent_focused;
             }
             return Ok(false);
         }
@@ -678,7 +678,6 @@ fn run_loop(
 
         state.poll_content_swap(content_swap);
         let content_updated = state.poll_preview_render();
-        state.poll_chat_result();
         let vim_state = parse_title(parser);
         state.last_first_visible_line = vim_state.first_visible_line;
         if let Ok(size) = terminal.size() {
@@ -701,6 +700,9 @@ fn run_loop(
                     let _ = pty_master.resize(PtySize { rows, cols, pixel_width: 0, pixel_height: 0 });
                     if let Ok(mut p) = parser.write() {
                         p.set_size(rows, cols);
+                    }
+                    if let Some(agent) = &state.agent {
+                        agent.resize(rows, cols);
                     }
                 }
                 _ => {}
@@ -786,75 +788,35 @@ fn render_preview(
     frame.render_widget(preview_widget, area);
 }
 
-fn render_chat(
+fn render_agent(
     frame: &mut ratatui::Frame,
-    chat: &super::chat::ChatState,
+    agent: &Option<super::chat::AgentState>,
     focused: bool,
-    scroll_offset: u16,
     area: ratatui::layout::Rect,
 ) {
-    use ratatui::layout::Direction;
-
-    // Split: message area on top, input area at bottom (5 lines for wrap)
-    let chunks = Layout::default()
-        .direction(Direction::Vertical)
-        .constraints([Constraint::Min(3), Constraint::Length(5)])
-        .split(area);
-
-    // Messages
-    let message_lines = chat.render_messages();
-    let messages_block = Block::default()
-        .borders(Borders::ALL)
-        .border_style(Style::default().fg(Color::DarkGray))
-        .title(Line::from(vec![
-            Span::raw(" CHAT "),
-            Span::styled(
-                if chat.pending { "[thinking...]" } else { "[ready]" },
-                Style::default().fg(if chat.pending { Color::Yellow } else { Color::DarkGray }),
-            ),
-            Span::raw(" "),
-        ]));
-
-    // Auto-scroll to bottom unless manually scrolled
-    let visible_height = chunks[0].height.saturating_sub(2);
-    let total_lines = message_lines.len() as u16;
-    let auto_scroll = total_lines.saturating_sub(visible_height);
-    let scroll = if scroll_offset > 0 { scroll_offset } else { auto_scroll };
-
-    let messages_widget = Paragraph::new(message_lines)
-        .block(messages_block)
-        .wrap(Wrap { trim: false })
-        .scroll((scroll, 0));
-    frame.render_widget(messages_widget, chunks[0]);
-
-    // Input area
     let border_color = if focused { Color::Cyan } else { Color::DarkGray };
-    let input_title = if focused { " Ask (Esc: back to vim) " } else { " ^Y to type " };
-    let input_block = Block::default()
+    let title = if focused { " AGENT [^Y: back to vim] " } else { " AGENT [^Y: focus] " };
+
+    let block = Block::default()
         .borders(Borders::ALL)
         .border_style(Style::default().fg(border_color))
-        .title(input_title);
-    let input_text = if chat.input.is_empty() && !focused {
-        Line::from(Span::styled("Press ^Y to ask a question...", Style::default().fg(Color::DarkGray)))
-    } else if chat.input.is_empty() {
-        Line::from(Span::styled("Type your question and press Enter...", Style::default().fg(Color::DarkGray)))
-    } else {
-        Line::from(chat.input.clone())
-    };
-    // Auto-scroll input to show the bottom (where the cursor is)
-    let inner_width = chunks[1].width.saturating_sub(2) as usize; // minus borders
-    let visible_height = chunks[1].height.saturating_sub(2); // minus borders
-    let wrapped_lines = if inner_width > 0 {
-        chat.input.len().div_ceil(inner_width) as u16
-    } else {
-        1
-    };
-    let input_scroll = wrapped_lines.saturating_sub(visible_height);
-    let input_widget = Paragraph::new(input_text)
-        .block(input_block)
-        .wrap(Wrap { trim: false })
-        .scroll((input_scroll, 0));
-    frame.render_widget(input_widget, chunks[1]);
+        .title(title);
+
+    if let Some(agent) = agent {
+        if let Ok(p) = agent.parser.read() {
+            let pseudo_term = PseudoTerminal::new(p.screen()).block(block);
+            frame.render_widget(pseudo_term, area);
+            return;
+        }
+    }
+
+    // No agent spawned yet or parser unavailable
+    let placeholder = Paragraph::new(Line::from(Span::styled(
+        "Press ^Y to start Claude Code...",
+        Style::default().fg(Color::DarkGray),
+    )))
+    .block(block);
+    frame.render_widget(placeholder, area);
 }
 
 /// Calculate text preview scroll position to follow the cursor line.

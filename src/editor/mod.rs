@@ -1,7 +1,6 @@
 pub mod chat;
 pub mod db;
 pub mod list;
-pub mod llm;
 pub mod ops;
 pub mod preview;
 pub mod vim;
