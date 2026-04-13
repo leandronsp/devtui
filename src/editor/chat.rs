@@ -60,20 +60,28 @@ impl ChatState {
                 Role::User => ("You: ", Color::Cyan),
                 Role::Assistant => ("AI: ", Color::Green),
             };
-            // Split multi-line responses. First line gets the prefix.
             let content_lines: Vec<&str> = msg.content.lines().collect();
             if content_lines.is_empty() {
                 lines.push(Line::from(Span::styled(prefix, Style::default().fg(color))));
             } else {
-                lines.push(Line::from(vec![
-                    Span::styled(prefix, Style::default().fg(color)),
-                    Span::styled(content_lines[0].to_string(), Style::default().fg(color)),
-                ]));
+                let mut first_spans = vec![Span::styled(prefix, Style::default().fg(color))];
+                first_spans.extend(styled_spans(content_lines[0], color));
+                lines.push(Line::from(first_spans));
                 for content_line in &content_lines[1..] {
-                    lines.push(Line::from(Span::styled(
-                        format!("  {content_line}"),
-                        Style::default().fg(color),
-                    )));
+                    let trimmed = content_line.trim_start();
+                    if trimmed.starts_with("- ") || trimmed.starts_with("* ") {
+                        let bullet_text = &trimmed[2..];
+                        let mut spans = vec![
+                            Span::styled("    ", Style::default()),
+                            Span::styled("• ", Style::default().fg(Color::Magenta)),
+                        ];
+                        spans.extend(styled_spans(bullet_text, color));
+                        lines.push(Line::from(spans));
+                    } else {
+                        let mut spans = vec![Span::styled("  ", Style::default())];
+                        spans.extend(styled_spans(content_line, color));
+                        lines.push(Line::from(spans));
+                    }
                 }
             }
             lines.push(Line::from(""));
@@ -86,6 +94,32 @@ impl ChatState {
         }
         lines
     }
+}
+
+/// Parse inline **bold** markers into styled spans.
+fn styled_spans(text: &str, base_color: Color) -> Vec<Span<'static>> {
+    let base = Style::default().fg(base_color);
+    let bold = Style::default().fg(base_color).add_modifier(ratatui::style::Modifier::BOLD);
+    let mut spans = Vec::new();
+    let mut rest = text;
+    while let Some(start) = rest.find("**") {
+        if !rest[..start].is_empty() {
+            spans.push(Span::styled(rest[..start].to_string(), base));
+        }
+        let after = &rest[start + 2..];
+        if let Some(end) = after.find("**") {
+            spans.push(Span::styled(after[..end].to_string(), bold));
+            rest = &after[end + 2..];
+        } else {
+            spans.push(Span::styled(rest[start..].to_string(), base));
+            rest = "";
+            break;
+        }
+    }
+    if !rest.is_empty() {
+        spans.push(Span::styled(rest.to_string(), base));
+    }
+    spans
 }
 
 impl Default for ChatState {
@@ -284,16 +318,14 @@ mod tests {
 
     #[test]
     fn render_multiline_assistant_uses_consistent_color() {
-        // Bug: first line of AI response is white (Span::raw), continuation
-        // lines are green. All content lines should use the same color.
         let mut chat = ChatState::new();
         chat.add_assistant_message("First paragraph.\n\nSecond paragraph.");
         let lines = chat.render_messages();
-        // Line 0: "AI: First paragraph." (prefix + content)
-        // Line 1: "  " (blank from LLM)
-        // Line 2: "  Second paragraph."
-        let first_content_span = &lines[0].spans[1]; // content span after prefix
-        let continuation_span = &lines[2].spans[0];
+        // Line 0: "AI: " + "First paragraph." (prefix + content spans)
+        // Line 1: "  " + "" (indent + blank)
+        // Line 2: "  " + "Second paragraph." (indent + content)
+        let first_content_span = &lines[0].spans[1]; // content after prefix
+        let continuation_span = &lines[2].spans[1]; // content after indent
         assert_eq!(
             first_content_span.style.fg, continuation_span.style.fg,
             "first line fg {:?} != continuation fg {:?}",
