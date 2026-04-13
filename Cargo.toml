@@ -30,3 +30,4 @@ tiny_http = "0.12"
 rusqlite = { version = "0.31", features = ["bundled"] }
 log = "0.4"
 simplelog = "0.12"
+ureq = { version = "3", features = ["json"] }

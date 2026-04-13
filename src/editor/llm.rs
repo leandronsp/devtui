@@ -42,7 +42,7 @@ where
 }
 
 /// Build the JSON request body for the provider's API.
-pub fn build_request_body(provider: &Provider, prompt: &str) -> String {
+pub fn build_request_body(provider: &Provider, prompt: &str) -> serde_json::Value {
     match provider {
         Provider::Groq { model, .. } => serde_json::json!({
             "model": model,
@@ -54,7 +54,54 @@ pub fn build_request_body(provider: &Provider, prompt: &str) -> String {
             "messages": [{"role": "user", "content": prompt}],
         }),
     }
-    .to_string()
+}
+
+/// Extract the text content from a provider's JSON response.
+pub fn extract_response_text(provider: &Provider, response: &str) -> Result<String, String> {
+    let json: serde_json::Value = serde_json::from_str(response)
+        .map_err(|e| format!("Invalid JSON response: {e}"))?;
+
+    match provider {
+        Provider::Groq { .. } => json["choices"][0]["message"]["content"]
+            .as_str()
+            .map(String::from)
+            .ok_or_else(|| "No content in Groq response".to_string()),
+        Provider::Claude { .. } => json["content"][0]["text"]
+            .as_str()
+            .map(String::from)
+            .ok_or_else(|| "No content in Claude response".to_string()),
+    }
+}
+
+/// Call the LLM API with the given prompt. Blocking HTTP call.
+/// Returns the text content from the response.
+pub fn call_llm(provider: &Provider, prompt: &str) -> Result<String, String> {
+    let (url, auth_header, auth_value) = match provider {
+        Provider::Groq { api_key, .. } => (
+            "https://api.groq.com/openai/v1/chat/completions",
+            "Authorization",
+            format!("Bearer {api_key}"),
+        ),
+        Provider::Claude { api_key, .. } => (
+            "https://api.anthropic.com/v1/messages",
+            "x-api-key",
+            api_key.clone(),
+        ),
+    };
+
+    let body = build_request_body(provider, prompt);
+
+    let response = ureq::post(url)
+        .header(auth_header, &auth_value)
+        .send_json(&body)
+        .map_err(|e| format!("HTTP request failed: {e}"))?;
+
+    let response_body = response
+        .into_body()
+        .read_to_string()
+        .map_err(|e| format!("Failed to read response: {e}"))?;
+
+    extract_response_text(provider, &response_body)
 }
 
 /// Convenience wrapper that reads from actual environment variables.
@@ -135,10 +182,9 @@ mod tests {
 
         let body = build_request_body(&provider, "check this");
 
-        let parsed: serde_json::Value = serde_json::from_str(&body).unwrap();
-        assert_eq!(parsed["model"], "llama-3.1-8b-instant");
-        assert_eq!(parsed["messages"][0]["role"], "user");
-        assert_eq!(parsed["messages"][0]["content"], "check this");
+        assert_eq!(body["model"], "llama-3.1-8b-instant");
+        assert_eq!(body["messages"][0]["role"], "user");
+        assert_eq!(body["messages"][0]["content"], "check this");
     }
 
     #[test]
@@ -150,10 +196,35 @@ mod tests {
 
         let body = build_request_body(&provider, "check this");
 
-        let parsed: serde_json::Value = serde_json::from_str(&body).unwrap();
-        assert_eq!(parsed["model"], CLAUDE_DEFAULT_MODEL);
-        assert_eq!(parsed["max_tokens"], 1024);
-        assert_eq!(parsed["messages"][0]["role"], "user");
+        assert_eq!(body["model"], CLAUDE_DEFAULT_MODEL);
+        assert_eq!(body["max_tokens"], 1024);
+        assert_eq!(body["messages"][0]["role"], "user");
+    }
+
+    #[test]
+    fn extract_response_text_groq_extracts_from_choices() {
+        let response = r#"{"choices":[{"message":{"content":"the answer"}}]}"#;
+        let provider = Provider::Groq {
+            api_key: "k".to_string(),
+            model: "m".to_string(),
+        };
+
+        let text = extract_response_text(&provider, response).unwrap();
+
+        assert_eq!(text, "the answer");
+    }
+
+    #[test]
+    fn extract_response_text_claude_extracts_from_content() {
+        let response = r#"{"content":[{"type":"text","text":"the answer"}]}"#;
+        let provider = Provider::Claude {
+            api_key: "k".to_string(),
+            model: "m".to_string(),
+        };
+
+        let text = extract_response_text(&provider, response).unwrap();
+
+        assert_eq!(text, "the answer");
     }
 
     #[test]
