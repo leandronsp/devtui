@@ -131,7 +131,13 @@ pub fn build_chat_prompt(
 
     if !messages.is_empty() {
         prompt.push_str("## Conversation History\n\n");
-        for msg in messages {
+        // Keep last 6 messages (3 exchanges) to stay within token budget
+        let recent = if messages.len() > 6 {
+            &messages[messages.len() - 6..]
+        } else {
+            messages
+        };
+        for msg in recent {
             let role = match msg.role {
                 Role::User => "User",
                 Role::Assistant => "Assistant",
