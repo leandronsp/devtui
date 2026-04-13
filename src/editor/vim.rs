@@ -598,14 +598,12 @@ impl RunLoopState {
             return Ok(false);
         }
 
-        // Chat mode: intercept keys for the chat input
+        // Chat mode: ALL keys go to chat input, nothing reaches vim
         if self.split_layout == SplitLayout::Chat {
             match key.code {
                 KeyCode::Esc => {
-                    // Return to preview
                     self.split_layout = SplitLayout::Vertical;
                     resize_pty(self.split_layout, terminal, pty_master, parser)?;
-                    return Ok(false);
                 }
                 KeyCode::Enter => {
                     if !self.chat.input.is_empty() && !self.chat.pending {
@@ -614,7 +612,6 @@ impl RunLoopState {
                         self.chat.add_user_message(&question);
                         self.chat.pending = true;
 
-                        // Build prompt with draft context and optional vault search
                         let draft = self.last_content.clone();
                         let vault_context = super::chat::query_vault(&question);
                         let prompt = super::chat::build_chat_prompt(
@@ -624,7 +621,6 @@ impl RunLoopState {
                             &question,
                         );
 
-                        // Fire LLM call in background thread
                         let chat_result = Arc::clone(&self.chat_result);
                         thread::spawn(move || {
                             let result = match super::llm::provider_from_env() {
@@ -636,18 +632,17 @@ impl RunLoopState {
                             }
                         });
                     }
-                    return Ok(false);
                 }
                 KeyCode::Backspace => {
                     self.chat.input.pop();
-                    return Ok(false);
                 }
                 KeyCode::Char(c) if !ctrl => {
                     self.chat.input.push(c);
-                    return Ok(false);
                 }
                 _ => {}
             }
+            // Block ALL keys from reaching vim while in chat
+            return Ok(false);
         }
 
         // Ctrl+T: switch to scribe panel and trigger immediate check
