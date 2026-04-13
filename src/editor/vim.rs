@@ -24,6 +24,7 @@ const CONTENT_TMP: &str = "/tmp/devtui-content";
 enum SplitLayout {
     Vertical,   // editor left, preview right (50/50)
     Scribe,     // editor left, scribe panel right (50/50)
+    Chat,       // editor left, chat panel right (50/50)
     EditorOnly, // full editor, no preview
 }
 
@@ -227,7 +228,7 @@ fn mode_style(mode: &str) -> (&str, Style) {
 fn vim_size(layout: SplitLayout, width: u16, height: u16) -> (u16, u16) {
     let rows = height.saturating_sub(3); // status bar + borders
     match layout {
-        SplitLayout::Vertical | SplitLayout::Scribe => ((width / 2).saturating_sub(2), rows),
+        SplitLayout::Vertical | SplitLayout::Scribe | SplitLayout::Chat => ((width / 2).saturating_sub(2), rows),
         SplitLayout::EditorOnly => (width.saturating_sub(2), rows),
     }
 }
@@ -254,6 +255,8 @@ struct RunLoopState {
     /// `author:` frontmatter field.
     blog_author: Option<String>,
     scribe: scribe::ScribeState,
+    chat: super::chat::ChatState,
+    chat_result: std::sync::Arc<Mutex<Option<Result<String, String>>>>,
 }
 
 impl RunLoopState {
@@ -272,6 +275,8 @@ impl RunLoopState {
             last_first_visible_line: 1,
             last_visible_rows: 40,
             scribe,
+            chat: super::chat::ChatState::new(),
+            chat_result: Arc::new(Mutex::new(None)),
         }
     }
 
@@ -351,6 +356,29 @@ impl RunLoopState {
         });
     }
 
+    /// Poll for chat LLM response (non-blocking).
+    fn poll_chat_result(&mut self) {
+        if !self.chat.pending {
+            return;
+        }
+        let result = if let Ok(mut guard) = self.chat_result.try_lock() {
+            guard.take()
+        } else {
+            return;
+        };
+        if let Some(result) = result {
+            match result {
+                Ok(response) => {
+                    self.chat.add_assistant_message(&response);
+                }
+                Err(err) => {
+                    self.chat.add_assistant_message(&format!("Error: {err}"));
+                }
+            }
+            self.chat.pending = false;
+        }
+    }
+
     /// Detect a `:w` save (modified flag transitions true -> false). Shows "saved" flash,
     /// reopens the preview pane if it was hidden, and triggers a preview refresh.
     #[allow(clippy::borrowed_box)]
@@ -417,7 +445,7 @@ impl RunLoopState {
         content_updated: bool,
     ) -> io::Result<ScrollInfo> {
         let pane_width = match self.split_layout {
-            SplitLayout::Vertical | SplitLayout::Scribe => (terminal.size()?.width / 2).saturating_sub(2),
+            SplitLayout::Vertical | SplitLayout::Scribe | SplitLayout::Chat => (terminal.size()?.width / 2).saturating_sub(2),
             SplitLayout::EditorOnly => 1,
         } as usize;
         let visual_lines: usize = self.cached_lines.iter().map(|line| {
@@ -452,6 +480,7 @@ impl RunLoopState {
         let layout_label = match self.split_layout {
             SplitLayout::Vertical => "|",
             SplitLayout::Scribe => "S",
+            SplitLayout::Chat => "C",
             SplitLayout::EditorOnly => "[]",
         };
 
@@ -502,6 +531,15 @@ impl RunLoopState {
                         panes[1],
                     );
                 }
+                SplitLayout::Chat => {
+                    let panes = Layout::horizontal([
+                        Constraint::Percentage(50),
+                        Constraint::Percentage(50),
+                    ])
+                    .split(main_area);
+                    render_editor(frame, parser, mode_label, mode_st, title_message, post_title.as_deref(), is_draft, panes[0]);
+                    render_chat(frame, &self.chat, panes[1]);
+                }
                 SplitLayout::EditorOnly => {
                     render_editor(frame, parser, mode_label, mode_st, title_message, post_title.as_deref(), is_draft, main_area);
                 }
@@ -542,11 +580,12 @@ impl RunLoopState {
     ) -> io::Result<bool> {
         let ctrl = key.modifiers.contains(KeyModifiers::CONTROL);
 
-        // Ctrl+G: cycle layout (preview -> scribe -> editor-only -> preview)
+        // Ctrl+G: cycle layout (preview -> scribe -> chat -> editor-only -> preview)
         if key.code == KeyCode::Char('g') && ctrl {
             self.split_layout = match self.split_layout {
                 SplitLayout::Vertical => SplitLayout::Scribe,
-                SplitLayout::Scribe => SplitLayout::EditorOnly,
+                SplitLayout::Scribe => SplitLayout::Chat,
+                SplitLayout::Chat => SplitLayout::EditorOnly,
                 SplitLayout::EditorOnly => SplitLayout::Vertical,
             };
             resize_pty(self.split_layout, terminal, pty_master, parser)?;
@@ -556,6 +595,58 @@ impl RunLoopState {
                 self.cached_lines = lines;
             }
             return Ok(false);
+        }
+
+        // Chat mode: intercept keys for the chat input
+        if self.split_layout == SplitLayout::Chat {
+            match key.code {
+                KeyCode::Esc => {
+                    // Return to preview
+                    self.split_layout = SplitLayout::Vertical;
+                    resize_pty(self.split_layout, terminal, pty_master, parser)?;
+                    return Ok(false);
+                }
+                KeyCode::Enter => {
+                    if !self.chat.input.is_empty() && !self.chat.pending {
+                        let question = self.chat.input.clone();
+                        self.chat.input.clear();
+                        self.chat.add_user_message(&question);
+                        self.chat.pending = true;
+
+                        // Build prompt with draft context and optional vault search
+                        let draft = self.last_content.clone();
+                        let vault_context = super::chat::query_vault(&question);
+                        let prompt = super::chat::build_chat_prompt(
+                            &draft,
+                            vault_context.as_deref(),
+                            &self.chat.messages,
+                            &question,
+                        );
+
+                        // Fire LLM call in background thread
+                        let chat_result = Arc::clone(&self.chat_result);
+                        thread::spawn(move || {
+                            let result = match super::llm::provider_from_env() {
+                                Ok(provider) => super::llm::call_llm(&provider, &prompt),
+                                Err(err) => Err(err),
+                            };
+                            if let Ok(mut slot) = chat_result.lock() {
+                                *slot = Some(result);
+                            }
+                        });
+                    }
+                    return Ok(false);
+                }
+                KeyCode::Backspace => {
+                    self.chat.input.pop();
+                    return Ok(false);
+                }
+                KeyCode::Char(c) if !ctrl => {
+                    self.chat.input.push(c);
+                    return Ok(false);
+                }
+                _ => {}
+            }
         }
 
         // Ctrl+T: switch directly to scribe panel
@@ -645,6 +736,7 @@ fn run_loop(
         state.poll_scribe_check();
         state.scribe.update_slow();
         state.scribe.poll_result();
+        state.poll_chat_result();
         let vim_state = parse_title(parser);
         state.last_first_visible_line = vim_state.first_visible_line;
         if let Ok(size) = terminal.size() {
@@ -806,6 +898,58 @@ fn render_scribe(
         .block(block)
         .wrap(Wrap { trim: false });
     frame.render_widget(widget, area);
+}
+
+fn render_chat(
+    frame: &mut ratatui::Frame,
+    chat: &super::chat::ChatState,
+    area: ratatui::layout::Rect,
+) {
+    use ratatui::layout::Direction;
+
+    // Split: message area on top, input area at bottom (3 lines)
+    let chunks = Layout::default()
+        .direction(Direction::Vertical)
+        .constraints([Constraint::Min(3), Constraint::Length(3)])
+        .split(area);
+
+    // Messages
+    let message_lines = chat.render_messages();
+    let messages_block = Block::default()
+        .borders(Borders::ALL)
+        .border_style(Style::default().fg(Color::DarkGray))
+        .title(Line::from(vec![
+            Span::raw(" CHAT "),
+            Span::styled(
+                if chat.pending { "[thinking...]" } else { "[ready]" },
+                Style::default().fg(if chat.pending { Color::Yellow } else { Color::DarkGray }),
+            ),
+            Span::raw(" "),
+        ]));
+
+    // Auto-scroll to bottom
+    let visible_height = chunks[0].height.saturating_sub(2);
+    let total_lines = message_lines.len() as u16;
+    let scroll = total_lines.saturating_sub(visible_height);
+
+    let messages_widget = Paragraph::new(message_lines)
+        .block(messages_block)
+        .wrap(Wrap { trim: false })
+        .scroll((scroll, 0));
+    frame.render_widget(messages_widget, chunks[0]);
+
+    // Input area
+    let input_block = Block::default()
+        .borders(Borders::ALL)
+        .border_style(Style::default().fg(Color::DarkGray))
+        .title(" Ask ");
+    let input_text = if chat.input.is_empty() {
+        Line::from(Span::styled("Type a question and press Enter...", Style::default().fg(Color::DarkGray)))
+    } else {
+        Line::from(chat.input.clone())
+    };
+    let input_widget = Paragraph::new(input_text).block(input_block);
+    frame.render_widget(input_widget, chunks[1]);
 }
 
 /// Calculate text preview scroll position to follow the cursor line.
