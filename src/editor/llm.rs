@@ -1,7 +1,7 @@
 //! LLM provider configuration and API calls.
 //! Supports Groq and Claude (Anthropic) via direct HTTP.
 
-pub const GROQ_DEFAULT_MODEL: &str = "llama-3.1-8b-instant";
+pub const GROQ_DEFAULT_MODEL: &str = "llama-3.3-70b-versatile";
 pub const CLAUDE_DEFAULT_MODEL: &str = "claude-haiku-4-5-20251001";
 
 #[derive(Debug, PartialEq)]
