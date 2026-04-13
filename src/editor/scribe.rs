@@ -173,8 +173,6 @@ pub enum ScribeStatus {
 
 /// Info needed by the background thread to run a scribe check.
 pub struct CheckRequest {
-    pub session_name: String,
-    pub session_needs_start: bool,
     pub content: String,
     pub start_line: usize,
 }
@@ -183,8 +181,6 @@ pub struct CheckRequest {
 pub struct ScribeState {
     pub annotations: Vec<Annotation>,
     pub status: ScribeStatus,
-    pub session_name: String,
-    pub session_started: bool,
     pub error: Option<String>,
     pub last_response: Option<Instant>,
     pub result: Arc<Mutex<Option<Result<String, String>>>>,
@@ -198,13 +194,17 @@ pub struct ScribeState {
 const IDLE_THRESHOLD: Duration = Duration::from_secs(10);
 const SLOW_THRESHOLD: Duration = Duration::from_secs(15);
 
+impl Default for ScribeState {
+    fn default() -> Self {
+        Self::new()
+    }
+}
+
 impl ScribeState {
-    pub fn new(session_name: String) -> Self {
+    pub fn new() -> Self {
         Self {
             annotations: Vec::new(),
             status: ScribeStatus::Idle,
-            session_name,
-            session_started: false,
             error: None,
             last_response: None,
             result: Arc::new(Mutex::new(None)),
@@ -216,7 +216,7 @@ impl ScribeState {
         }
     }
 
-    /// Clear display state when switching articles. Keeps session alive.
+    /// Clear display state when switching articles.
     pub fn clear_display(&mut self) {
         self.annotations.clear();
         self.status_log.clear();
@@ -255,27 +255,21 @@ impl ScribeState {
     /// `content` is the visible portion of the document.
     /// `start_line` is the 1-based line number of the first line in `content`.
     pub fn begin_check(&mut self, content: &str, start_line: usize) -> CheckRequest {
-        let needs_start = !self.session_started;
         self.pending = true;
         self.status = ScribeStatus::Checking;
         self.status_log.clear();
-        if needs_start {
-            self.status_log.push("Starting session...".to_string());
-        }
-        self.status_log.push("Sending to scribe...".to_string());
+        self.status_log.push("Checking...".to_string());
         self.check_started = Some(Instant::now());
         self.last_sent = content.to_string();
         self.idle_since = None;
 
         CheckRequest {
-            session_name: self.session_name.clone(),
-            session_needs_start: needs_start,
             content: content.to_string(),
             start_line,
         }
     }
 
-    /// Process a successful response from overmind.
+    /// Process a successful LLM response.
     pub fn handle_response(&mut self, response: &str) {
         log::info!("[scribe] handle_response: {} bytes", response.len());
         self.annotations = extract_annotations(response);
@@ -293,7 +287,7 @@ impl ScribeState {
         self.last_response = Some(Instant::now());
     }
 
-    /// Process a failed overmind call.
+    /// Process a failed LLM call.
     pub fn handle_error(&mut self, err: String) {
         log::warn!("scribe check failed: {err}");
         self.status_log.clear();
@@ -348,7 +342,7 @@ mod tests {
     use super::*;
 
     fn test_state() -> ScribeState {
-        ScribeState::new("scribe-test".to_string())
+        ScribeState::new()
     }
 
     // --- should_check ---
@@ -543,9 +537,8 @@ mod tests {
     // --- clear_display ---
 
     #[test]
-    fn clear_display_resets_annotations_and_log_but_keeps_session() {
+    fn clear_display_resets_annotations_and_log() {
         let mut state = test_state();
-        state.session_started = true;
         state.annotations = vec![
             Annotation { line: 1, tier: Tier::Error, message: "typo".into() },
         ];
@@ -561,9 +554,6 @@ mod tests {
         assert!(state.error.is_none());
         assert!(state.last_sent.is_empty());
         assert_eq!(state.status, ScribeStatus::Idle);
-        // Session stays alive
-        assert!(state.session_started);
-        assert_eq!(state.session_name, "scribe-test");
     }
 
     // --- push_log ---
@@ -585,22 +575,7 @@ mod tests {
         let mut state = test_state();
         state.begin_check("content", 1);
         assert!(!state.status_log.is_empty());
-        assert!(state.status_log.iter().any(|l| l.contains("Sending")));
-    }
-
-    #[test]
-    fn begin_check_first_time_logs_session_start() {
-        let mut state = test_state();
-        state.begin_check("content", 1);
-        assert!(state.status_log.iter().any(|l| l.contains("Starting session")));
-    }
-
-    #[test]
-    fn begin_check_warm_session_skips_session_start_log() {
-        let mut state = test_state();
-        state.session_started = true;
-        state.begin_check("content", 1);
-        assert!(!state.status_log.iter().any(|l| l.contains("Starting session")));
+        assert!(state.status_log.iter().any(|l| l.contains("Checking")));
     }
 
     #[test]

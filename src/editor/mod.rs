@@ -46,11 +46,8 @@ pub fn run_cms(blog_dir: PathBuf) -> io::Result<()> {
 /// Legacy entry point: run editor for a single file (no CMS).
 pub fn run(file_path: PathBuf) -> io::Result<()> {
     let mut terminal = ratatui::init();
-    let mut scribe = scribe::ScribeState::new(format!("scribe-{}", std::process::id()));
+    let mut scribe = scribe::ScribeState::new();
     let result = vim::run(&mut terminal, file_path, None, &mut scribe);
-    if scribe.session_started {
-        ops::kill_scribe_session(&scribe.session_name);
-    }
     ratatui::restore();
     result.map(|_| ())
 }
@@ -118,16 +115,13 @@ fn cms_loop(
         .map_err(|e| io::Error::other(e.to_string()))?;
 
     let mut list_view = ListView::new(blog_dir.to_path_buf(), articles, config);
-    let mut scribe = scribe::ScribeState::new(format!("scribe-{}", std::process::id()));
+    let mut scribe = scribe::ScribeState::new();
 
     loop {
         let action = list_view.run(terminal, conn)?;
 
         match action {
             ListAction::Quit => {
-                if scribe.session_started {
-                    ops::kill_scribe_session(&scribe.session_name);
-                }
                 return Ok(());
             }
             ListAction::Edit(id) => {

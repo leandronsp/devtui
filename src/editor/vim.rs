@@ -15,7 +15,7 @@ use ratatui::{
 };
 use tui_term::widget::PseudoTerminal;
 
-use super::{ops, preview, scribe};
+use super::{preview, scribe};
 
 const DRAFT_PATH: &str = "draft.md";
 const CONTENT_TMP: &str = "/tmp/devtui-content";
@@ -328,28 +328,25 @@ impl RunLoopState {
 
         let request = self.scribe.begin_check(&visible_content, start_line);
 
-        // Start session + subscriber on first check.
-        if request.session_needs_start {
-            let result_slot = Arc::clone(&self.scribe.result);
-            if let Err(err) = ops::start_scribe_session(&request.session_name, result_slot) {
+        // Resolve provider once per check. If no API key, report error.
+        let provider = match super::llm::provider_from_env() {
+            Ok(p) => p,
+            Err(err) => {
                 if let Ok(mut slot) = self.scribe.result.lock() {
                     *slot = Some(Err(err));
                 }
                 return;
             }
-            self.scribe.session_started = true;
-        }
+        };
 
-        // Fire-and-forget send. The subscriber thread picks up the response.
-        let session_name = request.session_name.clone();
+        // Fire-and-forget LLM call in a background thread.
         let result_slot = Arc::clone(&self.scribe.result);
         let prompt = scribe::build_check_prompt(&request.content, request.start_line);
         log::info!("[scribe] check started ({} bytes prompt)", prompt.len());
         thread::spawn(move || {
-            if let Err(err) = ops::send_to_scribe(&session_name, &prompt) {
-                if let Ok(mut slot) = result_slot.lock() {
-                    *slot = Some(Err(err));
-                }
+            let result = super::llm::call_llm(&provider, &prompt);
+            if let Ok(mut slot) = result_slot.lock() {
+                *slot = Some(result);
             }
         });
     }
@@ -500,7 +497,7 @@ impl RunLoopState {
                     );
                     render_scribe(
                         frame, &scribe_lines, self.scribe.status,
-                        &self.scribe.session_name, self.scribe.last_response,
+                        self.scribe.last_response,
                         self.scribe.error.as_deref(), &self.scribe.status_log,
                         panes[1],
                     );
@@ -633,7 +630,7 @@ fn run_loop(
     scribe: &mut scribe::ScribeState,
 ) -> io::Result<()> {
     let blog_author = html_config.map(|c| c.blog_config.author.clone());
-    let placeholder = scribe::ScribeState::new(String::new());
+    let placeholder = scribe::ScribeState::new();
     let mut owned_scribe = std::mem::replace(scribe, placeholder);
     owned_scribe.clear_display();
     let mut state = RunLoopState::new(blog_author, owned_scribe);
@@ -764,7 +761,6 @@ fn render_scribe(
     frame: &mut ratatui::Frame,
     scribe_lines: &[Line<'static>],
     status: scribe::ScribeStatus,
-    session_name: &str,
     last_response: Option<std::time::Instant>,
     error: Option<&str>,
     status_log: &[String],
@@ -780,7 +776,7 @@ fn render_scribe(
         .map(|t| format!(" {}s ago", t.elapsed().as_secs()))
         .unwrap_or_default();
     let title = Line::from(vec![
-        Span::raw(format!(" SCRIBE {session_name} ")),
+        Span::raw(" SCRIBE "),
         Span::styled(format!("[{status_label}]"), Style::default().fg(status_color)),
         Span::styled(elapsed, Style::default().fg(Color::DarkGray)),
         Span::raw(" "),
