@@ -94,7 +94,14 @@ pub fn build_chat_prompt(
 
     prompt.push_str("You are a writing companion. The user is editing a blog post.\n\n");
     prompt.push_str("## Current Draft\n\n");
-    prompt.push_str(draft);
+    // Truncate draft to ~3000 chars to stay within token limits
+    let truncated = if draft.len() > 3000 {
+        let cut = &draft[..draft[..3000].rfind('\n').unwrap_or(3000)];
+        format!("{cut}\n\n[...draft truncated, {} total chars...]", draft.len())
+    } else {
+        draft.to_string()
+    };
+    prompt.push_str(&truncated);
     prompt.push_str("\n\n");
 
     if let Some(vault) = vault_context {
@@ -247,5 +254,14 @@ mod tests {
         let prompt = build_chat_prompt("draft", None, &[], "question");
 
         assert!(!prompt.contains("Vault"));
+    }
+
+    #[test]
+    fn build_chat_prompt_truncates_long_drafts() {
+        let long_draft = "word ".repeat(1000); // ~5000 chars
+        let prompt = build_chat_prompt(&long_draft, None, &[], "question");
+
+        assert!(prompt.contains("truncated"));
+        assert!(prompt.len() < long_draft.len());
     }
 }
