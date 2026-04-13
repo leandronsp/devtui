@@ -47,8 +47,7 @@ pub fn run_cms(blog_dir: PathBuf) -> io::Result<()> {
 /// Legacy entry point: run editor for a single file (no CMS).
 pub fn run(file_path: PathBuf) -> io::Result<()> {
     let mut terminal = ratatui::init();
-    let mut scribe = scribe::ScribeState::new();
-    let result = vim::run(&mut terminal, file_path, None, &mut scribe);
+    let result = vim::run(&mut terminal, file_path, None);
     ratatui::restore();
     result.map(|_| ())
 }
@@ -116,7 +115,6 @@ fn cms_loop(
         .map_err(|e| io::Error::other(e.to_string()))?;
 
     let mut list_view = ListView::new(blog_dir.to_path_buf(), articles, config);
-    let mut scribe = scribe::ScribeState::new();
 
     loop {
         let action = list_view.run(terminal, conn)?;
@@ -126,11 +124,11 @@ fn cms_loop(
                 return Ok(());
             }
             ListAction::Edit(id) => {
-                edit_article(terminal, conn, blog_dir, id, html_config, &mut scribe)?;
+                edit_article(terminal, conn, blog_dir, id, html_config)?;
                 list_view.refresh(conn);
             }
             ListAction::New => {
-                new_article(terminal, conn, blog_dir, html_config, &mut scribe)?;
+                new_article(terminal, conn, blog_dir, html_config)?;
                 list_view.refresh(conn);
             }
         }
@@ -143,7 +141,6 @@ fn edit_article(
     blog_dir: &Path,
     id: i64,
     html_config: Option<&HtmlPreviewConfig>,
-    scribe: &mut scribe::ScribeState,
 ) -> io::Result<()> {
     let article = db::get_article(conn, id)
         .map_err(|e| io::Error::other(e.to_string()))?;
@@ -153,7 +150,7 @@ fn edit_article(
     let tmp_file = tmp_dir.join(format!("{}.md", article.slug));
     std::fs::write(&tmp_file, &article.content)?;
 
-    let (_result, final_content) = vim::run(terminal, tmp_file.clone(), html_config, scribe)?;
+    let (_result, final_content) = vim::run(terminal, tmp_file.clone(), html_config)?;
 
     // Only update DB if content actually changed (protects against :q! or crash)
     if !final_content.is_empty() && final_content != article.content {
@@ -181,7 +178,6 @@ fn new_article(
     conn: &Connection,
     _blog_dir: &Path,
     html_config: Option<&HtmlPreviewConfig>,
-    scribe: &mut scribe::ScribeState,
 ) -> io::Result<()> {
     let article = db::create_article(conn, "Untitled")
         .map_err(|e| io::Error::other(e.to_string()))?;
@@ -191,7 +187,7 @@ fn new_article(
     let tmp_file = tmp_dir.join(format!("{}.md", article.slug));
     std::fs::write(&tmp_file, "")?;
 
-    let (_result, final_content) = vim::run(terminal, tmp_file.clone(), html_config, scribe)?;
+    let (_result, final_content) = vim::run(terminal, tmp_file.clone(), html_config)?;
 
     if !final_content.is_empty() {
         let _ = db::update_content(conn, article.id, &final_content);

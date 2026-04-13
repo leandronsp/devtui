@@ -122,14 +122,19 @@ pub fn build_chat_prompt(
          The author writes technical blog posts in English and Portuguese.\n\
          You see the article's frontmatter (metadata) and the section currently \
          visible on screen (with some margin for context).\n\n\
-         When the user asks about their notes, past ideas, TILs, or blog drafts, \
-         related notes from their Obsidian vault are included below (from learning/, \
-         lives/, and blog/ folders only). Use them to suggest connections.\n\n\
+         Capabilities:\n\
+         - Grammar and spelling: the user can ask you to check grammar at any time. \
+         Review the visible section and point out errors with the specific line.\n\
+         - Writing advice: suggest improvements, phrasing, structure.\n\
+         - Vault notes: when the user mentions notes, ideas, TILs, or drafts, \
+         related notes from their Obsidian vault may be included below \
+         (from learning/, lives/, and blog/ folders only). Reference them to \
+         suggest connections to past work.\n\n\
          Rules:\n\
          - Answer in the same language as the question\n\
          - Be concise and direct\n\
          - Use short paragraphs with line breaks for readability\n\
-         - When suggesting edits, quote the specific line\n\
+         - When suggesting edits, quote the specific text\n\
          - You can reference the article's frontmatter (title, tags, status)\n\
          - Do NOT invent vault notes. Only reference notes shown in the context\n\n",
     );
@@ -326,10 +331,10 @@ mod tests {
     }
 
     #[test]
-    fn build_chat_prompt_omits_vault_section_when_none() {
+    fn build_chat_prompt_omits_vault_results_when_none() {
         let prompt = build_chat_prompt("", "draft", None, &[], "question");
 
-        assert!(!prompt.contains("Vault"));
+        assert!(!prompt.contains("Related Notes from Vault"));
     }
 
     #[test]

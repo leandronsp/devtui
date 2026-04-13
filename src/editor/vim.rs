@@ -15,7 +15,7 @@ use ratatui::{
 };
 use tui_term::widget::PseudoTerminal;
 
-use super::{preview, scribe};
+use super::preview;
 
 const DRAFT_PATH: &str = "draft.md";
 const CONTENT_TMP: &str = "/tmp/devtui-content";
@@ -23,7 +23,6 @@ const CONTENT_TMP: &str = "/tmp/devtui-content";
 #[derive(Clone, Copy, PartialEq)]
 enum SplitLayout {
     Vertical,   // editor left, preview right (50/50)
-    Scribe,     // editor left, scribe panel right (50/50)
     Chat,       // editor left, chat panel right (50/50)
     EditorOnly, // full editor, no preview
 }
@@ -42,7 +41,6 @@ pub fn run(
     terminal: &mut ratatui::DefaultTerminal,
     file_path: PathBuf,
     html_config: Option<&HtmlPreviewConfig>,
-    scribe: &mut scribe::ScribeState,
 ) -> io::Result<(EditorResult, String)> {
     if !file_path.exists() {
         std::fs::write(&file_path, "")?;
@@ -145,7 +143,6 @@ pub fn run(
         &vim_exited,
         &content_swap,
         html_config,
-        scribe,
     )?;
 
     // Read final content from the actual file vim was editing.
@@ -228,7 +225,7 @@ fn mode_style(mode: &str) -> (&str, Style) {
 fn vim_size(layout: SplitLayout, width: u16, height: u16) -> (u16, u16) {
     let rows = height.saturating_sub(3); // status bar + borders
     match layout {
-        SplitLayout::Vertical | SplitLayout::Scribe | SplitLayout::Chat => ((width / 2).saturating_sub(2), rows),
+        SplitLayout::Vertical | SplitLayout::Chat => ((width / 2).saturating_sub(2), rows),
         SplitLayout::EditorOnly => (width.saturating_sub(2), rows),
     }
 }
@@ -254,14 +251,13 @@ struct RunLoopState {
     /// Blog author from blog.toml; rendered in preview header when post has no
     /// `author:` frontmatter field.
     blog_author: Option<String>,
-    scribe: scribe::ScribeState,
     chat: super::chat::ChatState,
     chat_focused: bool,
     chat_result: std::sync::Arc<Mutex<Option<Result<String, String>>>>,
 }
 
 impl RunLoopState {
-    fn new(blog_author: Option<String>, scribe: scribe::ScribeState) -> Self {
+    fn new(blog_author: Option<String>) -> Self {
         Self {
             last_content: String::new(),
             cached_lines: Vec::new(),
@@ -275,7 +271,6 @@ impl RunLoopState {
             blog_author,
             last_first_visible_line: 1,
             last_visible_rows: 40,
-            scribe,
             chat: super::chat::ChatState::new(),
             chat_focused: false,
             chat_result: Arc::new(Mutex::new(None)),
@@ -291,7 +286,6 @@ impl RunLoopState {
                     self.last_content = new_content;
                     self.content_changed_at = Some(std::time::Instant::now());
                     self.preview_stale = true;
-                    self.scribe.content_invalidated();
                 }
             }
         }
@@ -317,45 +311,6 @@ impl RunLoopState {
             self.cached_lines = lines;
         }
         true
-    }
-
-    /// Scribe: check if idle debounce fired, spawn background thread if so.
-    /// Sends only the visible portion of the document to keep the prompt small.
-    fn poll_scribe_check(&mut self) {
-        let is_active = self.split_layout == SplitLayout::Scribe;
-        if !self.scribe.should_check(&self.last_content, is_active) {
-            return;
-        }
-
-        let lines: Vec<&str> = self.last_content.lines().collect();
-        let start = self.last_first_visible_line.saturating_sub(1); // 0-based index
-        let end = (start + self.last_visible_rows).min(lines.len());
-        let visible_content = lines[start..end].join("\n");
-        let start_line = start + 1; // 1-based for the prompt
-
-        let request = self.scribe.begin_check(&visible_content, start_line);
-
-        // Resolve provider once per check. If no API key, report error.
-        let provider = match super::llm::provider_from_env() {
-            Ok(p) => p,
-            Err(err) => {
-                if let Ok(mut slot) = self.scribe.result.lock() {
-                    *slot = Some(Err(err));
-                }
-                return;
-            }
-        };
-
-        // Fire-and-forget LLM call in a background thread.
-        let result_slot = Arc::clone(&self.scribe.result);
-        let prompt = scribe::build_check_prompt(&request.content, request.start_line);
-        log::info!("[scribe] check started ({} bytes prompt)", prompt.len());
-        thread::spawn(move || {
-            let result = super::llm::call_llm(&provider, &prompt);
-            if let Ok(mut slot) = result_slot.lock() {
-                *slot = Some(result);
-            }
-        });
     }
 
     /// Poll for chat LLM response (non-blocking).
@@ -447,7 +402,7 @@ impl RunLoopState {
         content_updated: bool,
     ) -> io::Result<ScrollInfo> {
         let pane_width = match self.split_layout {
-            SplitLayout::Vertical | SplitLayout::Scribe | SplitLayout::Chat => (terminal.size()?.width / 2).saturating_sub(2),
+            SplitLayout::Vertical | SplitLayout::Chat => (terminal.size()?.width / 2).saturating_sub(2),
             SplitLayout::EditorOnly => 1,
         } as usize;
         let visual_lines: usize = self.cached_lines.iter().map(|line| {
@@ -481,7 +436,6 @@ impl RunLoopState {
         let title_message = self.title_message(vim_state);
         let layout_label = match self.split_layout {
             SplitLayout::Vertical => "|",
-            SplitLayout::Scribe => "S",
             SplitLayout::Chat => "C",
             SplitLayout::EditorOnly => "[]",
         };
@@ -512,28 +466,6 @@ impl RunLoopState {
                     render_editor(frame, parser, mode_label, mode_st, title_message, post_title.as_deref(), is_draft, panes[0]);
                     render_preview(frame, &self.cached_lines, scroll.clamped_scroll, panes[1]);
                 }
-                SplitLayout::Scribe => {
-                    let panes = Layout::horizontal([
-                        Constraint::Percentage(50),
-                        Constraint::Percentage(50),
-                    ])
-                    .split(main_area);
-                    render_editor(frame, parser, mode_label, mode_st, title_message, post_title.as_deref(), is_draft, panes[0]);
-
-                    let vim_rows = panes[0].height.saturating_sub(2) as usize;
-                    let visible_start = vim_state.first_visible_line as u16;
-                    let visible_end = (vim_state.first_visible_line + vim_rows) as u16;
-                    let all_annotations = self.scribe.all_annotations();
-                    let scribe_lines = scribe::render_lines_with_focus(
-                        &all_annotations, visible_start, visible_end,
-                    );
-                    render_scribe(
-                        frame, &scribe_lines, self.scribe.status,
-                        self.scribe.last_response,
-                        self.scribe.error.as_deref(), &self.scribe.status_log,
-                        self.preview_scroll, panes[1],
-                    );
-                }
                 SplitLayout::Chat => {
                     let panes = Layout::horizontal([
                         Constraint::Percentage(50),
@@ -562,7 +494,7 @@ impl RunLoopState {
             };
             let status = Line::from(Span::styled(
                 format!(
-                    " DevTUI [{layout_label}] ^P:preview ^T:scribe ^Y:chat{browser_hint}{follow_hint}{scroll_hint}",
+                    " DevTUI [{layout_label}] ^P:preview ^Y:chat{browser_hint}{follow_hint}{scroll_hint}",
                 ),
                 Style::default().fg(Color::DarkGray),
             ));
@@ -662,19 +594,6 @@ impl RunLoopState {
             return Ok(false);
         }
 
-        // Ctrl+T: toggle scribe
-        if key.code == KeyCode::Char('t') && ctrl {
-            if self.split_layout == SplitLayout::Scribe {
-                self.split_layout = SplitLayout::EditorOnly;
-            } else {
-                self.split_layout = SplitLayout::Scribe;
-                self.scribe.content_invalidated();
-                self.scribe.force_idle();
-            }
-            resize_pty(self.split_layout, terminal, pty_master, parser)?;
-            return Ok(false);
-        }
-
         // Ctrl+Y: open chat + focus, or toggle focus if already open
         if key.code == KeyCode::Char('y') && ctrl {
             if self.split_layout != SplitLayout::Chat {
@@ -745,13 +664,9 @@ fn run_loop(
     vim_exited: &Arc<AtomicBool>,
     content_swap: &Arc<Mutex<Option<String>>>,
     html_config: Option<&HtmlPreviewConfig>,
-    scribe: &mut scribe::ScribeState,
 ) -> io::Result<()> {
     let blog_author = html_config.map(|c| c.blog_config.author.clone());
-    let placeholder = scribe::ScribeState::new();
-    let mut owned_scribe = std::mem::replace(scribe, placeholder);
-    owned_scribe.clear_display();
-    let mut state = RunLoopState::new(blog_author, owned_scribe);
+    let mut state = RunLoopState::new(blog_author);
 
     loop {
         if vim_exited.load(Ordering::Relaxed) {
@@ -760,13 +675,6 @@ fn run_loop(
 
         state.poll_content_swap(content_swap);
         let content_updated = state.poll_preview_render();
-        if content_updated {
-            state.scribe.check_grammar(&state.last_content.clone());
-        }
-        state.scribe.poll_grammar();
-        state.poll_scribe_check();
-        state.scribe.update_slow();
-        state.scribe.poll_result();
         state.poll_chat_result();
         let vim_state = parse_title(parser);
         state.last_first_visible_line = vim_state.first_visible_line;
@@ -796,10 +704,6 @@ fn run_loop(
             }
         }
     }
-
-    // Move scribe state back so it survives across articles.
-    // Session kill happens at process exit, not article exit.
-    *scribe = state.scribe;
 
     Ok(())
 }
@@ -877,60 +781,6 @@ fn render_preview(
         .wrap(Wrap { trim: false })
         .scroll((scroll, 0));
     frame.render_widget(preview_widget, area);
-}
-
-#[allow(clippy::too_many_arguments)]
-fn render_scribe(
-    frame: &mut ratatui::Frame,
-    scribe_lines: &[Line<'static>],
-    status: scribe::ScribeStatus,
-    last_response: Option<std::time::Instant>,
-    error: Option<&str>,
-    status_log: &[String],
-    scroll_offset: u16,
-    area: ratatui::layout::Rect,
-) {
-    let (status_label, status_color) = match status {
-        scribe::ScribeStatus::Idle => ("idle", Color::DarkGray),
-        scribe::ScribeStatus::Checking => ("checking...", Color::Yellow),
-        scribe::ScribeStatus::CheckingSlow => ("checking... (slow)", Color::Yellow),
-        scribe::ScribeStatus::Error => ("error", Color::Red),
-    };
-    let elapsed = last_response
-        .map(|t| format!(" {}s ago", t.elapsed().as_secs()))
-        .unwrap_or_default();
-    let title = Line::from(vec![
-        Span::raw(" SCRIBE "),
-        Span::styled(format!("[{status_label}]"), Style::default().fg(status_color)),
-        Span::styled(elapsed, Style::default().fg(Color::DarkGray)),
-        Span::raw(" "),
-    ]);
-    let block = Block::default()
-        .borders(Borders::ALL)
-        .border_style(Style::default().fg(Color::DarkGray))
-        .title(title);
-
-    let dim = Style::default().fg(Color::DarkGray);
-    let content = if let Some(err) = error {
-        vec![
-            Line::from(""),
-            Line::from(Span::styled(format!(" Error: {err}"), Style::default().fg(Color::Red))),
-        ]
-    } else if !scribe_lines.is_empty() {
-        scribe_lines.to_vec()
-    } else if !status_log.is_empty() {
-        status_log.iter()
-            .map(|msg| Line::from(Span::styled(format!(" {msg}"), dim)))
-            .collect()
-    } else {
-        vec![Line::from(Span::styled(" Waiting for content...", dim))]
-    };
-
-    let widget = Paragraph::new(content)
-        .block(block)
-        .wrap(Wrap { trim: false })
-        .scroll((scroll_offset, 0));
-    frame.render_widget(widget, area);
 }
 
 fn render_chat(
