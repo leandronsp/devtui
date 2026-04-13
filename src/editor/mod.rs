@@ -184,7 +184,8 @@ fn new_article(
     let tmp_dir = std::env::temp_dir().join("devtui-cms");
     std::fs::create_dir_all(&tmp_dir)?;
     let tmp_file = tmp_dir.join(format!("{}.md", article.slug));
-    std::fs::write(&tmp_file, "")?;
+    let default_frontmatter = "---\ntitle: Untitled\nstatus: draft\n---\n\n";
+    std::fs::write(&tmp_file, default_frontmatter)?;
 
     let (_result, final_content) = vim::run(terminal, tmp_file.clone(), html_config)?;
 

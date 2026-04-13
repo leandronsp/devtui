@@ -294,7 +294,7 @@ fn style_for_tag(tag: &Tag<'_>, spans: &mut Vec<Span<'static>>, list_depth: &mut
             .fg(Color::Green)
             .add_modifier(Modifier::BOLD),
         Tag::Strikethrough => Style::default().add_modifier(Modifier::CROSSED_OUT),
-        Tag::CodeBlock(_) => Style::default().fg(Color::Red),
+        Tag::CodeBlock(_) => Style::default().fg(Color::Gray),
         Tag::BlockQuote(_) => {
             spans.push(Span::styled(
                 "  > ",
@@ -350,8 +350,9 @@ fn handle_tag_end(tag_end: TagEnd, spans: &mut Vec<Span<'static>>, lines: &mut V
             }
         }
         TagEnd::CodeBlock => {
-            lines.push(Line::from(std::mem::take(spans)));
-            push_blank_line(lines);
+            if !spans.is_empty() {
+                lines.push(Line::from(std::mem::take(spans)));
+            }
         }
         TagEnd::Link => {
             spans.push(Span::styled("]", Style::default().fg(Color::Blue)));
@@ -689,6 +690,33 @@ mod tests {
         let (lines, _) = render_with_offsets(md, None);
         let combined: String = all_text(&lines).join("\n");
         assert!(combined.contains("fn main()"));
+    }
+
+    #[test]
+    fn code_block_no_extra_blank_lines_before_next_paragraph() {
+        // Bug: after a fenced code block ends, multiple blank lines appear
+        // in the preview that don't exist in the source markdown.
+        // Expected: exactly one blank line between code block and next paragraph.
+        let md = "```\nlet x = 1;\n```\n\nNext paragraph.";
+        let (lines, _) = render_with_offsets(md, None);
+        let texts = all_text(&lines);
+        // Find the code line and the paragraph
+        let code_idx = texts.iter().position(|t| t == "let x = 1;").expect("code line");
+        let para_idx = texts.iter().position(|t| t.contains("Next paragraph")).expect("paragraph");
+        // Between them should be at most 1 blank line (the separator)
+        let blanks = texts[code_idx + 1..para_idx].iter().filter(|t| t.is_empty()).count();
+        assert!(blanks <= 1, "expected at most 1 blank line after code block, got {blanks}. Lines: {:?}", &texts[code_idx..=para_idx]);
+    }
+
+    #[test]
+    fn code_block_text_not_styled_red() {
+        // Bug: code block content renders in red, which looks like terminal
+        // artifacts or error output. Code blocks should use a neutral color.
+        let md = "```\nlet x = 1;\n```";
+        let (lines, _) = render_with_offsets(md, None);
+        let code_line = lines.iter().find(|l| line_text(l) == "let x = 1;").expect("code line");
+        let code_span = &code_line.spans[0];
+        assert_ne!(code_span.style.fg, Some(Color::Red), "code block text should not be red");
     }
 
     // Horizontal rule

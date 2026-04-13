@@ -543,16 +543,15 @@ impl RunLoopState {
                         let messages = self.chat.messages.clone();
                         let chat_result = Arc::clone(&self.chat_result);
                         thread::spawn(move || {
-                            let vault_context = super::chat::query_vault(&question);
                             let prompt = super::chat::build_chat_prompt(
                                 &frontmatter,
                                 &visible_window,
-                                vault_context.as_deref(),
+                                None,
                                 &messages,
                                 &question,
                             );
                             let result = match super::llm::provider_from_env() {
-                                Ok(provider) => super::llm::call_llm(&provider, &prompt),
+                                Ok(provider) => super::llm::call_llm_with_tools(&provider, &prompt),
                                 Err(err) => Err(err),
                             };
                             if let Ok(mut slot) = chat_result.lock() {
@@ -794,10 +793,10 @@ fn render_chat(
 ) {
     use ratatui::layout::Direction;
 
-    // Split: message area on top, input area at bottom (3 lines)
+    // Split: message area on top, input area at bottom (5 lines for wrap)
     let chunks = Layout::default()
         .direction(Direction::Vertical)
-        .constraints([Constraint::Min(3), Constraint::Length(3)])
+        .constraints([Constraint::Min(3), Constraint::Length(5)])
         .split(area);
 
     // Messages
@@ -840,7 +839,9 @@ fn render_chat(
     } else {
         Line::from(chat.input.clone())
     };
-    let input_widget = Paragraph::new(input_text).block(input_block);
+    let input_widget = Paragraph::new(input_text)
+        .block(input_block)
+        .wrap(Wrap { trim: false });
     frame.render_widget(input_widget, chunks[1]);
 }
 

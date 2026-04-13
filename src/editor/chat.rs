@@ -67,7 +67,7 @@ impl ChatState {
             } else {
                 lines.push(Line::from(vec![
                     Span::styled(prefix, Style::default().fg(color)),
-                    Span::raw(content_lines[0].to_string()),
+                    Span::styled(content_lines[0].to_string(), Style::default().fg(color)),
                 ]));
                 for content_line in &content_lines[1..] {
                     lines.push(Line::from(Span::styled(
@@ -120,7 +120,9 @@ pub fn build_chat_prompt(
     prompt.push_str(
         "Blog writing assistant. Answer in the same language as the question.\n\
          Be concise. Use line breaks between paragraphs.\n\
-         Only reference vault notes if they appear in the context below.\n\n",
+         You have a vault_search tool to search the user's Obsidian vault. \
+         Use it when the user asks about their notes, ideas, or knowledge base. \
+         Use short English keywords for the search query.\n\n",
     );
 
     if !frontmatter.is_empty() {
@@ -275,6 +277,25 @@ mod tests {
 
         let text: Vec<String> = lines.iter().map(|l| l.to_string()).collect();
         assert!(text.iter().any(|l| l.contains("thinking...")));
+    }
+
+    #[test]
+    fn render_multiline_assistant_uses_consistent_color() {
+        // Bug: first line of AI response is white (Span::raw), continuation
+        // lines are green. All content lines should use the same color.
+        let mut chat = ChatState::new();
+        chat.add_assistant_message("First paragraph.\n\nSecond paragraph.");
+        let lines = chat.render_messages();
+        // Line 0: "AI: First paragraph." (prefix + content)
+        // Line 1: "  " (blank from LLM)
+        // Line 2: "  Second paragraph."
+        let first_content_span = &lines[0].spans[1]; // content span after prefix
+        let continuation_span = &lines[2].spans[0];
+        assert_eq!(
+            first_content_span.style.fg, continuation_span.style.fg,
+            "first line fg {:?} != continuation fg {:?}",
+            first_content_span.style.fg, continuation_span.style.fg
+        );
     }
 
     #[test]
