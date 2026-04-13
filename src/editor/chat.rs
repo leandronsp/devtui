@@ -92,7 +92,12 @@ pub fn build_chat_prompt(
 ) -> String {
     let mut prompt = String::new();
 
-    prompt.push_str("You are a writing companion. The user is editing a blog post.\n\n");
+    prompt.push_str(
+        "You are a writing companion for a blog author who writes in English and Portuguese.\n\
+         You have access to the current draft and related notes from the author's Obsidian vault \
+         (searched via qmd). Use vault notes to provide context, suggest connections, and reference \
+         past ideas. Be concise. Answer in the same language as the question.\n\n",
+    );
     prompt.push_str("## Current Draft\n\n");
     // Truncate draft to ~3000 chars to stay within token limits
     let truncated = if draft.len() > 3000 {
@@ -129,7 +134,7 @@ pub fn build_chat_prompt(
 /// Query the vault via qmd for related context. Returns None if qmd is not installed.
 pub fn query_vault(question: &str) -> Option<String> {
     let output = std::process::Command::new("qmd")
-        .args(["query", "-c", "vault", question])
+        .args(["query", "--limit", "3", question])
         .output()
         .ok()?;
 

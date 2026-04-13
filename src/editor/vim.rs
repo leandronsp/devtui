@@ -256,6 +256,7 @@ struct RunLoopState {
     blog_author: Option<String>,
     scribe: scribe::ScribeState,
     chat: super::chat::ChatState,
+    chat_focused: bool,
     chat_result: std::sync::Arc<Mutex<Option<Result<String, String>>>>,
 }
 
@@ -276,6 +277,7 @@ impl RunLoopState {
             last_visible_rows: 40,
             scribe,
             chat: super::chat::ChatState::new(),
+            chat_focused: false,
             chat_result: Arc::new(Mutex::new(None)),
         }
     }
@@ -538,7 +540,7 @@ impl RunLoopState {
                     ])
                     .split(main_area);
                     render_editor(frame, parser, mode_label, mode_st, title_message, post_title.as_deref(), is_draft, panes[0]);
-                    render_chat(frame, &self.chat, panes[1]);
+                    render_chat(frame, &self.chat, self.chat_focused, panes[1]);
                 }
                 SplitLayout::EditorOnly => {
                     render_editor(frame, parser, mode_label, mode_st, title_message, post_title.as_deref(), is_draft, main_area);
@@ -598,12 +600,11 @@ impl RunLoopState {
             return Ok(false);
         }
 
-        // Chat mode: ALL keys go to chat input, nothing reaches vim
-        if self.split_layout == SplitLayout::Chat {
+        // Chat mode: when focused, keys go to chat input. Esc returns to vim.
+        if self.split_layout == SplitLayout::Chat && self.chat_focused {
             match key.code {
                 KeyCode::Esc => {
-                    self.split_layout = SplitLayout::Vertical;
-                    resize_pty(self.split_layout, terminal, pty_master, parser)?;
+                    self.chat_focused = false;
                 }
                 KeyCode::Enter => {
                     if !self.chat.input.is_empty() && !self.chat.pending {
@@ -613,16 +614,17 @@ impl RunLoopState {
                         self.chat.pending = true;
 
                         let draft = self.last_content.clone();
-                        let vault_context = super::chat::query_vault(&question);
-                        let prompt = super::chat::build_chat_prompt(
-                            &draft,
-                            vault_context.as_deref(),
-                            &self.chat.messages,
-                            &question,
-                        );
-
+                        let messages = self.chat.messages.clone();
                         let chat_result = Arc::clone(&self.chat_result);
+                        // All blocking work (vault query + LLM call) in background
                         thread::spawn(move || {
+                            let vault_context = super::chat::query_vault(&question);
+                            let prompt = super::chat::build_chat_prompt(
+                                &draft,
+                                vault_context.as_deref(),
+                                &messages,
+                                &question,
+                            );
                             let result = match super::llm::provider_from_env() {
                                 Ok(provider) => super::llm::call_llm(&provider, &prompt),
                                 Err(err) => Err(err),
@@ -657,12 +659,13 @@ impl RunLoopState {
             return Ok(false);
         }
 
-        // Ctrl+Y: switch directly to chat panel
+        // Ctrl+Y: switch to chat panel and focus input
         if key.code == KeyCode::Char('y') && ctrl {
             if self.split_layout != SplitLayout::Chat {
                 self.split_layout = SplitLayout::Chat;
                 resize_pty(self.split_layout, terminal, pty_master, parser)?;
             }
+            self.chat_focused = true;
             return Ok(false);
         }
 
@@ -911,6 +914,7 @@ fn render_scribe(
 fn render_chat(
     frame: &mut ratatui::Frame,
     chat: &super::chat::ChatState,
+    focused: bool,
     area: ratatui::layout::Rect,
 ) {
     use ratatui::layout::Direction;
@@ -947,12 +951,16 @@ fn render_chat(
     frame.render_widget(messages_widget, chunks[0]);
 
     // Input area
+    let border_color = if focused { Color::Cyan } else { Color::DarkGray };
+    let input_title = if focused { " Ask (Esc: back to vim) " } else { " ^Y to type " };
     let input_block = Block::default()
         .borders(Borders::ALL)
-        .border_style(Style::default().fg(Color::DarkGray))
-        .title(" Ask ");
-    let input_text = if chat.input.is_empty() {
-        Line::from(Span::styled("Type a question and press Enter...", Style::default().fg(Color::DarkGray)))
+        .border_style(Style::default().fg(border_color))
+        .title(input_title);
+    let input_text = if chat.input.is_empty() && !focused {
+        Line::from(Span::styled("Press ^Y to ask a question...", Style::default().fg(Color::DarkGray)))
+    } else if chat.input.is_empty() {
+        Line::from(Span::styled("Type your question and press Enter...", Style::default().fg(Color::DarkGray)))
     } else {
         Line::from(chat.input.clone())
     };
