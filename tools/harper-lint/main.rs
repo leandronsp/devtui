@@ -16,6 +16,14 @@ fn main() {
     let dict = FstDictionary::curated();
     let document = Document::new_markdown_default_curated(&input);
     let mut linter = LintGroup::new_curated(dict, Dialect::American);
+
+    // Disable noisy rules for blog writing
+    linter.config.set_rule_enabled("UseTitleCase", false);
+    linter.config.set_rule_enabled("DisjointPrefixes", false);
+    linter.config.set_rule_enabled("LongSentences", false);
+    linter.config.set_rule_enabled("SentenceCapitalization", false);
+    linter.config.set_rule_enabled("SpellCheck", false);
+
     let lints = linter.lint(&document);
 
     let annotations: Vec<serde_json::Value> = lints

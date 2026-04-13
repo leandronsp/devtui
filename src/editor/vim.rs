@@ -656,16 +656,15 @@ impl RunLoopState {
             return Ok(false);
         }
 
-        // Ctrl+Y: toggle chat (and focus input)
+        // Ctrl+Y: open chat + focus, or toggle focus if already open
         if key.code == KeyCode::Char('y') && ctrl {
-            if self.split_layout == SplitLayout::Chat {
-                self.split_layout = SplitLayout::EditorOnly;
-                self.chat_focused = false;
-            } else {
+            if self.split_layout != SplitLayout::Chat {
                 self.split_layout = SplitLayout::Chat;
                 self.chat_focused = true;
+                resize_pty(self.split_layout, terminal, pty_master, parser)?;
+            } else {
+                self.chat_focused = !self.chat_focused;
             }
-            resize_pty(self.split_layout, terminal, pty_master, parser)?;
             return Ok(false);
         }
 
