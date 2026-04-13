@@ -41,6 +41,22 @@ where
     }
 }
 
+/// Build the JSON request body for the provider's API.
+pub fn build_request_body(provider: &Provider, prompt: &str) -> String {
+    match provider {
+        Provider::Groq { model, .. } => serde_json::json!({
+            "model": model,
+            "messages": [{"role": "user", "content": prompt}],
+        }),
+        Provider::Claude { model, .. } => serde_json::json!({
+            "model": model,
+            "max_tokens": 1024,
+            "messages": [{"role": "user", "content": prompt}],
+        }),
+    }
+    .to_string()
+}
+
 /// Convenience wrapper that reads from actual environment variables.
 pub fn provider_from_env() -> Result<Provider, String> {
     resolve_provider(|key| std::env::var(key).ok())
@@ -108,6 +124,36 @@ mod tests {
                 model: GROQ_DEFAULT_MODEL.to_string(),
             }
         );
+    }
+
+    #[test]
+    fn build_request_body_groq_has_model_and_messages() {
+        let provider = Provider::Groq {
+            api_key: "k".to_string(),
+            model: "llama-3.1-8b-instant".to_string(),
+        };
+
+        let body = build_request_body(&provider, "check this");
+
+        let parsed: serde_json::Value = serde_json::from_str(&body).unwrap();
+        assert_eq!(parsed["model"], "llama-3.1-8b-instant");
+        assert_eq!(parsed["messages"][0]["role"], "user");
+        assert_eq!(parsed["messages"][0]["content"], "check this");
+    }
+
+    #[test]
+    fn build_request_body_claude_has_max_tokens() {
+        let provider = Provider::Claude {
+            api_key: "k".to_string(),
+            model: CLAUDE_DEFAULT_MODEL.to_string(),
+        };
+
+        let body = build_request_body(&provider, "check this");
+
+        let parsed: serde_json::Value = serde_json::from_str(&body).unwrap();
+        assert_eq!(parsed["model"], CLAUDE_DEFAULT_MODEL);
+        assert_eq!(parsed["max_tokens"], 1024);
+        assert_eq!(parsed["messages"][0]["role"], "user");
     }
 
     #[test]
