@@ -24,22 +24,22 @@ Position sync uses vim's `titlestring` (zero file I/O). Content sync debounced v
 - All vim keybindings work
 - `Ctrl+D`/`Ctrl+U` -- half-page scroll
 - `G`/`gg` -- top/bottom
-- `Ctrl+T` -- toggle scribe panel (AI writing companion)
-- `Ctrl+G` -- cycle layouts: preview / scribe / editor only
+- `Ctrl+P` -- toggle preview pane
+- `Ctrl+Y` -- toggle chat pane (AI writing companion)
+- `Ctrl+J`/`Ctrl+K` -- scroll right pane
 - `:w` -- save, `:q` -- quit
 
-### Scribe (AI Writing Companion)
+### Chat (AI Writing Companion)
 
-Toggle with `Ctrl+T`. The scribe panel sends the visible portion of your document to an AI model and displays grammar, spelling, and factual annotations in real time.
+Toggle with `Ctrl+Y`. An interactive chat pane for grammar checking, writing advice, and vault-powered context search.
 
-- Annotations appear as the AI responds (no polling, event-streamed via overmind subscribe)
-- Error tier: typos, grammar, wrong words. Shows the fix.
-- Hint tier: awkward phrasing, factual issues. Brief suggestions.
-- Visible lines only. Annotations reference absolute line numbers.
-- Session persists across articles within a DevTUI instance.
-- Clears automatically on content change and article switch.
+- Grammar and spelling on demand. Ask "check the grammar" and the AI reviews the visible section.
+- Vault search. Questions automatically search your Obsidian vault (learning/, lives/, blog/ folders) via qmd for related notes.
+- Full article context. The AI sees frontmatter + the visible section with margin.
+- Bilingual. Works in English and Portuguese, answers in the same language as the question.
+- Configurable provider. Defaults to Groq (llama-3.1-8b-instant). Set `DEVTUI_LLM_PROVIDER=claude` for Anthropic.
 
-Requires [overmind](https://github.com/leandronsp/overmind) installed. The scribe panel is hidden if overmind is not available.
+Requires `GROQ_API_KEY` or `ANTHROPIC_API_KEY` in environment. Optional: [qmd](https://github.com/leandronsp/qmd) for vault search.
 
 ## Blog Engine
 
@@ -78,8 +78,8 @@ make lint                     # clippy
 - [ratatui](https://ratatui.rs/) + [crossterm](https://github.com/crossterm-rs/crossterm) -- TUI framework
 - [portable-pty](https://docs.rs/portable-pty) + [vt100](https://docs.rs/vt100) + [tui-term](https://docs.rs/tui-term) -- vim PTY embedding
 - [pulldown-cmark](https://github.com/raphlinus/pulldown-cmark) -- markdown parsing
-- [serde_json](https://docs.rs/serde_json) -- annotation JSON parsing (scribe)
-- [overmind](https://github.com/leandronsp/overmind) -- AI agent orchestrator (scribe, optional)
+- [ureq](https://docs.rs/ureq) -- HTTP client for LLM API calls (chat companion)
+- [qmd](https://github.com/leandronsp/qmd) -- Obsidian vault search (optional)
 
 ### Engine
 

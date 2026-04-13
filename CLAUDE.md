@@ -14,8 +14,8 @@ DevTUI is three things:
 
 - **Rust toolchain** (cargo, rustc)
 - **vim** — embedded via PTY as child process
-- Crates: ratatui, crossterm, pulldown-cmark, tui-term, vt100, portable-pty, serde_json
-- **overmind** — optional, enables the scribe writing companion (AI annotations)
+- Crates: ratatui, crossterm, pulldown-cmark, tui-term, vt100, portable-pty, serde_json, ureq
+- **qmd** — optional, enables vault search in the chat companion
 
 ### Engine
 
@@ -36,8 +36,9 @@ brew install vim
 
 - **`src/editor/mod.rs`** — PTY setup, vim spawn, event loop, scroll sync, mode detection
 - **`src/editor/preview.rs`** — Markdown to ratatui Lines rendering + 26 unit tests
-- **`src/editor/scribe.rs`** — AI writing companion: `Annotation`, `Tier`, `ScribeState` state machine, `build_check_prompt()`, `extract_annotations()`, `render_lines_with_focus()`. 35 tests.
-- **`src/editor/ops.rs`** — Overmind integration: `start_scribe_session()`, `send_to_scribe()`, `run_subscriber()`, `escape_for_overmind()`, `kill_scribe_session()`. 18 tests.
+- **`src/editor/chat.rs`** — AI writing companion chat: `ChatState`, `build_chat_prompt()`, `query_vault()`, `extract_frontmatter()`. 12 tests.
+- **`src/editor/llm.rs`** — LLM provider abstraction: `Provider` (Groq/Claude), `resolve_provider()`, `call_llm()`, `build_request_body()`, `extract_response_text()`. 8 tests.
+- **`src/editor/ops.rs`** — Blog operations: serve, deploy, build, theme management.
 
 ### Engine (src/engine/)
 
@@ -131,48 +132,28 @@ vim writes buffer to `/tmp/devtui-content` on `CursorHold` (fires after 150ms id
 
 Parsed from titlestring. Vim's `mode()` returns: `n`, `i`, `v/V`, `R`, `c`. Displayed as colored badge.
 
-### Scribe (AI Writing Companion)
+### Chat (AI Writing Companion)
 
-The right pane can swap between preview and scribe (Ctrl+T). Scribe sends the visible portion of the document to an AI model via overmind and displays grammar/spelling/factual annotations.
+The right pane can show a chat companion (Ctrl+Y). The chat sends the article's frontmatter + visible section (with 30-line margin) to an LLM and displays the response. Grammar, spelling, writing advice, and vault search are all available on demand.
 
 **Architecture:**
 
 ```
 DevTUI process
-  ├── Subscriber thread (long-lived)
-  │     └── reads `overmind subscribe <session>` NDJSON events
-  │     └── pushes assistant text into shared result slot
-  │
-  └── Main loop (per check)
-        └── Sender thread: `overmind send <session> <prompt>` (fire-and-forget)
-        └── poll_result() picks up response from subscriber
-        └── extract_annotations() parses JSON into Annotation structs
+  └── Main loop (per question)
+        └── Background thread: qmd search (vault) + ureq HTTP (LLM)
+        └── poll_chat_result() picks up response
+        └── ChatState stores messages + renders in the pane
 ```
 
 **Key design decisions:**
 
-- **Persistent session.** One `overmind run --type session` per DevTUI process. Survives across articles. Killed only on process exit.
-- **Subscriber, not polling.** A long-running thread reads `overmind subscribe` events. No polling loop, no log parsing. Response arrives the instant the AI finishes.
-- **Visible portion only.** Only lines currently visible on screen are sent (not the full document). Keeps prompts small (~2KB) and responses fast.
-- **Line-numbered content.** Each line is prefixed with its absolute line number so the AI returns correct line references.
-- **Newline escaping.** `overmind send` silently drops multiline arguments. `escape_for_overmind()` replaces `\n` with literal `\n`. The AI interprets them correctly.
-- **Haiku model.** Uses claude-haiku for speed (~8s response with warm session vs ~15s with sonnet).
-- **Concise prompt.** Max 15 words per annotation message. Two tiers: `error` (typo/grammar, show fix) and `hint` (phrasing/factual).
-
-**State machine (`ScribeState`):**
-
-- `Idle` — waiting for content to change
-- `Checking` — prompt sent, waiting for subscriber to deliver response
-- `CheckingSlow` — checking for >15 seconds
-- `Error` — last check failed
-
-**Gotchas:**
-
-- `overmind send` silently drops multiline CLI arguments. Always escape with `escape_for_overmind()`.
-- `overmind subscribe` streams events for tasks (`claude run`) but NOT for `send` messages to sessions. The subscriber thread must be started before the first send.
-- `session_started` is only set after successful `start_scribe_session`, not in `begin_check`. This allows recovery if session start fails.
-- `poll_result` guards on `pending` to prevent ghost results from delayed subscriber events after `clear_display`.
-- `content_invalidated()` clears annotations and resets the idle timer. Called on every content change.
+- **Direct HTTP.** Uses ureq (blocking) in a background thread. No middleman daemon.
+- **Groq default.** `llama-3.1-8b-instant` via Groq API for speed (~1-3s). Claude available via `DEVTUI_LLM_PROVIDER=claude`.
+- **Visible portion + margin.** Sends frontmatter + 30 lines above/below visible area. Keeps prompts small, context relevant.
+- **Vault search on every question.** `qmd search` (BM25, fast) runs with the user's question. Results filtered to `learning/`, `lives/`, `blog/` paths only. No sensitive notes.
+- **Conversation history trimmed.** Last 3 exchanges kept. Older messages dropped to stay within token budget.
+- **Focus toggle.** Ctrl+Y opens/focuses chat. Esc unfocuses (back to vim). Keys only go to chat when focused.
 
 ## How the Engine Works
 
@@ -278,5 +259,6 @@ All vim keybindings work:
 - `Ctrl+D/Ctrl+U` — Half-page scroll
 - `:w` — Save (message auto-cleared)
 - `:q` / `:wq` — Quit
-- `Ctrl+T` — Toggle scribe panel (AI writing companion)
-- `Ctrl+G` — Cycle layouts: Vertical preview -> Scribe -> Editor only
+- `Ctrl+P` — Toggle preview pane
+- `Ctrl+Y` — Toggle chat pane (AI writing companion). Focus/unfocus input
+- `Ctrl+J/K` — Scroll right pane (preview or chat)

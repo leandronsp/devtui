@@ -4,7 +4,6 @@ pub mod list;
 pub mod llm;
 pub mod ops;
 pub mod preview;
-pub mod scribe;
 pub mod vim;
 
 use std::io;
