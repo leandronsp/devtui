@@ -555,11 +555,9 @@ impl RunLoopState {
             } else {
                 ""
             };
-            let scribe_hint = " ^T:check";
-            let chat_hint = " ^Y:chat";
             let status = Line::from(Span::styled(
                 format!(
-                    " DevTUI [{layout_label}] ^G:layout{scribe_hint}{chat_hint}{browser_hint}{scroll_hint}",
+                    " DevTUI [{layout_label}] ^P:preview ^T:scribe ^Y:chat{browser_hint}{scroll_hint}",
                 ),
                 Style::default().fg(Color::DarkGray),
             ));
@@ -584,24 +582,7 @@ impl RunLoopState {
     ) -> io::Result<bool> {
         let ctrl = key.modifiers.contains(KeyModifiers::CONTROL);
 
-        // Ctrl+G: cycle layout (preview -> scribe -> chat -> editor-only -> preview)
-        if key.code == KeyCode::Char('g') && ctrl {
-            self.split_layout = match self.split_layout {
-                SplitLayout::Vertical => SplitLayout::Scribe,
-                SplitLayout::Scribe => SplitLayout::Chat,
-                SplitLayout::Chat => SplitLayout::EditorOnly,
-                SplitLayout::EditorOnly => SplitLayout::Vertical,
-            };
-            resize_pty(self.split_layout, terminal, pty_master, parser)?;
-            if self.split_layout == SplitLayout::Vertical && self.cached_lines.is_empty() {
-                let (lines, offsets) = preview::render_with_offsets(&self.last_content, self.blog_author.as_deref());
-                self.cached_offsets = offsets;
-                self.cached_lines = lines;
-            }
-            return Ok(false);
-        }
-
-        // Chat mode: when focused, keys go to chat input. Esc returns to vim.
+        // Chat input: when focused, keys go to chat. Esc unfocuses.
         if self.split_layout == SplitLayout::Chat && self.chat_focused {
             match key.code {
                 KeyCode::Esc => {
@@ -617,7 +598,6 @@ impl RunLoopState {
                         let draft = self.last_content.clone();
                         let messages = self.chat.messages.clone();
                         let chat_result = Arc::clone(&self.chat_result);
-                        // All blocking work (vault query + LLM call) in background
                         thread::spawn(move || {
                             let vault_context = super::chat::query_vault(&question);
                             let prompt = super::chat::build_chat_prompt(
@@ -644,29 +624,48 @@ impl RunLoopState {
                 }
                 _ => {}
             }
-            // Block ALL keys from reaching vim while in chat
             return Ok(false);
         }
 
-        // Ctrl+T: switch to scribe panel and trigger immediate check
+        // Ctrl+P: toggle preview
+        if key.code == KeyCode::Char('p') && ctrl {
+            if self.split_layout == SplitLayout::Vertical {
+                self.split_layout = SplitLayout::EditorOnly;
+            } else {
+                self.split_layout = SplitLayout::Vertical;
+                if self.cached_lines.is_empty() {
+                    let (lines, offsets) = preview::render_with_offsets(&self.last_content, self.blog_author.as_deref());
+                    self.cached_offsets = offsets;
+                    self.cached_lines = lines;
+                }
+            }
+            resize_pty(self.split_layout, terminal, pty_master, parser)?;
+            return Ok(false);
+        }
+
+        // Ctrl+T: toggle scribe
         if key.code == KeyCode::Char('t') && ctrl {
-            if self.split_layout != SplitLayout::Scribe {
+            if self.split_layout == SplitLayout::Scribe {
+                self.split_layout = SplitLayout::EditorOnly;
+            } else {
                 self.split_layout = SplitLayout::Scribe;
-                resize_pty(self.split_layout, terminal, pty_master, parser)?;
+                self.scribe.content_invalidated();
+                self.scribe.force_idle();
             }
-            // Force an immediate check by resetting idle timer to the past
-            self.scribe.content_invalidated();
-            self.scribe.force_idle();
+            resize_pty(self.split_layout, terminal, pty_master, parser)?;
             return Ok(false);
         }
 
-        // Ctrl+Y: switch to chat panel and focus input
+        // Ctrl+Y: toggle chat (and focus input)
         if key.code == KeyCode::Char('y') && ctrl {
-            if self.split_layout != SplitLayout::Chat {
+            if self.split_layout == SplitLayout::Chat {
+                self.split_layout = SplitLayout::EditorOnly;
+                self.chat_focused = false;
+            } else {
                 self.split_layout = SplitLayout::Chat;
-                resize_pty(self.split_layout, terminal, pty_master, parser)?;
+                self.chat_focused = true;
             }
-            self.chat_focused = true;
+            resize_pty(self.split_layout, terminal, pty_master, parser)?;
             return Ok(false);
         }
 

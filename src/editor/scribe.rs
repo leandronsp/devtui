@@ -269,11 +269,11 @@ impl ScribeState {
         self.status_log.push(msg.to_string());
     }
 
-    /// Content changed: reset idle timer and clear stale annotations.
+    /// Content changed: reset idle timer and clear LLM annotations.
+    /// Grammar annotations are preserved (they refresh independently).
     pub fn content_invalidated(&mut self) {
         self.idle_since = Some(Instant::now());
         self.annotations.clear();
-        self.status_log.clear();
     }
 
     /// Force the idle timer to the past so the next should_check returns true.
@@ -619,18 +619,16 @@ mod tests {
     // --- content_invalidated ---
 
     #[test]
-    fn content_invalidated_resets_idle_timer_and_clears_display() {
+    fn content_invalidated_resets_idle_timer_and_clears_llm_annotations() {
         let mut state = test_state();
         state.annotations = vec![
             Annotation { line: 1, tier: Tier::Error, message: "old".into() },
         ];
-        state.status_log = vec!["old log".to_string()];
 
         state.content_invalidated();
 
         assert!(state.idle_since.is_some());
         assert!(state.annotations.is_empty());
-        assert!(state.status_log.is_empty());
     }
 
     // --- clear_display ---
