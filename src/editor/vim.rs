@@ -839,9 +839,19 @@ fn render_chat(
     } else {
         Line::from(chat.input.clone())
     };
+    // Auto-scroll input to show the bottom (where the cursor is)
+    let inner_width = chunks[1].width.saturating_sub(2) as usize; // minus borders
+    let visible_height = chunks[1].height.saturating_sub(2); // minus borders
+    let wrapped_lines = if inner_width > 0 {
+        chat.input.len().div_ceil(inner_width) as u16
+    } else {
+        1
+    };
+    let input_scroll = wrapped_lines.saturating_sub(visible_height);
     let input_widget = Paragraph::new(input_text)
         .block(input_block)
-        .wrap(Wrap { trim: false });
+        .wrap(Wrap { trim: false })
+        .scroll((input_scroll, 0));
     frame.render_widget(input_widget, chunks[1]);
 }
 
