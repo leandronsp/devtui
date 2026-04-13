@@ -11,14 +11,14 @@ pub enum Provider {
 }
 
 /// Resolve provider from a lookup function (testable, no global state).
-/// Checks `DEVTUI_LLM_PROVIDER` (defaults to "groq"), then reads the
-/// matching API key variable.
+/// Reads `DEVTUI_LLM_PROVIDER` (defaults to "groq"), then reads the
+/// matching API key: `GROQ_API_KEY` or `ANTHROPIC_API_KEY`.
 pub fn resolve_provider<F>(lookup: F) -> Result<Provider, String>
 where
     F: Fn(&str) -> Option<String>,
 {
     let provider_name = lookup("DEVTUI_LLM_PROVIDER")
-        .ok_or("Set DEVTUI_LLM_PROVIDER to 'groq' or 'claude'.")?;
+        .unwrap_or_else(|| "groq".to_string());
 
     match provider_name.as_str() {
         "groq" => {
@@ -27,6 +27,14 @@ where
             Ok(Provider::Groq {
                 api_key,
                 model: GROQ_DEFAULT_MODEL.to_string(),
+            })
+        }
+        "claude" => {
+            let api_key = lookup("ANTHROPIC_API_KEY")
+                .ok_or("No API key. Set ANTHROPIC_API_KEY.")?;
+            Ok(Provider::Claude {
+                api_key,
+                model: CLAUDE_DEFAULT_MODEL.to_string(),
             })
         }
         other => Err(format!("Unknown LLM provider: {other}. Use 'groq' or 'claude'.")),
@@ -67,5 +75,47 @@ mod tests {
                 model: GROQ_DEFAULT_MODEL.to_string(),
             }
         );
+    }
+
+    #[test]
+    fn resolve_provider_returns_claude_when_provider_env_is_claude() {
+        let lookup = env_from(&[
+            ("DEVTUI_LLM_PROVIDER", "claude"),
+            ("ANTHROPIC_API_KEY", "test-anthropic-key"),
+        ]);
+
+        let provider = resolve_provider(lookup).unwrap();
+
+        assert_eq!(
+            provider,
+            Provider::Claude {
+                api_key: "test-anthropic-key".to_string(),
+                model: CLAUDE_DEFAULT_MODEL.to_string(),
+            }
+        );
+    }
+
+    #[test]
+    fn resolve_provider_defaults_to_groq_when_provider_env_not_set() {
+        let lookup = env_from(&[("GROQ_API_KEY", "default-key")]);
+
+        let provider = resolve_provider(lookup).unwrap();
+
+        assert_eq!(
+            provider,
+            Provider::Groq {
+                api_key: "default-key".to_string(),
+                model: GROQ_DEFAULT_MODEL.to_string(),
+            }
+        );
+    }
+
+    #[test]
+    fn resolve_provider_returns_error_when_api_key_missing() {
+        let lookup = env_from(&[("DEVTUI_LLM_PROVIDER", "groq")]);
+
+        let err = resolve_provider(lookup).unwrap_err();
+
+        assert!(err.contains("GROQ_API_KEY"), "error should mention the key: {err}");
     }
 }
