@@ -107,15 +107,17 @@ pub fn build_chat_prompt(
     prompt.push_str(
         "You are a blog writing companion inside DevTUI, a terminal CMS.\n\
          The author writes technical blog posts in English and Portuguese.\n\
-         You have full access to the article being edited and related notes from the author's \
-         Obsidian vault (searched automatically). Use vault notes to suggest connections to past \
-         ideas, drafts, and TILs.\n\n\
+         You have full access to the article being edited.\n\n\
+         When the user asks about their notes, past ideas, TILs, or blog drafts, \
+         related notes from their Obsidian vault are included below (from learning/, \
+         lives/, and blog/ folders only). Use them to suggest connections.\n\n\
          Rules:\n\
          - Answer in the same language as the question\n\
          - Be concise and direct\n\
-         - Use line breaks to format your response for readability\n\
+         - Use short paragraphs with line breaks for readability\n\
          - When suggesting edits, quote the specific line\n\
-         - You can reference the article's frontmatter (title, tags, status)\n\n",
+         - You can reference the article's frontmatter (title, tags, status)\n\
+         - Do NOT invent vault notes. Only reference notes shown in the context\n\n",
     );
     prompt.push_str("## Article Being Edited\n\n");
     prompt.push_str(draft);
@@ -143,10 +145,19 @@ pub fn build_chat_prompt(
     prompt
 }
 
-/// Query the vault via qmd for related context. Returns None if qmd is not installed.
+/// Safe vault paths: only learnings, lives, and blog drafts.
+const VAULT_SAFE_PREFIXES: &[&str] = &[
+    "qmd://vault/learning/",
+    "qmd://vault/lives/",
+    "qmd://vault/blog/",
+];
+
+/// Query the vault via qmd search (BM25, fast, no LLM).
+/// Filters results to safe paths only (learning, lives, blog).
+/// Returns None if qmd is not installed or no results.
 pub fn query_vault(question: &str) -> Option<String> {
     let output = std::process::Command::new("qmd")
-        .args(["query", "--limit", "3", question])
+        .args(["search", "-n", "10", "--json", question])
         .output()
         .ok()?;
 
@@ -154,7 +165,27 @@ pub fn query_vault(question: &str) -> Option<String> {
         return None;
     }
 
-    let text = String::from_utf8_lossy(&output.stdout).to_string();
+    let json: Vec<serde_json::Value> = serde_json::from_slice(&output.stdout).ok()?;
+
+    let mut results = Vec::new();
+    for item in &json {
+        let file = item["file"].as_str().unwrap_or_default();
+        if !VAULT_SAFE_PREFIXES.iter().any(|p| file.starts_with(p)) {
+            continue;
+        }
+        let title = item["title"].as_str().unwrap_or("untitled");
+        let snippet = item["snippet"].as_str().unwrap_or_default();
+        results.push(format!("**{title}** ({file})\n{snippet}"));
+        if results.len() >= 3 {
+            break;
+        }
+    }
+
+    if results.is_empty() {
+        return None;
+    }
+
+    let text = results.join("\n\n");
     if text.trim().is_empty() {
         None
     } else {
