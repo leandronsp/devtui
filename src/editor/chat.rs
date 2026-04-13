@@ -120,8 +120,18 @@ pub fn build_chat_prompt(
          - Do NOT invent vault notes. Only reference notes shown in the context\n\n",
     );
     prompt.push_str("## Article Being Edited\n\n");
-    prompt.push_str(draft);
-    prompt.push_str("\n\n");
+    // Cap at ~12K chars (~3K tokens) to stay within Groq free tier limits
+    if draft.len() > 12000 {
+        let cut = &draft[..draft[..12000].rfind('\n').unwrap_or(12000)];
+        prompt.push_str(cut);
+        prompt.push_str(&format!(
+            "\n\n[...article truncated at 12K chars, full length: {}...]\n\n",
+            draft.len()
+        ));
+    } else {
+        prompt.push_str(draft);
+        prompt.push_str("\n\n");
+    }
 
     if let Some(vault) = vault_context {
         prompt.push_str("## Related Notes from Vault\n\n");
