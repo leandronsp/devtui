@@ -584,6 +584,7 @@ impl RunLoopState {
                 self.split_layout = SplitLayout::EditorOnly;
             } else {
                 self.split_layout = SplitLayout::Vertical;
+                self.preview_scroll = 0;
                 if self.cached_lines.is_empty() {
                     let (lines, offsets) = preview::render_with_offsets(&self.last_content, self.blog_author.as_deref());
                     self.cached_offsets = offsets;
@@ -599,6 +600,7 @@ impl RunLoopState {
             if self.split_layout != SplitLayout::Chat {
                 self.split_layout = SplitLayout::Chat;
                 self.chat_focused = true;
+                self.preview_scroll = 0;
                 resize_pty(self.split_layout, terminal, pty_master, parser)?;
             } else {
                 self.chat_focused = !self.chat_focused;
