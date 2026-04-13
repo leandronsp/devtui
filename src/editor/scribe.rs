@@ -238,6 +238,13 @@ impl ScribeState {
         self.status_log.clear();
     }
 
+    /// Force the idle timer to the past so the next should_check returns true.
+    /// Used by Ctrl+T to trigger an immediate grammar check.
+    pub fn force_idle(&mut self) {
+        self.idle_since = Some(Instant::now() - IDLE_THRESHOLD - Duration::from_secs(1));
+        self.last_sent.clear();
+    }
+
     /// Returns true when a check should fire: idle long enough, content
     /// different from last send, and no check in flight.
     pub fn should_check(&self, content: &str, is_scribe_active: bool) -> bool {
@@ -385,6 +392,17 @@ mod tests {
         let mut state = test_state();
         state.idle_since = Some(Instant::now() - Duration::from_secs(15));
         assert!(state.should_check("new content", true));
+    }
+
+    // --- force_idle ---
+
+    #[test]
+    fn force_idle_makes_should_check_return_true() {
+        let mut state = test_state();
+        state.content_invalidated();
+        // Normally would need 10s idle. force_idle bypasses.
+        state.force_idle();
+        assert!(state.should_check("any content", true));
     }
 
     // --- begin_check ---

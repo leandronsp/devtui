@@ -552,10 +552,11 @@ impl RunLoopState {
             } else {
                 ""
             };
-            let scribe_hint = " ^T:scribe";
+            let scribe_hint = " ^T:check";
+            let chat_hint = " ^Y:chat";
             let status = Line::from(Span::styled(
                 format!(
-                    " DevTUI [{layout_label}] ^G:layout{scribe_hint}{browser_hint}{scroll_hint}",
+                    " DevTUI [{layout_label}] ^G:layout{scribe_hint}{chat_hint}{browser_hint}{scroll_hint}",
                 ),
                 Style::default().fg(Color::DarkGray),
             ));
@@ -649,10 +650,22 @@ impl RunLoopState {
             }
         }
 
-        // Ctrl+T: switch directly to scribe panel
+        // Ctrl+T: switch to scribe panel and trigger immediate check
         if key.code == KeyCode::Char('t') && ctrl {
             if self.split_layout != SplitLayout::Scribe {
                 self.split_layout = SplitLayout::Scribe;
+                resize_pty(self.split_layout, terminal, pty_master, parser)?;
+            }
+            // Force an immediate check by resetting idle timer to the past
+            self.scribe.content_invalidated();
+            self.scribe.force_idle();
+            return Ok(false);
+        }
+
+        // Ctrl+Y: switch directly to chat panel
+        if key.code == KeyCode::Char('y') && ctrl {
+            if self.split_layout != SplitLayout::Chat {
+                self.split_layout = SplitLayout::Chat;
                 resize_pty(self.split_layout, terminal, pty_master, parser)?;
             }
             return Ok(false);
