@@ -60,10 +60,22 @@ impl ChatState {
                 Role::User => ("You: ", Color::Cyan),
                 Role::Assistant => ("AI: ", Color::Green),
             };
-            lines.push(Line::from(vec![
-                Span::styled(prefix, Style::default().fg(color)),
-                Span::raw(msg.content.clone()),
-            ]));
+            // Split multi-line responses. First line gets the prefix.
+            let content_lines: Vec<&str> = msg.content.lines().collect();
+            if content_lines.is_empty() {
+                lines.push(Line::from(Span::styled(prefix, Style::default().fg(color))));
+            } else {
+                lines.push(Line::from(vec![
+                    Span::styled(prefix, Style::default().fg(color)),
+                    Span::raw(content_lines[0].to_string()),
+                ]));
+                for content_line in &content_lines[1..] {
+                    lines.push(Line::from(Span::styled(
+                        format!("  {content_line}"),
+                        Style::default().fg(color),
+                    )));
+                }
+            }
             lines.push(Line::from(""));
         }
         if self.pending {
@@ -93,20 +105,20 @@ pub fn build_chat_prompt(
     let mut prompt = String::new();
 
     prompt.push_str(
-        "You are a writing companion for a blog author who writes in English and Portuguese.\n\
-         You have access to the current draft and related notes from the author's Obsidian vault \
-         (searched via qmd). Use vault notes to provide context, suggest connections, and reference \
-         past ideas. Be concise. Answer in the same language as the question.\n\n",
+        "You are a blog writing companion inside DevTUI, a terminal CMS.\n\
+         The author writes technical blog posts in English and Portuguese.\n\
+         You have full access to the article being edited and related notes from the author's \
+         Obsidian vault (searched automatically). Use vault notes to suggest connections to past \
+         ideas, drafts, and TILs.\n\n\
+         Rules:\n\
+         - Answer in the same language as the question\n\
+         - Be concise and direct\n\
+         - Use line breaks to format your response for readability\n\
+         - When suggesting edits, quote the specific line\n\
+         - You can reference the article's frontmatter (title, tags, status)\n\n",
     );
-    prompt.push_str("## Current Draft\n\n");
-    // Truncate draft to ~3000 chars to stay within token limits
-    let truncated = if draft.len() > 3000 {
-        let cut = &draft[..draft[..3000].rfind('\n').unwrap_or(3000)];
-        format!("{cut}\n\n[...draft truncated, {} total chars...]", draft.len())
-    } else {
-        draft.to_string()
-    };
-    prompt.push_str(&truncated);
+    prompt.push_str("## Article Being Edited\n\n");
+    prompt.push_str(draft);
     prompt.push_str("\n\n");
 
     if let Some(vault) = vault_context {
@@ -262,11 +274,10 @@ mod tests {
     }
 
     #[test]
-    fn build_chat_prompt_truncates_long_drafts() {
-        let long_draft = "word ".repeat(1000); // ~5000 chars
+    fn build_chat_prompt_includes_full_article() {
+        let long_draft = "word ".repeat(1000);
         let prompt = build_chat_prompt(&long_draft, None, &[], "question");
 
-        assert!(prompt.contains("truncated"));
-        assert!(prompt.len() < long_draft.len());
+        assert!(prompt.contains(&long_draft));
     }
 }

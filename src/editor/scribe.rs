@@ -80,7 +80,8 @@ pub fn build_check_prompt(content: &str, start_line: usize) -> String {
 
     format!(
         r#"Proofread this markdown. Lines are numbered. Detect language automatically.
-Skip fenced code blocks. Be concise. Max 15 words per message.
+Skip fenced code blocks. Skip YAML frontmatter (--- blocks).
+Be concise. Max 15 words per message.
 
 Return ONLY a JSON array, no other text:
 [{{"line": N, "tier": "error|hint", "message": "..."}}]

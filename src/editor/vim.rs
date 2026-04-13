@@ -531,7 +531,7 @@ impl RunLoopState {
                         frame, &scribe_lines, self.scribe.status,
                         self.scribe.last_response,
                         self.scribe.error.as_deref(), &self.scribe.status_log,
-                        panes[1],
+                        self.preview_scroll, panes[1],
                     );
                 }
                 SplitLayout::Chat => {
@@ -541,7 +541,7 @@ impl RunLoopState {
                     ])
                     .split(main_area);
                     render_editor(frame, parser, mode_label, mode_st, title_message, post_title.as_deref(), is_draft, panes[0]);
-                    render_chat(frame, &self.chat, self.chat_focused, panes[1]);
+                    render_chat(frame, &self.chat, self.chat_focused, self.preview_scroll, panes[1]);
                 }
                 SplitLayout::EditorOnly => {
                     render_editor(frame, parser, mode_label, mode_st, title_message, post_title.as_deref(), is_draft, main_area);
@@ -550,14 +550,19 @@ impl RunLoopState {
 
             // Status bar
             let browser_hint = if has_browser { " ^O:browser" } else { "" };
-            let scroll_hint = if self.split_layout == SplitLayout::Vertical {
-                " ^F:follow-cursor ^J/^K:scroll"
+            let scroll_hint = if self.split_layout != SplitLayout::EditorOnly {
+                " ^J/^K:scroll"
+            } else {
+                ""
+            };
+            let follow_hint = if self.split_layout == SplitLayout::Vertical {
+                " ^F:follow"
             } else {
                 ""
             };
             let status = Line::from(Span::styled(
                 format!(
-                    " DevTUI [{layout_label}] ^P:preview ^T:scribe ^Y:chat{browser_hint}{scroll_hint}",
+                    " DevTUI [{layout_label}] ^P:preview ^T:scribe ^Y:chat{browser_hint}{follow_hint}{scroll_hint}",
                 ),
                 Style::default().fg(Color::DarkGray),
             ));
@@ -618,6 +623,12 @@ impl RunLoopState {
                 }
                 KeyCode::Backspace => {
                     self.chat.input.pop();
+                }
+                KeyCode::Char('j') if ctrl => {
+                    self.preview_scroll = self.preview_scroll.saturating_add(3);
+                }
+                KeyCode::Char('k') if ctrl => {
+                    self.preview_scroll = self.preview_scroll.saturating_sub(3);
                 }
                 KeyCode::Char(c) if !ctrl => {
                     self.chat.input.push(c);
@@ -688,14 +699,12 @@ impl RunLoopState {
             return Ok(false);
         }
 
-        // Ctrl+J: scroll preview down
-        if key.code == KeyCode::Char('j') && ctrl && self.split_layout == SplitLayout::Vertical {
+        // Ctrl+J/K: scroll right pane (preview, scribe, or chat)
+        if key.code == KeyCode::Char('j') && ctrl && self.split_layout != SplitLayout::EditorOnly {
             self.preview_scroll = self.preview_scroll.saturating_add(3).min(scroll.max_scroll);
             return Ok(false);
         }
-
-        // Ctrl+K: scroll preview up
-        if key.code == KeyCode::Char('k') && ctrl && self.split_layout == SplitLayout::Vertical {
+        if key.code == KeyCode::Char('k') && ctrl && self.split_layout != SplitLayout::EditorOnly {
             self.preview_scroll = self.preview_scroll.saturating_sub(3);
             return Ok(false);
         }
@@ -870,6 +879,7 @@ fn render_scribe(
     last_response: Option<std::time::Instant>,
     error: Option<&str>,
     status_log: &[String],
+    scroll_offset: u16,
     area: ratatui::layout::Rect,
 ) {
     let (status_label, status_color) = match status {
@@ -910,7 +920,8 @@ fn render_scribe(
 
     let widget = Paragraph::new(content)
         .block(block)
-        .wrap(Wrap { trim: false });
+        .wrap(Wrap { trim: false })
+        .scroll((scroll_offset, 0));
     frame.render_widget(widget, area);
 }
 
@@ -918,6 +929,7 @@ fn render_chat(
     frame: &mut ratatui::Frame,
     chat: &super::chat::ChatState,
     focused: bool,
+    scroll_offset: u16,
     area: ratatui::layout::Rect,
 ) {
     use ratatui::layout::Direction;
@@ -942,10 +954,11 @@ fn render_chat(
             Span::raw(" "),
         ]));
 
-    // Auto-scroll to bottom
+    // Auto-scroll to bottom unless manually scrolled
     let visible_height = chunks[0].height.saturating_sub(2);
     let total_lines = message_lines.len() as u16;
-    let scroll = total_lines.saturating_sub(visible_height);
+    let auto_scroll = total_lines.saturating_sub(visible_height);
+    let scroll = if scroll_offset > 0 { scroll_offset } else { auto_scroll };
 
     let messages_widget = Paragraph::new(message_lines)
         .block(messages_block)
