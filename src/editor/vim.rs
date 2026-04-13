@@ -333,6 +333,7 @@ impl RunLoopState {
                 }
             }
             self.chat.pending = false;
+            self.preview_scroll = 0; // reset to auto-scroll on new message
         }
     }
 
@@ -531,6 +532,7 @@ impl RunLoopState {
                         self.chat.input.clear();
                         self.chat.add_user_message(&question);
                         self.chat.pending = true;
+                        self.preview_scroll = 0; // auto-scroll to show new message
 
                         let lines: Vec<&str> = self.last_content.lines().collect();
                         let visible_start = self.last_first_visible_line.saturating_sub(1);
