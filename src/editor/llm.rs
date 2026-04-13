@@ -91,8 +91,11 @@ pub fn call_llm(provider: &Provider, prompt: &str) -> Result<String, String> {
 
     let body = build_request_body(provider, prompt);
 
-    let response = ureq::post(url)
-        .header(auth_header, &auth_value)
+    let mut request = ureq::post(url).header(auth_header, &auth_value);
+    if matches!(provider, Provider::Claude { .. }) {
+        request = request.header("anthropic-version", "2023-06-01");
+    }
+    let response = request
         .send_json(&body)
         .map_err(|e| format!("HTTP request failed: {e}"))?;
 
