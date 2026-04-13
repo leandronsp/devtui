@@ -2,3 +2,4 @@
 /dist
 /blogs
 /.handoff
+tools/harper-lint/target/

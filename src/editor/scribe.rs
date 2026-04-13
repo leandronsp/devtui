@@ -152,6 +152,38 @@ fn tier_icon(tier: &Tier) -> &'static str {
     }
 }
 
+/// Run harper-lint as an external process. Returns annotations or empty vec on failure.
+fn run_harper_lint(content: &str) -> Vec<Annotation> {
+    use std::io::Write;
+    use std::process::{Command, Stdio};
+
+    let mut child = match Command::new("harper-lint")
+        .stdin(Stdio::piped())
+        .stdout(Stdio::piped())
+        .stderr(Stdio::null())
+        .spawn()
+    {
+        Ok(c) => c,
+        Err(_) => return Vec::new(), // harper-lint not installed
+    };
+
+    if let Some(mut stdin) = child.stdin.take() {
+        let _ = stdin.write_all(content.as_bytes());
+    }
+
+    let output = match child.wait_with_output() {
+        Ok(o) => o,
+        Err(_) => return Vec::new(),
+    };
+
+    if !output.status.success() {
+        return Vec::new();
+    }
+
+    let stdout = String::from_utf8_lossy(&output.stdout);
+    parse_annotations(&stdout)
+}
+
 /// Render annotations as ratatui lines for the scribe panel.
 pub fn render_lines(annotations: &[Annotation]) -> Vec<Line<'static>> {
     annotations
@@ -180,15 +212,18 @@ pub struct CheckRequest {
 /// All mutable scribe state, extracted for testability.
 pub struct ScribeState {
     pub annotations: Vec<Annotation>,
+    pub grammar_annotations: Vec<Annotation>,
     pub status: ScribeStatus,
     pub error: Option<String>,
     pub last_response: Option<Instant>,
     pub result: Arc<Mutex<Option<Result<String, String>>>>,
+    pub grammar_result: Arc<Mutex<Option<Vec<Annotation>>>>,
     pub status_log: Vec<String>,
     idle_since: Option<Instant>,
     pending: bool,
     last_sent: String,
     check_started: Option<Instant>,
+    grammar_last_checked: String,
 }
 
 const IDLE_THRESHOLD: Duration = Duration::from_secs(10);
@@ -204,15 +239,18 @@ impl ScribeState {
     pub fn new() -> Self {
         Self {
             annotations: Vec::new(),
+            grammar_annotations: Vec::new(),
             status: ScribeStatus::Idle,
             error: None,
             last_response: None,
             result: Arc::new(Mutex::new(None)),
+            grammar_result: Arc::new(Mutex::new(None)),
             status_log: Vec::new(),
             idle_since: None,
             pending: false,
             last_sent: String::new(),
             check_started: None,
+            grammar_last_checked: String::new(),
         }
     }
 
@@ -328,6 +366,49 @@ impl ScribeState {
                 Err(err) => self.handle_error(err),
             }
         }
+    }
+
+    /// Pick up grammar results from harper-lint background thread.
+    pub fn poll_grammar(&mut self) {
+        let result = if let Ok(mut guard) = self.grammar_result.try_lock() {
+            guard.take()
+        } else {
+            return;
+        };
+        if let Some(annotations) = result {
+            self.grammar_annotations = annotations;
+        }
+    }
+
+    /// Trigger a grammar check if content changed. Runs harper-lint in background.
+    pub fn check_grammar(&mut self, content: &str) {
+        if content == self.grammar_last_checked {
+            return;
+        }
+        self.grammar_last_checked = content.to_string();
+        let slot = Arc::clone(&self.grammar_result);
+        let text = content.to_string();
+        std::thread::spawn(move || {
+            let annotations = run_harper_lint(&text);
+            if let Ok(mut guard) = slot.lock() {
+                *guard = Some(annotations);
+            }
+        });
+    }
+
+    /// All annotations (grammar + LLM) merged and sorted by line.
+    pub fn all_annotations(&self) -> Vec<Annotation> {
+        let mut all = self.grammar_annotations.clone();
+        all.extend(self.annotations.iter().cloned());
+        all.sort_by_key(|a| {
+            let tier_rank = match a.tier {
+                Tier::Error => 0u8,
+                Tier::Hint => 1,
+                Tier::Research => 2,
+            };
+            (a.line, tier_rank)
+        });
+        all
     }
 
     /// Update status to slow if check has been running too long.

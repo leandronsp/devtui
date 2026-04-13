@@ -1,0 +1,12 @@
+[package]
+name = "harper-lint"
+version = "0.1.0"
+edition = "2021"
+
+[[bin]]
+name = "harper-lint"
+path = "main.rs"
+
+[dependencies]
+harper-core = "2"
+serde_json = "1"

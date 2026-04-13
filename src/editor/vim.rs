@@ -523,8 +523,9 @@ impl RunLoopState {
                     let vim_rows = panes[0].height.saturating_sub(2) as usize;
                     let visible_start = vim_state.first_visible_line as u16;
                     let visible_end = (vim_state.first_visible_line + vim_rows) as u16;
+                    let all_annotations = self.scribe.all_annotations();
                     let scribe_lines = scribe::render_lines_with_focus(
-                        &self.scribe.annotations, visible_start, visible_end,
+                        &all_annotations, visible_start, visible_end,
                     );
                     render_scribe(
                         frame, &scribe_lines, self.scribe.status,
@@ -744,6 +745,10 @@ fn run_loop(
 
         state.poll_content_swap(content_swap);
         let content_updated = state.poll_preview_render();
+        if content_updated {
+            state.scribe.check_grammar(&state.last_content.clone());
+        }
+        state.scribe.poll_grammar();
         state.poll_scribe_check();
         state.scribe.update_slow();
         state.scribe.poll_result();
