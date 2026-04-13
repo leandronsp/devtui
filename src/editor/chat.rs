@@ -94,10 +94,23 @@ impl Default for ChatState {
     }
 }
 
-/// Build the LLM prompt for a chat turn. Includes the draft as context,
-/// optional vault results, conversation history, and the user's question.
+/// Extract YAML frontmatter from markdown content.
+pub fn extract_frontmatter(content: &str) -> String {
+    if !content.starts_with("---") {
+        return String::new();
+    }
+    if let Some(end) = content[3..].find("\n---") {
+        content[..end + 3 + 4].to_string()
+    } else {
+        String::new()
+    }
+}
+
+/// Build the LLM prompt for a chat turn. Sends frontmatter + visible window
+/// (with margin) instead of the full article to stay within token limits.
 pub fn build_chat_prompt(
-    draft: &str,
+    frontmatter: &str,
+    visible_window: &str,
     vault_context: Option<&str>,
     messages: &[Message],
     question: &str,
@@ -107,7 +120,8 @@ pub fn build_chat_prompt(
     prompt.push_str(
         "You are a blog writing companion inside DevTUI, a terminal CMS.\n\
          The author writes technical blog posts in English and Portuguese.\n\
-         You have full access to the article being edited.\n\n\
+         You see the article's frontmatter (metadata) and the section currently \
+         visible on screen (with some margin for context).\n\n\
          When the user asks about their notes, past ideas, TILs, or blog drafts, \
          related notes from their Obsidian vault are included below (from learning/, \
          lives/, and blog/ folders only). Use them to suggest connections.\n\n\
@@ -119,19 +133,16 @@ pub fn build_chat_prompt(
          - You can reference the article's frontmatter (title, tags, status)\n\
          - Do NOT invent vault notes. Only reference notes shown in the context\n\n",
     );
-    prompt.push_str("## Article Being Edited\n\n");
-    // Cap at ~12K chars (~3K tokens) to stay within Groq free tier limits
-    if draft.len() > 12000 {
-        let cut = &draft[..draft[..12000].rfind('\n').unwrap_or(12000)];
-        prompt.push_str(cut);
-        prompt.push_str(&format!(
-            "\n\n[...article truncated at 12K chars, full length: {}...]\n\n",
-            draft.len()
-        ));
-    } else {
-        prompt.push_str(draft);
+
+    if !frontmatter.is_empty() {
+        prompt.push_str("## Article Metadata\n\n");
+        prompt.push_str(frontmatter);
         prompt.push_str("\n\n");
     }
+
+    prompt.push_str("## Visible Section (current editing area + margin)\n\n");
+    prompt.push_str(visible_window);
+    prompt.push_str("\n\n");
 
     if let Some(vault) = vault_context {
         prompt.push_str("## Related Notes from Vault\n\n");
@@ -278,21 +289,22 @@ mod tests {
     }
 
     #[test]
-    fn build_chat_prompt_includes_draft_and_question() {
-        let prompt = build_chat_prompt("# My Post\n\nSome content.", None, &[], "Is this clear?");
+    fn build_chat_prompt_includes_frontmatter_and_visible_window() {
+        let fm = "---\ntitle: My Post\n---";
+        let window = "Some visible content.";
+        let prompt = build_chat_prompt(fm, window, None, &[], "Is this clear?");
 
-        assert!(prompt.contains("# My Post"));
-        assert!(prompt.contains("Some content."));
+        assert!(prompt.contains("title: My Post"));
+        assert!(prompt.contains("Some visible content."));
         assert!(prompt.contains("User: Is this clear?"));
     }
 
     #[test]
     fn build_chat_prompt_includes_vault_context_when_present() {
         let prompt = build_chat_prompt(
-            "draft",
+            "", "draft",
             Some("TIL: Rust ownership rules"),
-            &[],
-            "question",
+            &[], "question",
         );
 
         assert!(prompt.contains("Related Notes from Vault"));
@@ -306,7 +318,7 @@ mod tests {
             Message { role: Role::Assistant, content: "first answer".to_string() },
         ];
 
-        let prompt = build_chat_prompt("draft", None, &messages, "follow up");
+        let prompt = build_chat_prompt("", "draft", None, &messages, "follow up");
 
         assert!(prompt.contains("User: first question"));
         assert!(prompt.contains("Assistant: first answer"));
@@ -315,16 +327,22 @@ mod tests {
 
     #[test]
     fn build_chat_prompt_omits_vault_section_when_none() {
-        let prompt = build_chat_prompt("draft", None, &[], "question");
+        let prompt = build_chat_prompt("", "draft", None, &[], "question");
 
         assert!(!prompt.contains("Vault"));
     }
 
     #[test]
-    fn build_chat_prompt_includes_full_article() {
-        let long_draft = "word ".repeat(1000);
-        let prompt = build_chat_prompt(&long_draft, None, &[], "question");
+    fn extract_frontmatter_parses_yaml_block() {
+        let content = "---\ntitle: Hello\ntags: [a]\n---\n\nBody here.";
+        let fm = extract_frontmatter(content);
+        assert!(fm.contains("title: Hello"));
+        assert!(!fm.contains("Body here"));
+    }
 
-        assert!(prompt.contains(&long_draft));
+    #[test]
+    fn extract_frontmatter_returns_empty_when_missing() {
+        let fm = extract_frontmatter("No frontmatter here.");
+        assert!(fm.is_empty());
     }
 }

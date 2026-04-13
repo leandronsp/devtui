@@ -600,13 +600,21 @@ impl RunLoopState {
                         self.chat.add_user_message(&question);
                         self.chat.pending = true;
 
-                        let draft = self.last_content.clone();
+                        let lines: Vec<&str> = self.last_content.lines().collect();
+                        let visible_start = self.last_first_visible_line.saturating_sub(1);
+                        let visible_end = (visible_start + self.last_visible_rows).min(lines.len());
+                        // Margin: 30 lines before and after the visible area
+                        let margin_start = visible_start.saturating_sub(30);
+                        let margin_end = (visible_end + 30).min(lines.len());
+                        let visible_window = lines[margin_start..margin_end].join("\n");
+                        let frontmatter = super::chat::extract_frontmatter(&self.last_content);
                         let messages = self.chat.messages.clone();
                         let chat_result = Arc::clone(&self.chat_result);
                         thread::spawn(move || {
                             let vault_context = super::chat::query_vault(&question);
                             let prompt = super::chat::build_chat_prompt(
-                                &draft,
+                                &frontmatter,
+                                &visible_window,
                                 vault_context.as_deref(),
                                 &messages,
                                 &question,
