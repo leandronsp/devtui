@@ -604,10 +604,9 @@ impl RunLoopState {
                         let messages = self.chat.messages.clone();
                         let chat_result = Arc::clone(&self.chat_result);
                         thread::spawn(move || {
-                            let vault_context = super::chat::query_vault(&question);
                             let prompt = super::chat::build_chat_prompt(
                                 &draft,
-                                vault_context.as_deref(),
+                                None,
                                 &messages,
                                 &question,
                             );
