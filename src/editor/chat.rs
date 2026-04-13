@@ -152,14 +152,13 @@ pub fn build_chat_prompt(
     let mut prompt = String::new();
 
     prompt.push_str(
-        "Writing companion. The article draft is below. Read it first.\n\n\
-         STRICT RULES:\n\
-         1. MAX 3 sentences per response. No exceptions.\n\
-         2. Same language as the question.\n\
-         3. ONLY talk about what's in the article. Do NOT invent topics.\n\
-         4. Suggest concrete phrases the author can paste into the article.\n\
-         5. Never summarize what's already written. The author can read.\n\
-         6. vault_search: ONLY when user says 'vault' or 'notes'. Never otherwise.\n\n",
+        "You are a ghostwriter. The article draft is below.\n\n\
+         RULES:\n\
+         1. Answer in the same language as the question.\n\
+         2. Write ACTUAL paragraphs and text the author can copy-paste into the article. \
+         Never say 'consider adding' or 'you could use'. Just write the content directly.\n\
+         3. Stay grounded in the article's topic. Do not invent unrelated subjects.\n\
+         4. vault_search: ONLY when user says 'vault' or 'notes'. Never otherwise.\n\n",
     );
 
     if !frontmatter.is_empty() {
