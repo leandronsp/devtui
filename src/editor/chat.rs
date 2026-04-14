@@ -33,7 +33,7 @@ impl AgentState {
             "--allow-dangerously-skip-permissions",
             "--append-system-prompt",
             "The user is writing a blog article in DevTUI. \
-             The live article content is at /tmp/devtui-content (updated on every keystroke). \
+             The live article content is at /tmp/devtui-content (updated only when the user saves with :w). \
              Start by running /cms watch devtui to activate the writing companion. \
              The cms skill is at ~/.claude/skills/cms/SKILL.md. \
              The user's vault is at ~/vault (searchable with qmd).",
@@ -56,7 +56,7 @@ impl AgentState {
             .try_clone_reader()
             .map_err(|e| io::Error::other(e.to_string()))?;
 
-        let parser = Arc::new(RwLock::new(vt100::Parser::new(rows, cols, 0)));
+        let parser = Arc::new(RwLock::new(vt100::Parser::new(rows, cols, 10_000)));
         let running = Arc::new(AtomicBool::new(true));
 
         let parser_w = Arc::clone(&parser);
@@ -90,6 +90,22 @@ impl AgentState {
     pub fn write(&mut self, bytes: &[u8]) -> io::Result<()> {
         self.writer.write_all(bytes)?;
         self.writer.flush()
+    }
+
+    /// Scroll the agent pane. Positive = into history, negative = toward present.
+    pub fn scroll(&self, delta: i32) {
+        if let Ok(mut p) = self.parser.write() {
+            let current = p.screen().scrollback() as i32;
+            let new = current.saturating_add(delta).max(0) as usize;
+            p.set_scrollback(new);
+        }
+    }
+
+    /// Reset scrollback to the present (bottom).
+    pub fn scroll_to_bottom(&self) {
+        if let Ok(mut p) = self.parser.write() {
+            p.set_scrollback(0);
+        }
     }
 }
 

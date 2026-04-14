@@ -66,7 +66,7 @@ pub fn run(
     let file_str = file_path.to_str().unwrap_or(DRAFT_PATH);
 
     let content_autocmd = format!(
-        "autocmd TextChanged,TextChangedI,BufWritePost * call writefile(getline(1,'$'),'{}')",
+        "autocmd BufWritePost * call writefile(getline(1,'$'),'{}')",
         CONTENT_TMP
     );
     let initial_write = format!("call writefile(getline(1,'$'),'{}')", CONTENT_TMP);
@@ -510,8 +510,22 @@ impl RunLoopState {
                 }
                 return Ok(false);
             }
+            // Ctrl+J/K: scroll agent scrollback (like preview pane)
+            if key.code == KeyCode::Char('j') && ctrl {
+                if let Some(agent) = &self.agent {
+                    agent.scroll(-3);
+                }
+                return Ok(false);
+            }
+            if key.code == KeyCode::Char('k') && ctrl {
+                if let Some(agent) = &self.agent {
+                    agent.scroll(3);
+                }
+                return Ok(false);
+            }
             if let Some(agent) = &mut self.agent {
                 if let Some(bytes) = key_to_bytes(key.code, key.modifiers) {
+                    agent.scroll_to_bottom();
                     let _ = agent.write(&bytes);
                 }
             }
@@ -629,13 +643,25 @@ impl RunLoopState {
             return Ok(false);
         }
 
-        // Ctrl+J/K: scroll right pane (preview, scribe, or chat)
+        // Ctrl+J/K: scroll right pane (preview or chat)
         if key.code == KeyCode::Char('j') && ctrl && self.split_layout != SplitLayout::EditorOnly {
-            self.preview_scroll = self.preview_scroll.saturating_add(3).min(scroll.max_scroll);
+            if self.split_layout == SplitLayout::Chat {
+                if let Some(agent) = &self.agent {
+                    agent.scroll(-3);
+                }
+            } else {
+                self.preview_scroll = self.preview_scroll.saturating_add(3).min(scroll.max_scroll);
+            }
             return Ok(false);
         }
         if key.code == KeyCode::Char('k') && ctrl && self.split_layout != SplitLayout::EditorOnly {
-            self.preview_scroll = self.preview_scroll.saturating_sub(3);
+            if self.split_layout == SplitLayout::Chat {
+                if let Some(agent) = &self.agent {
+                    agent.scroll(3);
+                }
+            } else {
+                self.preview_scroll = self.preview_scroll.saturating_sub(3);
+            }
             return Ok(false);
         }
 
