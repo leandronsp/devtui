@@ -35,6 +35,7 @@ pub struct HtmlPreviewConfig {
     pub css: String,
     pub article_tpl: String,
     pub blog_config: crate::engine::config::BlogConfig,
+    pub blog_dir: PathBuf,
 }
 
 pub fn run(
@@ -135,6 +136,12 @@ pub fn run(
         }
     });
 
+    let file_stem = file_path
+        .file_stem()
+        .and_then(|s| s.to_str())
+        .unwrap_or("post")
+        .to_string();
+
     run_loop(
         terminal,
         &parser,
@@ -143,6 +150,7 @@ pub fn run(
         &vim_exited,
         &content_swap,
         html_config,
+        file_stem,
     )?;
 
     // Read final content from the actual file vim was editing.
@@ -254,10 +262,15 @@ struct RunLoopState {
     /// Embedded Claude Code agent (spawned lazily on first Ctrl+Y).
     agent: Option<super::chat::AgentState>,
     agent_focused: bool,
+    /// Image upload picker (popup overlay, blocks vim input while open).
+    upload: Option<super::upload::UploadState>,
+    /// File stem of the article being edited; used as prefix for uploaded
+    /// image filenames so they cluster per-post in `images/`.
+    file_stem: String,
 }
 
 impl RunLoopState {
-    fn new(blog_author: Option<String>) -> Self {
+    fn new(blog_author: Option<String>, file_stem: String) -> Self {
         Self {
             last_content: String::new(),
             cached_lines: Vec::new(),
@@ -273,6 +286,8 @@ impl RunLoopState {
             last_visible_rows: 40,
             agent: None,
             agent_focused: false,
+            upload: None,
+            file_stem,
         }
     }
 
@@ -452,6 +467,7 @@ impl RunLoopState {
 
             // Status bar
             let browser_hint = if has_browser { " ^O:browser" } else { "" };
+            let upload_hint = if has_browser { " ^L:image" } else { "" };
             let scroll_hint = if self.split_layout != SplitLayout::EditorOnly {
                 " ^J/^K:scroll"
             } else {
@@ -464,11 +480,16 @@ impl RunLoopState {
             };
             let status = Line::from(Span::styled(
                 format!(
-                    " DevTUI [{layout_label}] ^G:cycle ^P:preview ^Y:agent{browser_hint}{follow_hint}{scroll_hint} ^R:restart",
+                    " DevTUI [{layout_label}] ^G:cycle ^P:preview ^Y:agent{browser_hint}{upload_hint}{follow_hint}{scroll_hint} ^R:restart",
                 ),
                 Style::default().fg(Color::DarkGray),
             ));
             frame.render_widget(Paragraph::new(status), status_area);
+
+            // Upload popup overlays everything (drawn last so it sits on top).
+            if let Some(upload) = &self.upload {
+                super::upload::render(frame, upload, area);
+            }
         })?;
 
         Ok(())
@@ -488,6 +509,12 @@ impl RunLoopState {
         html_config: Option<&HtmlPreviewConfig>,
     ) -> io::Result<bool> {
         let ctrl = key.modifiers.contains(KeyModifiers::CONTROL);
+
+        // Upload picker active: it owns all input. Block vim and agent.
+        if self.upload.is_some() {
+            self.handle_upload_key(key, pty_writer, vim_state, html_config)?;
+            return Ok(false);
+        }
 
         // Agent pane: when focused, forward all keystrokes to Claude Code PTY.
         // Ctrl+Y unfocuses (back to vim). Ctrl+R restarts the agent.
@@ -632,6 +659,12 @@ impl RunLoopState {
             return Ok(false);
         }
 
+        // Ctrl+L: open image upload picker (only when running inside a blog).
+        if key.code == KeyCode::Char('l') && ctrl && html_config.is_some() {
+            self.upload = Some(super::upload::UploadState::open());
+            return Ok(false);
+        }
+
         // Ctrl+O: open in browser
         if key.code == KeyCode::Char('o') && ctrl {
             if let Some(cfg) = html_config {
@@ -674,6 +707,120 @@ impl RunLoopState {
         }
         Ok(false)
     }
+
+    /// Drive the upload popup. Captures all keys while the picker is open,
+    /// commits the chosen file into `<blog>/images/`, and injects the markdown
+    /// image tag at the cursor via the PTY.
+    ///
+    /// Keymap:
+    /// - typed chars filter the list (incremental search)
+    /// - Backspace deletes a char; once the query is empty, navigates up
+    /// - Up/Down move the selection in the filtered list
+    /// - Enter enters a directory or commits a file
+    /// - Ctrl+V pastes a PNG straight from the macOS clipboard
+    /// - Esc closes
+    #[allow(clippy::borrowed_box)]
+    fn handle_upload_key(
+        &mut self,
+        key: crossterm::event::KeyEvent,
+        pty_writer: &mut Box<dyn Write + Send>,
+        vim_state: &VimState,
+        html_config: Option<&HtmlPreviewConfig>,
+    ) -> io::Result<()> {
+        let ctrl = key.modifiers.contains(KeyModifiers::CONTROL);
+
+        let (close, commit, paste) = {
+            let Some(upload) = self.upload.as_mut() else { return Ok(()); };
+            let mut close = false;
+            let mut commit: Option<PathBuf> = None;
+            let mut paste = false;
+            match key.code {
+                KeyCode::Esc => close = true,
+                KeyCode::Up => upload.move_up(),
+                KeyCode::Down => upload.move_down(),
+                KeyCode::Enter => {
+                    if let Some(file) = upload.enter() {
+                        commit = Some(file);
+                    }
+                }
+                KeyCode::Backspace => {
+                    if !upload.pop_query() {
+                        upload.navigate_up();
+                    }
+                }
+                KeyCode::Char('v') if ctrl => paste = true,
+                KeyCode::Char(ch) if !ctrl => upload.push_query(ch),
+                _ => {}
+            }
+            (close, commit, paste)
+        };
+
+        if close {
+            self.upload = None;
+            return Ok(());
+        }
+
+        let Some(cfg) = html_config else { return Ok(()); };
+
+        if paste {
+            match super::upload::paste_clipboard_image(&cfg.blog_dir, &self.file_stem) {
+                Ok(rel_path) => {
+                    inject_markdown_image(pty_writer, &rel_path, vim_state.mode)?;
+                    self.upload = None;
+                    self.flash = Some(("pasted", std::time::Instant::now()));
+                }
+                Err(e) => {
+                    if let Some(upload) = self.upload.as_mut() {
+                        upload.message = Some(e);
+                    }
+                }
+            }
+            return Ok(());
+        }
+
+        let Some(source) = commit else { return Ok(()); };
+
+        match super::upload::commit_upload(&source, &cfg.blog_dir, &self.file_stem) {
+            Ok(rel_path) => {
+                inject_markdown_image(pty_writer, &rel_path, vim_state.mode)?;
+                self.upload = None;
+                self.flash = Some(("uploaded", std::time::Instant::now()));
+            }
+            Err(e) => {
+                if let Some(upload) = self.upload.as_mut() {
+                    upload.message = Some(format!("upload failed: {e}"));
+                }
+            }
+        }
+        Ok(())
+    }
+}
+
+/// Inject `![image](rel_path)` at the vim cursor, preserving the user's mode.
+/// In INSERT we just type the text. From any other mode we Esc out, append
+/// (`a`) to land after the cursor, type the snippet, then Esc back to NORMAL.
+/// Alt text is a generic placeholder so the user is nudged to refine it; it
+/// also keeps the auto-generated post snippet free of slug noise.
+#[allow(clippy::borrowed_box)]
+fn inject_markdown_image(
+    pty_writer: &mut Box<dyn Write + Send>,
+    rel_path: &str,
+    mode: &str,
+) -> io::Result<()> {
+    let snippet = format!("![image]({rel_path})");
+
+    let mut bytes: Vec<u8> = Vec::with_capacity(snippet.len() + 3);
+    if mode != "INSERT" {
+        bytes.push(0x1b); // Esc to clear any pending mode
+        bytes.push(b'a'); // append after cursor
+    }
+    bytes.extend_from_slice(snippet.as_bytes());
+    if mode != "INSERT" {
+        bytes.push(0x1b); // Esc back to NORMAL
+    }
+    pty_writer.write_all(&bytes)?;
+    pty_writer.flush()?;
+    Ok(())
 }
 
 /// Scroll info computed once per frame and shared across draw and key handling.
@@ -693,9 +840,10 @@ fn run_loop(
     vim_exited: &Arc<AtomicBool>,
     content_swap: &Arc<Mutex<Option<String>>>,
     html_config: Option<&HtmlPreviewConfig>,
+    file_stem: String,
 ) -> io::Result<()> {
     let blog_author = html_config.map(|c| c.blog_config.author.clone());
-    let mut state = RunLoopState::new(blog_author);
+    let mut state = RunLoopState::new(blog_author, file_stem);
 
     loop {
         if vim_exited.load(Ordering::Relaxed) {
@@ -905,7 +1053,27 @@ fn render_html_preview(content: &str, config: &HtmlPreviewConfig) -> String {
 
     let html = build::render_preview_html(content, &title, &config.blog_config, &config.article_tpl);
     let minified_css = minify::minify_css(&config.css);
-    minify::inline_css(&html, &minified_css)
+    let inlined = minify::inline_css(&html, &minified_css);
+    rewrite_local_assets(&inlined, &config.blog_dir)
+}
+
+/// Rewrite root-relative asset paths to absolute `file://` URIs so the
+/// preview HTML opened with `open ...html` can find images/uploads/assets
+/// when there's no HTTP server. Only matters for the Ctrl+O flow.
+fn rewrite_local_assets(html: &str, blog_dir: &std::path::Path) -> String {
+    let canonical = blog_dir
+        .canonicalize()
+        .unwrap_or_else(|_| blog_dir.to_path_buf());
+    let base = canonical.display().to_string();
+    let mut out = html.to_string();
+    for prefix in ["/images/", "/uploads/", "/assets/"] {
+        for attr in ["src", "href"] {
+            let from = format!(r#"{attr}="{prefix}"#);
+            let to = format!(r#"{attr}="file://{base}{prefix}"#);
+            out = out.replace(&from, &to);
+        }
+    }
+    out
 }
 
 pub fn key_to_bytes(code: KeyCode, modifiers: KeyModifiers) -> Option<Vec<u8>> {
@@ -959,5 +1127,49 @@ pub fn key_to_bytes(code: KeyCode, modifiers: KeyModifiers) -> Option<Vec<u8>> {
             Some(seq)
         }
         _ => None,
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use crate::testutil::tempdir;
+
+    #[test]
+    fn rewrite_local_assets_rewrites_image_src() {
+        let blog = tempdir();
+        let html = r#"<img src="/images/foo.png">"#;
+        let out = rewrite_local_assets(html, &blog);
+        let expected = format!(r#"<img src="file://{}/images/foo.png">"#, blog.canonicalize().unwrap().display());
+        assert_eq!(out, expected);
+    }
+
+    #[test]
+    fn rewrite_local_assets_rewrites_uploads_and_assets() {
+        let blog = tempdir();
+        let canonical = blog.canonicalize().unwrap();
+        let html = r#"<a href="/uploads/file.pdf"><img src="/assets/icon.svg"></a>"#;
+        let out = rewrite_local_assets(html, &blog);
+        assert!(out.contains(&format!(r#"href="file://{}/uploads/file.pdf""#, canonical.display())));
+        assert!(out.contains(&format!(r#"src="file://{}/assets/icon.svg""#, canonical.display())));
+    }
+
+    #[test]
+    fn rewrite_local_assets_leaves_external_urls_untouched() {
+        let blog = tempdir();
+        let html = r#"<img src="https://example.com/images/foo.png"><a href="/about/">about</a>"#;
+        let out = rewrite_local_assets(html, &blog);
+        assert!(out.contains(r#"src="https://example.com/images/foo.png""#));
+        assert!(out.contains(r#"href="/about/""#));
+    }
+
+    #[test]
+    fn rewrite_local_assets_handles_multiple_images() {
+        let blog = tempdir();
+        let canonical = blog.canonicalize().unwrap();
+        let html = r#"<img src="/images/a.png"><img src="/images/b.jpg">"#;
+        let out = rewrite_local_assets(html, &blog);
+        assert!(out.contains(&format!(r#"src="file://{}/images/a.png""#, canonical.display())));
+        assert!(out.contains(&format!(r#"src="file://{}/images/b.jpg""#, canonical.display())));
     }
 }

@@ -3,6 +3,7 @@ pub mod db;
 pub mod list;
 pub mod ops;
 pub mod preview;
+pub mod upload;
 pub mod vim;
 
 use std::io;
@@ -99,6 +100,7 @@ fn load_html_preview_config(cfg: &BlogConfig, blog_dir: &Path) -> Option<HtmlPre
         css,
         article_tpl,
         blog_config: cfg.clone(),
+        blog_dir: blog_dir.to_path_buf(),
     })
 }
 
