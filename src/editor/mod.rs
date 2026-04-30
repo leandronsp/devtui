@@ -157,6 +157,7 @@ fn edit_article(
         if let Some(title) = crate::engine::config::frontmatter("title", &final_content) {
             if title != article.title {
                 let _ = db::update_title(conn, id, &title);
+                rename_auto_slug_from_title(conn, &article, &title, blog_dir);
             }
         }
 
@@ -205,6 +206,37 @@ fn write_published_md(article: &db::Article, blog_dir: &Path) -> io::Result<()> 
     std::fs::create_dir_all(&posts_dir)?;
     let path = posts_dir.join(format!("{}.md", article.slug));
     std::fs::write(path, &article.content)
+}
+
+/// When the user gives the article a real title, replace the auto-generated
+/// `untitled-N` slug with one derived from the title. Untitled / empty titles
+/// leave the slug alone. User-set slugs are never rewritten so existing URLs
+/// stay stable.
+fn rename_auto_slug_from_title(
+    conn: &Connection,
+    article: &db::Article,
+    new_title: &str,
+    blog_dir: &Path,
+) {
+    if !db::is_auto_slug(&article.slug) {
+        return;
+    }
+    let trimmed = new_title.trim();
+    if trimmed.is_empty() || trimmed.eq_ignore_ascii_case("untitled") {
+        return;
+    }
+
+    let Ok(new_slug) = db::derive_unique_slug(conn, trimmed) else { return };
+    if new_slug.is_empty() || db::is_auto_slug(&new_slug) || new_slug == article.slug {
+        return;
+    }
+
+    if db::update_slug(conn, article.id, &new_slug).is_ok() {
+        // Drop the orphan .md left over from a previous publish under the old
+        // slug, otherwise the engine would render two posts.
+        let old_md = blog_dir.join("posts").join(format!("{}.md", article.slug));
+        let _ = std::fs::remove_file(&old_md);
+    }
 }
 
 /// Force re-import `.md` files into the DB. Unlike `import_if_empty`, this
@@ -279,6 +311,63 @@ mod tests {
         let articles = db::list_articles(&conn, None).unwrap();
         assert_eq!(articles.len(), 1);
         assert_eq!(articles[0].title, "Hello");
+    }
+
+    #[test]
+    fn rename_auto_slug_replaces_untitled_with_derived_slug() {
+        let blog_dir = tempdir();
+        let conn = db::init_db(&blog_dir.join("devtui.db")).unwrap();
+        let article = db::create_article(&conn, "Untitled").unwrap();
+        // Sanity: starts with an auto slug.
+        assert!(article.slug.starts_with("untitled"));
+
+        rename_auto_slug_from_title(&conn, &article, "Hello World", &blog_dir);
+
+        let after = db::get_article(&conn, article.id).unwrap();
+        assert_eq!(after.slug, "hello-world");
+    }
+
+    #[test]
+    fn rename_auto_slug_keeps_user_set_slug_intact() {
+        let blog_dir = tempdir();
+        let conn = db::init_db(&blog_dir.join("devtui.db")).unwrap();
+        let article = db::create_article(&conn, "Untitled").unwrap();
+        db::update_slug(&conn, article.id, "my-stable-url").unwrap();
+        let stable = db::get_article(&conn, article.id).unwrap();
+
+        rename_auto_slug_from_title(&conn, &stable, "Different Title", &blog_dir);
+
+        let after = db::get_article(&conn, article.id).unwrap();
+        assert_eq!(after.slug, "my-stable-url");
+    }
+
+    #[test]
+    fn rename_auto_slug_skips_when_new_title_is_untitled() {
+        let blog_dir = tempdir();
+        let conn = db::init_db(&blog_dir.join("devtui.db")).unwrap();
+        let article = db::create_article(&conn, "Untitled").unwrap();
+        let original_slug = article.slug.clone();
+
+        rename_auto_slug_from_title(&conn, &article, "  untitled  ", &blog_dir);
+        rename_auto_slug_from_title(&conn, &article, "", &blog_dir);
+
+        let after = db::get_article(&conn, article.id).unwrap();
+        assert_eq!(after.slug, original_slug);
+    }
+
+    #[test]
+    fn rename_auto_slug_removes_orphan_md_at_old_slug() {
+        let blog_dir = tempdir();
+        let conn = db::init_db(&blog_dir.join("devtui.db")).unwrap();
+        let article = db::create_article(&conn, "Untitled").unwrap();
+        let posts = blog_dir.join("posts");
+        std::fs::create_dir_all(&posts).unwrap();
+        let old_md = posts.join(format!("{}.md", article.slug));
+        std::fs::write(&old_md, "stale content").unwrap();
+
+        rename_auto_slug_from_title(&conn, &article, "Brand New", &blog_dir);
+
+        assert!(!old_md.exists(), "old .md should be cleaned up");
     }
 
     #[test]

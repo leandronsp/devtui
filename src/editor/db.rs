@@ -175,6 +175,37 @@ pub fn update_title(conn: &Connection, id: i64, title: &str) -> Result<(), CmsEr
     Ok(())
 }
 
+pub fn update_slug(conn: &Connection, id: i64, slug: &str) -> Result<(), CmsError> {
+    let changed = conn.execute(
+        "UPDATE articles SET slug = ?1, updated_at = datetime('now') WHERE id = ?2",
+        params![slug, id],
+    )?;
+    if changed == 0 {
+        return Err(CmsError::ArticleNotFound(id));
+    }
+    Ok(())
+}
+
+/// True when the slug looks auto-generated (`untitled` or `untitled-<n>`).
+/// Only auto-generated slugs are eligible for re-derivation when the title
+/// changes; user-set slugs stay put to preserve URLs.
+pub fn is_auto_slug(slug: &str) -> bool {
+    if slug == "untitled" {
+        return true;
+    }
+    if let Some(rest) = slug.strip_prefix("untitled-") {
+        return !rest.is_empty() && rest.chars().all(|c| c.is_ascii_digit());
+    }
+    false
+}
+
+/// Slugify `title` and return a slug that doesn't collide with any existing
+/// article. Suitable for both new articles and slug rename.
+pub fn derive_unique_slug(conn: &Connection, title: &str) -> Result<String, CmsError> {
+    let base = slugify(title);
+    unique_slug(conn, &base)
+}
+
 pub fn publish(conn: &Connection, id: i64) -> Result<(), CmsError> {
     let changed = conn.execute(
         "UPDATE articles
@@ -557,6 +588,55 @@ mod tests {
     fn init_db_is_idempotent() {
         let conn = test_db();
         create_schema(&conn).unwrap();
+    }
+
+    // --- slug helpers ---
+
+    #[test]
+    fn is_auto_slug_recognises_untitled_variants() {
+        assert!(is_auto_slug("untitled"));
+        assert!(is_auto_slug("untitled-1"));
+        assert!(is_auto_slug("untitled-99"));
+    }
+
+    #[test]
+    fn is_auto_slug_rejects_other_slugs() {
+        assert!(!is_auto_slug("hello-world"));
+        assert!(!is_auto_slug("untitled-foo"));
+        assert!(!is_auto_slug("my-untitled-post"));
+        assert!(!is_auto_slug(""));
+        assert!(!is_auto_slug("untitled-"));
+    }
+
+    #[test]
+    fn update_slug_changes_the_row() {
+        let conn = test_db();
+        let article = create_article(&conn, "Untitled").unwrap();
+        update_slug(&conn, article.id, "renamed").unwrap();
+        let after = get_article(&conn, article.id).unwrap();
+        assert_eq!(after.slug, "renamed");
+    }
+
+    #[test]
+    fn update_slug_returns_not_found_for_missing_id() {
+        let conn = test_db();
+        let result = update_slug(&conn, 9999, "whatever");
+        assert!(matches!(result, Err(CmsError::ArticleNotFound(9999))));
+    }
+
+    #[test]
+    fn derive_unique_slug_returns_slugified_title() {
+        let conn = test_db();
+        let slug = derive_unique_slug(&conn, "My First Post").unwrap();
+        assert_eq!(slug, "my-first-post");
+    }
+
+    #[test]
+    fn derive_unique_slug_appends_counter_on_collision() {
+        let conn = test_db();
+        create_article(&conn, "Hello World").unwrap();
+        let slug = derive_unique_slug(&conn, "Hello World").unwrap();
+        assert_eq!(slug, "hello-world-2");
     }
 
     // --- create_article ---
