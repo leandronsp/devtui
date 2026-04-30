@@ -23,22 +23,27 @@ pub fn post_snippet(body: &str, description: Option<&str>, limit: usize) -> Stri
     truncate_at_word_boundary(&text, limit)
 }
 
-/// Parse markdown and extract only visible text content, skipping code blocks.
+/// Parse markdown and extract only visible text content, skipping code blocks
+/// and image alt text. Image alt is metadata, not body content; including it
+/// pollutes the auto-generated description for image-heavy posts.
 fn extract_plain_text(markdown: &str) -> String {
     let options = Options::ENABLE_STRIKETHROUGH | Options::ENABLE_TABLES;
     let parser = Parser::new_ext(markdown, options);
     let mut text = String::new();
     let mut in_code_block = false;
+    let mut in_image = false;
 
     for event in parser {
         match event {
             Event::Start(Tag::CodeBlock(_)) => in_code_block = true,
             Event::End(TagEnd::CodeBlock) => in_code_block = false,
-            Event::Text(t) if !in_code_block => {
+            Event::Start(Tag::Image { .. }) => in_image = true,
+            Event::End(TagEnd::Image) => in_image = false,
+            Event::Text(t) if !in_code_block && !in_image => {
                 if !text.is_empty() { text.push(' '); }
                 text.push_str(&t);
             }
-            Event::SoftBreak | Event::HardBreak if !in_code_block => text.push(' '),
+            Event::SoftBreak | Event::HardBreak if !in_code_block && !in_image => text.push(' '),
             _ => {}
         }
     }
@@ -323,6 +328,25 @@ mod tests {
         assert!(result.contains("Intro text"));
         assert!(result.contains("After code"));
         assert!(!result.contains("fn main"));
+    }
+
+    #[test]
+    fn post_snippet_skips_image_alt_text() {
+        // Image-only posts shouldn't leak the alt slug into the description.
+        let body = "![my-screenshot-2026](/images/my-screenshot-2026.png)";
+        let result = post_snippet(body, None, 300);
+        assert!(!result.contains("my-screenshot"));
+        assert!(!result.contains("2026"));
+    }
+
+    #[test]
+    fn post_snippet_keeps_prose_around_images() {
+        // Body text adjacent to an image should still survive.
+        let body = "Intro before image.\n\n![alt-tag](/images/x.png)\n\nProse after.";
+        let result = post_snippet(body, None, 300);
+        assert!(result.contains("Intro before image"));
+        assert!(result.contains("Prose after"));
+        assert!(!result.contains("alt-tag"));
     }
 
     #[test]
