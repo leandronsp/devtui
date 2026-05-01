@@ -275,7 +275,7 @@ impl RunLoopState {
             last_content: String::new(),
             cached_lines: Vec::new(),
             cached_offsets: Vec::new(),
-            split_layout: SplitLayout::Vertical,
+            split_layout: SplitLayout::EditorOnly,
             preview_scroll: 0,
             content_changed_at: None,
             preview_stale: false,
