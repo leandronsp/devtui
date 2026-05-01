@@ -221,13 +221,18 @@ pub fn publish(conn: &Connection, id: i64) -> Result<(), CmsError> {
     Ok(())
 }
 
-pub fn unpublish(conn: &Connection, id: i64) -> Result<(), CmsError> {
+pub fn unpublish(conn: &Connection, id: i64, posts_dir: &Path) -> Result<(), CmsError> {
+    let article = get_article(conn, id)?;
     let changed = conn.execute(
         "UPDATE articles SET status = 'draft', updated_at = datetime('now') WHERE id = ?1",
         params![id],
     )?;
     if changed == 0 {
         return Err(CmsError::ArticleNotFound(id));
+    }
+    let path = posts_dir.join(format!("{}.md", article.slug));
+    if path.exists() {
+        std::fs::remove_file(&path)?;
     }
     Ok(())
 }
@@ -746,6 +751,23 @@ mod tests {
     }
 
     #[test]
+    fn unpublish_removes_md_from_fs() {
+        let conn = test_db();
+        let dir = tempdir();
+        let article = create_article(&conn, "To Drop").unwrap();
+        let md = "---\ntitle: To Drop\n---\n\nbody\n";
+        update_content(&conn, article.id, md).unwrap();
+        publish(&conn, article.id).unwrap();
+        sync_to_filesystem(&conn, &dir).unwrap();
+        let path = dir.join(format!("{}.md", article.slug));
+        assert!(path.exists(), "preconditions: published .md exists");
+
+        unpublish(&conn, article.id, &dir).unwrap();
+
+        assert!(!path.exists(), "unpublish must remove .md without waiting for sync");
+    }
+
+    #[test]
     fn unpublish_preserves_published_at() {
         let conn = test_db();
         let article = create_article(&conn, "Round Trip").unwrap();
@@ -755,7 +777,7 @@ mod tests {
         )
         .unwrap();
         publish(&conn, article.id).unwrap();
-        unpublish(&conn, article.id).unwrap();
+        unpublish(&conn, article.id, &tempdir()).unwrap();
 
         let fetched = get_article(&conn, article.id).unwrap();
         assert_eq!(fetched.status, Status::Draft);
@@ -945,7 +967,7 @@ mod tests {
         let path = dir.join(format!("{}.md", article.slug));
         assert!(path.exists(), "preconditions: published .md exists");
 
-        unpublish(&conn, article.id).unwrap();
+        unpublish(&conn, article.id, &dir).unwrap();
         sync_to_filesystem(&conn, &dir).unwrap();
 
         assert!(!path.exists(), "unpublishing then sync must remove .md");
@@ -983,7 +1005,7 @@ mod tests {
         assert_eq!(articles.len(), 1);
 
         // User toggles the article to draft.
-        unpublish(&conn, articles[0].id).unwrap();
+        unpublish(&conn, articles[0].id, &dir).unwrap();
 
         // Second-run must NOT re-import and must NOT overwrite the draft state.
         import_if_empty(&conn, &dir).unwrap();

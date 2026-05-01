@@ -991,7 +991,7 @@ impl ListView {
                     db::publish(conn, id).map(|_| "Published")
                 }
                 Status::Published => {
-                    db::unpublish(conn, id).map(|_| "Unpublished")
+                    db::unpublish(conn, id, &self.blog_dir.join("posts")).map(|_| "Unpublished")
                 }
             };
             if let Ok(msg) = result {
