@@ -1,6 +1,6 @@
 # DevTUI
 
-Terminal markdown editor with live preview, AI writing companion, and multi-site static blog engine. Built in Rust with ratatui.
+Terminal markdown editor with live preview and a multi-site static blog engine. Built in Rust with ratatui.
 
 ## Editor
 
@@ -25,21 +25,11 @@ Position sync uses vim's `titlestring` (zero file I/O). Content sync debounced v
 - `Ctrl+D`/`Ctrl+U` -- half-page scroll
 - `G`/`gg` -- top/bottom
 - `Ctrl+P` -- toggle preview pane
-- `Ctrl+Y` -- toggle chat pane (AI writing companion)
-- `Ctrl+J`/`Ctrl+K` -- scroll right pane
+- `Ctrl+J`/`Ctrl+K` -- scroll preview pane
+- `Ctrl+F` -- follow editor cursor in preview
+- `Ctrl+L` -- image upload picker (within a blog)
+- `Ctrl+O` -- open HTML preview in browser
 - `:w` -- save, `:q` -- quit
-
-### Chat (AI Writing Companion)
-
-Toggle with `Ctrl+Y`. An interactive chat pane for grammar checking, writing advice, and vault-powered context search.
-
-- Grammar and spelling on demand. Ask "check the grammar" and the AI reviews the visible section.
-- Vault search. Questions automatically search your Obsidian vault (learning/, lives/, blog/ folders) via qmd for related notes.
-- Full article context. The AI sees frontmatter + the visible section with margin.
-- Bilingual. Works in English and Portuguese, answers in the same language as the question.
-- Configurable provider. Defaults to Groq (llama-3.1-8b-instant). Set `DEVTUI_LLM_PROVIDER=claude` for Anthropic.
-
-Requires `GROQ_API_KEY` or `ANTHROPIC_API_KEY` in environment. Optional: [qmd](https://github.com/leandronsp/qmd) for vault search.
 
 ## Blog Engine
 
@@ -78,8 +68,6 @@ make lint                     # clippy
 - [ratatui](https://ratatui.rs/) + [crossterm](https://github.com/crossterm-rs/crossterm) -- TUI framework
 - [portable-pty](https://docs.rs/portable-pty) + [vt100](https://docs.rs/vt100) + [tui-term](https://docs.rs/tui-term) -- vim PTY embedding
 - [pulldown-cmark](https://github.com/raphlinus/pulldown-cmark) -- markdown parsing
-- [ureq](https://docs.rs/ureq) -- HTTP client for LLM API calls (chat companion)
-- [qmd](https://github.com/leandronsp/qmd) -- Obsidian vault search (optional)
 
 ### Engine
 

@@ -14,8 +14,7 @@ DevTUI is three things:
 
 - **Rust toolchain** (cargo, rustc)
 - **vim** — embedded via PTY as child process
-- Crates: ratatui, crossterm, pulldown-cmark, tui-term, vt100, portable-pty, serde_json, ureq
-- **qmd** — optional, enables vault search in the chat companion
+- Crates: ratatui, crossterm, pulldown-cmark, tui-term, vt100, portable-pty
 
 ### Engine
 
@@ -35,9 +34,7 @@ brew install vim
 ### Editor (src/editor/)
 
 - **`src/editor/mod.rs`** — PTY setup, vim spawn, event loop, scroll sync, mode detection
-- **`src/editor/preview.rs`** — Markdown to ratatui Lines rendering + 26 unit tests
-- **`src/editor/chat.rs`** — AI writing companion chat: `ChatState`, `build_chat_prompt()`, `query_vault()`, `extract_frontmatter()`. 12 tests.
-- **`src/editor/llm.rs`** — LLM provider abstraction: `Provider` (Groq/Claude), `resolve_provider()`, `call_llm()`, `build_request_body()`, `extract_response_text()`. 8 tests.
+- **`src/editor/preview.rs`** — Markdown to ratatui Lines rendering + unit tests
 - **`src/editor/ops.rs`** — Blog operations: serve, deploy, build, theme management.
 
 ### Engine (src/engine/)
@@ -131,29 +128,6 @@ vim writes buffer to `/tmp/devtui-content` on `CursorHold` (fires after 150ms id
 ### Mode Detection
 
 Parsed from titlestring. Vim's `mode()` returns: `n`, `i`, `v/V`, `R`, `c`. Displayed as colored badge.
-
-### Chat (AI Writing Companion)
-
-The right pane can show a chat companion (Ctrl+Y). The chat sends the article's frontmatter + visible section (with 30-line margin) to an LLM and displays the response. Grammar, spelling, writing advice, and vault search are all available on demand.
-
-**Architecture:**
-
-```
-DevTUI process
-  └── Main loop (per question)
-        └── Background thread: qmd search (vault) + ureq HTTP (LLM)
-        └── poll_chat_result() picks up response
-        └── ChatState stores messages + renders in the pane
-```
-
-**Key design decisions:**
-
-- **Direct HTTP.** Uses ureq (blocking) in a background thread. No middleman daemon.
-- **Groq default.** `llama-3.1-8b-instant` via Groq API for speed (~1-3s). Claude available via `DEVTUI_LLM_PROVIDER=claude`.
-- **Visible portion + margin.** Sends frontmatter + 30 lines above/below visible area. Keeps prompts small, context relevant.
-- **Vault search on every question.** `qmd search` (BM25, fast) runs with the user's question. Results filtered to `learning/`, `lives/`, `blog/` paths only. No sensitive notes.
-- **Conversation history trimmed.** Last 3 exchanges kept. Older messages dropped to stay within token budget.
-- **Focus toggle.** Ctrl+Y opens/focuses chat. Esc unfocuses (back to vim). Keys only go to chat when focused.
 
 ## How the Engine Works
 
@@ -260,5 +234,7 @@ All vim keybindings work:
 - `:w` — Save (message auto-cleared)
 - `:q` / `:wq` — Quit
 - `Ctrl+P` — Toggle preview pane
-- `Ctrl+Y` — Toggle chat pane (AI writing companion). Focus/unfocus input
-- `Ctrl+J/K` — Scroll right pane (preview or chat)
+- `Ctrl+J/K` — Scroll preview pane
+- `Ctrl+F` — Follow editor cursor in preview
+- `Ctrl+L` — Image upload picker (within a blog)
+- `Ctrl+O` — Open HTML preview in browser

@@ -1,4 +1,3 @@
-pub mod chat;
 pub mod db;
 pub mod list;
 pub mod ops;
