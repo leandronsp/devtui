@@ -925,6 +925,26 @@ mod tests {
     }
 
     #[test]
+    fn sync_is_byte_idempotent() {
+        let conn = test_db();
+        let dir = tempdir();
+        let article = create_article(&conn, "Stable").unwrap();
+        let md = "---\ntitle: Stable\n---\n\nbody\n";
+        update_content(&conn, article.id, md).unwrap();
+        publish(&conn, article.id).unwrap();
+
+        sync_to_filesystem(&conn, &dir).unwrap();
+        let path = dir.join(format!("{}.md", article.slug));
+        let mtime1 = fs::metadata(&path).unwrap().modified().unwrap();
+
+        sync_to_filesystem(&conn, &dir).unwrap();
+        sync_to_filesystem(&conn, &dir).unwrap();
+
+        let mtime3 = fs::metadata(&path).unwrap().modified().unwrap();
+        assert_eq!(mtime1, mtime3, "sync must not rewrite unchanged files");
+    }
+
+    #[test]
     fn sync_writes_content_byte_for_byte() {
         let conn = test_db();
         let dir = tempdir();
