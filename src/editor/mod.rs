@@ -152,25 +152,38 @@ fn edit_article(
 
     let (_result, final_content) = vim::run(terminal, tmp_file.clone(), html_config)?;
 
-    // Only update DB if content actually changed (protects against :q! or crash)
-    if !final_content.is_empty() && final_content != article.content {
-        let _ = db::update_content(conn, id, &final_content);
-
-        if let Some(title) = crate::engine::config::frontmatter("title", &final_content) {
-            if title != article.title {
-                let _ = db::update_title(conn, id, &title);
-                rename_auto_slug_from_title(conn, &article, &title, blog_dir);
-            }
-        }
-
-        let updated = db::get_article(conn, id)
-            .map_err(|e| io::Error::other(e.to_string()))?;
-        if updated.status == Status::Published {
-            write_published_md(&updated, blog_dir)?;
-        }
-    }
+    apply_save(conn, &article, blog_dir, &final_content)?;
 
     let _ = std::fs::remove_file(&tmp_file);
+    Ok(())
+}
+
+/// Persist post-vim edits: update content, optionally update title and rename
+/// stale auto-slug, write published .md. Protects against :q! / crash by
+/// no-op'ing on empty or unchanged content.
+fn apply_save(
+    conn: &Connection,
+    article: &db::Article,
+    blog_dir: &Path,
+    final_content: &str,
+) -> io::Result<()> {
+    if final_content.is_empty() || final_content == article.content {
+        return Ok(());
+    }
+    let _ = db::update_content(conn, article.id, final_content);
+
+    if let Some(title) = crate::engine::config::frontmatter("title", final_content) {
+        if title != article.title {
+            let _ = db::update_title(conn, article.id, &title);
+        }
+        rename_auto_slug_from_title(conn, article, &title, blog_dir);
+    }
+
+    let updated = db::get_article(conn, article.id)
+        .map_err(|e| io::Error::other(e.to_string()))?;
+    if updated.status == Status::Published {
+        write_published_md(&updated, blog_dir)?;
+    }
     Ok(())
 }
 
@@ -355,6 +368,25 @@ mod tests {
 
         let after = db::get_article(&conn, article.id).unwrap();
         assert_eq!(after.slug, original_slug);
+    }
+
+    #[test]
+    fn save_reconciles_stale_auto_slug() {
+        let blog_dir = tempdir();
+        let conn = db::init_db(&blog_dir.join("devtui.db")).unwrap();
+        // Simulate an article whose title was once set but slug was never reconciled.
+        let article = db::create_article(&conn, "Real Title").unwrap();
+        db::update_slug(&conn, article.id, "untitled").unwrap();
+        let stale = db::get_article(&conn, article.id).unwrap();
+        assert_eq!(stale.title, "Real Title");
+        assert_eq!(stale.slug, "untitled");
+
+        // User edits the body; title in frontmatter unchanged.
+        let final_content = "---\ntitle: Real Title\n---\n\nbody edit\n";
+        apply_save(&conn, &stale, &blog_dir, final_content).unwrap();
+
+        let after = db::get_article(&conn, article.id).unwrap();
+        assert_eq!(after.slug, "real-title", "auto-slug must reconcile even when title is unchanged");
     }
 
     #[test]
