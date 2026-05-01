@@ -389,8 +389,6 @@ mod tests {
         let md_path = blog_dir.join("posts/sync-me.md");
         assert!(md_path.exists());
         let contents = std::fs::read_to_string(&md_path).unwrap();
-        assert!(contents.contains("title: Sync Me"));
-        assert!(contents.contains("status: published"));
-        assert!(contents.contains("Published body."));
+        assert_eq!(contents, md);
     }
 }

@@ -408,14 +408,13 @@ pub fn sync_to_filesystem(conn: &Connection, posts_dir: &Path) -> Result<(), Cms
         let path = posts_dir.join(format!("{}.md", article.slug));
         match article.status {
             Status::Published => {
-                let content = inject_status(&article.content, &article.status);
                 // Skip write when content unchanged to preserve mtime for incremental builds
                 if let Ok(existing) = std::fs::read_to_string(&path) {
-                    if existing == content {
+                    if existing == article.content {
                         continue;
                     }
                 }
-                std::fs::write(&path, content)?;
+                std::fs::write(&path, &article.content)?;
             }
             Status::Draft => {
                 if path.exists() {
@@ -474,11 +473,6 @@ pub fn build_markdown(article: &Article) -> String {
 }
 
 // --- Helpers ---
-
-/// Update or insert the `status:` field in frontmatter to match the DB status.
-fn inject_status(content: &str, status: &Status) -> String {
-    super::preview::set_frontmatter_field(content, "status", status.as_str())
-}
 
 fn slugify(title: &str) -> String {
     title
@@ -892,9 +886,7 @@ mod tests {
         let path = dir.join("hello-world.md");
         assert!(path.exists(), "expected {path:?} to exist");
         let contents = fs::read_to_string(&path).unwrap();
-        assert!(contents.contains("title: Hello World"));
-        assert!(contents.contains("status: published"));
-        assert!(contents.contains("Body here."));
+        assert_eq!(contents, md);
     }
 
     #[test]
@@ -908,6 +900,22 @@ mod tests {
 
         assert!(orphan.exists(), "orphan .md should survive sync");
         assert_eq!(fs::read_to_string(&orphan).unwrap(), "# Manual\n");
+    }
+
+    #[test]
+    fn sync_writes_content_byte_for_byte() {
+        let conn = test_db();
+        let dir = tempdir();
+        let article = create_article(&conn, "Raw").unwrap();
+        let md = "---\ntitle: Raw\n---\n\nexact bytes\n";
+        update_content(&conn, article.id, md).unwrap();
+        publish(&conn, article.id).unwrap();
+
+        sync_to_filesystem(&conn, &dir).unwrap();
+
+        let path = dir.join(format!("{}.md", article.slug));
+        let written = fs::read_to_string(&path).unwrap();
+        assert_eq!(written, md, "sync must write content byte-for-byte");
     }
 
     #[test]
@@ -1266,33 +1274,6 @@ mod tests {
         };
         let md = build_markdown(&published);
         assert!(md.contains("status: published"));
-    }
-
-    // --- inject_status ---
-
-    #[test]
-    fn inject_status_appends_when_missing() {
-        let content = "---\ntitle: Hello\n---\n\nbody";
-        let result = inject_status(content, &Status::Draft);
-        assert!(result.contains("status: draft"));
-        assert!(result.contains("title: Hello"));
-        assert!(result.contains("body"));
-    }
-
-    #[test]
-    fn inject_status_replaces_existing() {
-        let content = "---\ntitle: Hello\nstatus: published\n---\n\nbody";
-        let result = inject_status(content, &Status::Draft);
-        assert!(result.contains("status: draft"));
-        assert!(!result.contains("status: published"));
-    }
-
-    #[test]
-    fn inject_status_handles_frontmatter_only() {
-        let content = "---\ntitle: Hello\n---\n";
-        let result = inject_status(content, &Status::Draft);
-        assert!(result.contains("status: draft"));
-        assert!(result.contains("title: Hello"));
     }
 
 }
