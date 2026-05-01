@@ -479,7 +479,7 @@ pub fn build_markdown(article: &Article) -> String {
 
 // --- Helpers ---
 
-fn slugify(title: &str) -> String {
+pub fn slugify(title: &str) -> String {
     title
         .to_lowercase()
         .chars()
@@ -504,7 +504,7 @@ fn unique_slug(conn: &Connection, base: &str) -> Result<String, CmsError> {
     Err(CmsError::SlugConflict(base.to_string()))
 }
 
-fn slug_exists(conn: &Connection, slug: &str) -> Result<bool, CmsError> {
+pub fn slug_exists(conn: &Connection, slug: &str) -> Result<bool, CmsError> {
     let count: i64 = conn.query_row(
         "SELECT COUNT(*) FROM articles WHERE slug = ?1",
         params![slug],

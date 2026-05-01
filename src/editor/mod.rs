@@ -176,7 +176,11 @@ fn apply_save(
         if title != article.title {
             let _ = db::update_title(conn, article.id, &title);
         }
-        rename_auto_slug_from_title(conn, article, &title, blog_dir);
+        if let Some(requested) = crate::engine::config::frontmatter("slug", final_content) {
+            apply_frontmatter_slug(conn, article, &requested, blog_dir);
+        } else {
+            rename_auto_slug_from_title(conn, article, &title, blog_dir);
+        }
     }
 
     let updated = db::get_article(conn, article.id)
@@ -221,6 +225,33 @@ fn write_published_md(article: &db::Article, blog_dir: &Path) -> io::Result<()> 
     std::fs::create_dir_all(&posts_dir)?;
     let path = posts_dir.join(format!("{}.md", article.slug));
     std::fs::write(path, &article.content)
+}
+
+/// Honor a user-supplied slug from the article's frontmatter. Validates the
+/// slug shape and rejects collisions so we never produce two articles at the
+/// same URL. Removes the old `.md` from `posts/` when the rename succeeds.
+fn apply_frontmatter_slug(
+    conn: &Connection,
+    article: &db::Article,
+    requested: &str,
+    blog_dir: &Path,
+) {
+    let trimmed = requested.trim();
+    if trimmed.is_empty() || trimmed == article.slug {
+        return;
+    }
+    if db::slugify(trimmed) != trimmed {
+        log::warn!("invalid slug in frontmatter: {trimmed:?}; keeping {:?}", article.slug);
+        return;
+    }
+    if db::slug_exists(conn, trimmed).unwrap_or(true) {
+        log::warn!("slug collision: {trimmed:?} already in use; keeping {:?}", article.slug);
+        return;
+    }
+    if db::update_slug(conn, article.id, trimmed).is_ok() {
+        let old_md = blog_dir.join("posts").join(format!("{}.md", article.slug));
+        let _ = std::fs::remove_file(&old_md);
+    }
 }
 
 /// When the user gives the article a real title, replace the auto-generated
@@ -387,6 +418,60 @@ mod tests {
 
         let after = db::get_article(&conn, article.id).unwrap();
         assert_eq!(after.slug, "real-title", "auto-slug must reconcile even when title is unchanged");
+    }
+
+    #[test]
+    fn save_updates_slug_from_frontmatter() {
+        let blog_dir = tempdir();
+        let conn = db::init_db(&blog_dir.join("devtui.db")).unwrap();
+        let article = db::create_article(&conn, "Foo").unwrap();
+        db::update_slug(&conn, article.id, "foo").unwrap();
+        let stale = db::get_article(&conn, article.id).unwrap();
+        let posts = blog_dir.join("posts");
+        std::fs::create_dir_all(&posts).unwrap();
+        let old_md = posts.join("foo.md");
+        std::fs::write(&old_md, "stale").unwrap();
+
+        let final_content = "---\ntitle: Foo\nslug: bar\n---\n\nbody\n";
+        apply_save(&conn, &stale, &blog_dir, final_content).unwrap();
+
+        let after = db::get_article(&conn, article.id).unwrap();
+        assert_eq!(after.slug, "bar");
+        assert!(!old_md.exists(), "old .md must be removed after slug rename");
+    }
+
+    #[test]
+    fn save_rejects_slug_collision() {
+        let blog_dir = tempdir();
+        let conn = db::init_db(&blog_dir.join("devtui.db")).unwrap();
+        let a = db::create_article(&conn, "A").unwrap();
+        db::update_slug(&conn, a.id, "bar").unwrap();
+        let b = db::create_article(&conn, "B").unwrap();
+        db::update_slug(&conn, b.id, "b-original").unwrap();
+        let b_state = db::get_article(&conn, b.id).unwrap();
+
+        let final_content = "---\ntitle: B\nslug: bar\n---\n\nbody\n";
+        apply_save(&conn, &b_state, &blog_dir, final_content).unwrap();
+
+        let after = db::get_article(&conn, b.id).unwrap();
+        assert_eq!(after.slug, "b-original", "collision must keep original slug");
+    }
+
+    #[test]
+    fn frontmatter_slug_wins_over_auto_rename() {
+        let blog_dir = tempdir();
+        let conn = db::init_db(&blog_dir.join("devtui.db")).unwrap();
+        // Stale auto-slug + real title would normally trigger Fix 4 auto-rename.
+        let article = db::create_article(&conn, "Real Title").unwrap();
+        db::update_slug(&conn, article.id, "untitled").unwrap();
+        let stale = db::get_article(&conn, article.id).unwrap();
+
+        // But the user set a custom slug in the frontmatter.
+        let final_content = "---\ntitle: Real Title\nslug: my-url\n---\n\nbody\n";
+        apply_save(&conn, &stale, &blog_dir, final_content).unwrap();
+
+        let after = db::get_article(&conn, article.id).unwrap();
+        assert_eq!(after.slug, "my-url", "frontmatter slug must win over auto-rename");
     }
 
     #[test]
