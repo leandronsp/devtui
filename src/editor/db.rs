@@ -406,14 +406,23 @@ pub fn sync_to_filesystem(conn: &Connection, posts_dir: &Path) -> Result<(), Cms
     std::fs::create_dir_all(posts_dir)?;
     for article in list_articles(conn, None)? {
         let path = posts_dir.join(format!("{}.md", article.slug));
-        let content = inject_status(&article.content, &article.status);
-        // Skip write when content unchanged to preserve mtime for incremental builds
-        if let Ok(existing) = std::fs::read_to_string(&path) {
-            if existing == content {
-                continue;
+        match article.status {
+            Status::Published => {
+                let content = inject_status(&article.content, &article.status);
+                // Skip write when content unchanged to preserve mtime for incremental builds
+                if let Ok(existing) = std::fs::read_to_string(&path) {
+                    if existing == content {
+                        continue;
+                    }
+                }
+                std::fs::write(&path, content)?;
+            }
+            Status::Draft => {
+                if path.exists() {
+                    std::fs::remove_file(&path)?;
+                }
             }
         }
-        std::fs::write(&path, content)?;
     }
     Ok(())
 }
@@ -902,26 +911,36 @@ mod tests {
     }
 
     #[test]
-    fn sync_writes_draft_with_status_in_frontmatter() {
+    fn sync_does_not_write_drafts_to_fs() {
+        let conn = test_db();
+        let dir = tempdir();
+        let article = create_article(&conn, "Draft Post").unwrap();
+        let md = "---\ntitle: Draft Post\n---\n\nbody\n";
+        update_content(&conn, article.id, md).unwrap();
+
+        sync_to_filesystem(&conn, &dir).unwrap();
+
+        let path = dir.join(format!("{}.md", article.slug));
+        assert!(!path.exists(), "draft must not be written to fs");
+    }
+
+    #[test]
+    fn sync_removes_md_when_article_unpublished() {
         let conn = test_db();
         let dir = tempdir();
         let article = create_article(&conn, "To Be Unpublished").unwrap();
-        let md = "---\ntitle: To Be Unpublished\npublished_at: 2026-04-11\nstatus: published\n---\n\nContent.\n";
+        let md = "---\ntitle: To Be Unpublished\npublished_at: 2026-04-11\n---\n\nContent.\n";
         update_content(&conn, article.id, md).unwrap();
         publish(&conn, article.id).unwrap();
 
         sync_to_filesystem(&conn, &dir).unwrap();
-        let path = dir.join("to-be-unpublished.md");
-        assert!(path.exists());
-        let written = fs::read_to_string(&path).unwrap();
-        assert!(written.contains("status: published"));
+        let path = dir.join(format!("{}.md", article.slug));
+        assert!(path.exists(), "preconditions: published .md exists");
 
         unpublish(&conn, article.id).unwrap();
         sync_to_filesystem(&conn, &dir).unwrap();
 
-        assert!(path.exists(), "draft .md should still exist after sync");
-        let content = fs::read_to_string(&path).unwrap();
-        assert!(content.contains("status: draft"));
+        assert!(!path.exists(), "unpublishing then sync must remove .md");
     }
 
     #[test]
