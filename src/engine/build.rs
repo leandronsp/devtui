@@ -43,6 +43,10 @@ pub fn build(blog_dir: &Path, dist_dir: &Path, engine_dir: &Path) -> Result<Buil
         &cfg, &posts, &articles_dir, articles_prefix, blog_dir, &theme_dir, engine_dir,
     )?;
 
+    if !articles_prefix.is_empty() {
+        prune_orphan_html(&articles_dir, &posts)?;
+    }
+
     let css = minify::compile_css(blog_dir, &theme_dir)?;
     fs::write(dist_dir.join("style.css"), &css).map_err(|e| e.to_string())?;
 
@@ -61,6 +65,30 @@ pub fn build(blog_dir: &Path, dist_dir: &Path, engine_dir: &Path) -> Result<Buil
         built: rebuilt_articles.len(),
         skipped,
     })
+}
+
+/// Remove `.html` files in `articles_dir` whose slug is not in the current post
+/// set. Catches HTMLs left behind by deleted posts, slug renames, and posts
+/// flipped to draft. Only safe when articles live under their own subdirectory
+/// (`articles_path` non-empty); otherwise we'd risk deleting `index.html` and
+/// other top-level outputs.
+fn prune_orphan_html(articles_dir: &Path, posts: &[Post]) -> Result<(), String> {
+    let live: std::collections::HashSet<&str> = posts.iter().map(|p| p.slug.as_str()).collect();
+    let entries = match fs::read_dir(articles_dir) {
+        Ok(it) => it,
+        Err(_) => return Ok(()),
+    };
+    for entry in entries.flatten() {
+        let path = entry.path();
+        if path.extension().is_none_or(|ext| ext != "html") {
+            continue;
+        }
+        let Some(stem) = path.file_stem().and_then(|s| s.to_str()) else { continue };
+        if !live.contains(stem) {
+            fs::remove_file(&path).map_err(|e| e.to_string())?;
+        }
+    }
+    Ok(())
 }
 
 // --- Article rendering ---
@@ -312,6 +340,40 @@ This is the second post.
     }
 
     // --- Article generation ---
+
+    #[test]
+    fn build_removes_orphan_html_when_md_is_gone() {
+        let tmp = tempdir();
+        let blog = tmp.join("blog");
+        let dist = tmp.join("dist");
+        let posts = blog.join("posts");
+        fs::create_dir_all(&posts).unwrap();
+        fs::write(
+            blog.join("blog.toml"),
+            r#"title = "T"
+subtitle = ""
+url = "https://t.test"
+author = "A"
+lang = "en"
+articles_path = "articles"
+"#,
+        )
+        .unwrap();
+        fs::write(
+            posts.join("keep.md"),
+            "---\ntitle: Keep\npublished_at: 2026-01-01\n---\n\nbody\n",
+        )
+        .unwrap();
+        // Stale orphan from a previous build whose .md was deleted/renamed.
+        fs::create_dir_all(dist.join("articles")).unwrap();
+        fs::write(dist.join("articles/orphan.html"), "<stale>").unwrap();
+
+        do_build(&blog, &dist);
+
+        assert!(dist.join("articles/keep.html").exists());
+        assert!(!dist.join("articles/orphan.html").exists(),
+            "orphan .html must be pruned when its .md is gone");
+    }
 
     #[test]
     fn build_generates_article_html_files() {
