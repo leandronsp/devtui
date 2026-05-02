@@ -175,10 +175,13 @@ fn apply_save(
         if title != article.title {
             let _ = db::update_title(conn, article.id, &title);
         }
-        if let Some(requested) = crate::engine::config::frontmatter("slug", final_content) {
-            apply_frontmatter_slug(conn, article, &requested, blog_dir);
-        } else {
-            rename_auto_slug_from_title(conn, article, &title, blog_dir);
+        let requested = crate::engine::config::frontmatter("slug", final_content);
+        let previous = crate::engine::config::frontmatter("slug", &article.content);
+        match (requested, previous) {
+            (Some(req), prev) if Some(&req) != prev.as_ref() => {
+                apply_frontmatter_slug(conn, article, &req, blog_dir);
+            }
+            _ => rename_auto_slug_from_title(conn, article, &title, blog_dir),
         }
     }
 
@@ -417,6 +420,29 @@ mod tests {
 
         let after = db::get_article(&conn, article.id).unwrap();
         assert_eq!(after.slug, "real-title", "auto-slug must reconcile even when title is unchanged");
+    }
+
+    #[test]
+    fn save_ignores_unchanged_frontmatter_slug() {
+        // Historical .md files often carry a decorative `slug:` frontmatter that
+        // the engine ignores (it uses the filename). On import, the DB slug comes
+        // from the filename, not the field. A save that edits the body but leaves
+        // the slug field untouched must NOT be treated as a slug rename.
+        let blog_dir = tempdir();
+        let conn = db::init_db(&blog_dir.join("devtui.db")).unwrap();
+        let article = db::create_article(&conn, "Post").unwrap();
+        db::update_slug(&conn, article.id, "original-filename-slug").unwrap();
+        let original_md = "---\ntitle: Post\nslug: \"decorative-slug\"\n---\n\nbody\n";
+        db::update_content(&conn, article.id, original_md).unwrap();
+        let stale = db::get_article(&conn, article.id).unwrap();
+
+        // User saves with a body edit but leaves the slug field untouched.
+        let edited_md = "---\ntitle: Post\nslug: \"decorative-slug\"\n---\n\nedited body\n";
+        apply_save(&conn, &stale, &blog_dir, edited_md).unwrap();
+
+        let after = db::get_article(&conn, article.id).unwrap();
+        assert_eq!(after.slug, "original-filename-slug",
+            "unchanged frontmatter slug must not trigger rename");
     }
 
     #[test]
