@@ -1,5 +1,6 @@
 /* Mobile overrides */
 @media (max-width: 600px) {
+  html { font-size: 15px; }
   header .guides { display: none; }
   .tag-filter { display: none; }
   .menu-toggle { display: inline-block; }
@@ -8,7 +9,6 @@
   .lang-filter { display: none; }
   .post-list a { font-size: 0.9rem; }
   .post-list .post-desc { -webkit-line-clamp: 2; }
-  body { font-size: 13px; }
   .article-header h1 { font-size: 1rem; }
   article h2 { font-size: 0.95rem; }
 }
