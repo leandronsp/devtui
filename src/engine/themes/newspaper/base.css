@@ -308,57 +308,63 @@ article pre code {
   font-size: 0.82rem;
 }
 
-/* Syntax highlighting (warm tones) */
-code span.al { color: #e5c07b; font-weight: bold }
-code span.an { color: #7a7c7d }
-code span.at { color: #c4a35a }
-code span.bn { color: #d19a66 }
-code span.bu { color: #888 }
-code span.ch { color: #98c379 }
-code span.co { color: #5c6370 }
-code span.cv { color: #5c6370 }
-code span.cn { color: #d19a66; font-weight: bold }
-code span.cf { color: #c678dd; font-weight: bold }
-code span.dt { color: #c4a35a }
-code span.dv { color: #d19a66 }
-code span.do { color: #e06c75 }
-code span.er { color: #e06c75 }
-code span.ex { color: #61afef; font-weight: bold }
-code span.fl { color: #d19a66 }
-code span.fu { color: #61afef }
-code span.im { color: #98c379 }
-code span.in { color: #d19a66 }
-code span.kw { color: #c678dd; font-weight: bold }
-code span.op { color: #abb2bf }
-code span.ot { color: #98c379 }
-code span.pp { color: #c678dd }
-code span.re { color: #c4a35a }
-code span.sc { color: #98c379 }
-code span.ss { color: #e06c75 }
-code span.st { color: #98c379 }
-code span.va { color: #e06c75 }
-code span.vs { color: #98c379 }
-code span.wa { color: #e06c75 }
+/* Syntax highlighting (syntect ClassStyle::Spaced).
+   Default = dark (Atom one-dark inspired); `[data-theme="light"]` flips to
+   the warm light palette. Class chains target nested scopes without
+   coloring outer wrappers like `.meta.function`. */
+article pre code .comment { color: #5c6370; font-style: italic; }
 
-/* Light theme syntax */
-[data-theme="light"] code span.kw { color: #7b3814; font-weight: bold }
-[data-theme="light"] code span.dt { color: #8b6914 }
-[data-theme="light"] code span.dv { color: #986801 }
-[data-theme="light"] code span.st { color: #50a14f }
-[data-theme="light"] code span.co { color: #a0a1a7 }
-[data-theme="light"] code span.fu { color: #4078f2 }
-[data-theme="light"] code span.cf { color: #a626a4; font-weight: bold }
-[data-theme="light"] code span.op { color: #383a42 }
-[data-theme="light"] code span.ch { color: #50a14f }
-[data-theme="light"] code span.cn { color: #986801; font-weight: bold }
-[data-theme="light"] code span.er { color: #e45649 }
-[data-theme="light"] code span.va { color: #e45649 }
-[data-theme="light"] code span.sc { color: #50a14f }
-[data-theme="light"] code span.im { color: #50a14f }
-[data-theme="light"] code span.an { color: #a0a1a7 }
-[data-theme="light"] code span.at { color: #8b6914 }
-[data-theme="light"] code span.pp { color: #a626a4 }
-[data-theme="light"] code span.ex { color: #4078f2; font-weight: bold }
+article pre code .string { color: #98c379; }
+
+article pre code .keyword { color: #c678dd; font-weight: 600; }
+article pre code .keyword.operator { color: #abb2bf; font-weight: normal; }
+article pre code .storage { color: #c678dd; font-weight: 600; }
+
+article pre code .constant.numeric { color: #d19a66; }
+article pre code .constant.language { color: #d19a66; font-weight: 600; }
+article pre code .constant.character { color: #98c379; }
+article pre code .constant.other { color: #d19a66; }
+
+article pre code .entity.name.function { color: #61afef; }
+article pre code .entity.name.type { color: #c4a35a; }
+article pre code .entity.name.class { color: #c4a35a; }
+article pre code .entity.name.tag { color: #61afef; }
+article pre code .entity.other.attribute-name { color: #d19a66; }
+
+article pre code .support.function { color: #61afef; }
+article pre code .support.macro { color: #c678dd; }
+article pre code .support.constant { color: #d19a66; }
+article pre code .support.type { color: #c4a35a; }
+article pre code .support.class { color: #c4a35a; }
+
+article pre code .variable.parameter { color: #c4a35a; }
+article pre code .variable.language { color: #c678dd; font-weight: 600; }
+
+article pre code .invalid { color: #e06c75; }
+
+/* Light theme overrides */
+[data-theme="light"] article pre code .comment { color: #a0a1a7; }
+[data-theme="light"] article pre code .string { color: #50a14f; }
+[data-theme="light"] article pre code .keyword { color: #7b3814; }
+[data-theme="light"] article pre code .keyword.operator { color: #383a42; }
+[data-theme="light"] article pre code .storage { color: #7b3814; }
+[data-theme="light"] article pre code .constant.numeric { color: #986801; }
+[data-theme="light"] article pre code .constant.language { color: #986801; }
+[data-theme="light"] article pre code .constant.character { color: #50a14f; }
+[data-theme="light"] article pre code .constant.other { color: #986801; }
+[data-theme="light"] article pre code .entity.name.function { color: #4078f2; }
+[data-theme="light"] article pre code .entity.name.type { color: #8b6914; }
+[data-theme="light"] article pre code .entity.name.class { color: #8b6914; }
+[data-theme="light"] article pre code .entity.name.tag { color: #4078f2; }
+[data-theme="light"] article pre code .entity.other.attribute-name { color: #986801; }
+[data-theme="light"] article pre code .support.function { color: #4078f2; }
+[data-theme="light"] article pre code .support.macro { color: #a626a4; }
+[data-theme="light"] article pre code .support.constant { color: #986801; }
+[data-theme="light"] article pre code .support.type { color: #8b6914; }
+[data-theme="light"] article pre code .support.class { color: #8b6914; }
+[data-theme="light"] article pre code .variable.parameter { color: #8b6914; }
+[data-theme="light"] article pre code .variable.language { color: #a626a4; }
+[data-theme="light"] article pre code .invalid { color: #e45649; }
 
 pre > code.sourceCode { white-space: pre; position: relative; }
 div.sourceCode { overflow-x: auto; max-width: 100%; }

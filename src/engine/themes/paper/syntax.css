@@ -1,48 +1,59 @@
-/* Syntax: warm earthy palette (light default, dark override) */
+/* Syntax highlighting for syntect ClassStyle::Spaced output.
+   Each token becomes a span carrying its TextMate scope segments as classes
+   (e.g. `keyword.control.rust` -> `class="keyword control rust"`). Chained
+   selectors target nested scopes without coloring outer wrappers like
+   `meta.function`. */
 
-code span.al { color: #a03030; font-weight: bold }
-code span.an { color: #8a8078 }
-code span.at { color: #8b5e3c }
-code span.bn { color: #986801 }
-code span.bu { color: #3d3832 }
-code span.ch { color: #50a14f }
-code span.co { color: #8a8078 }
-code span.cv { color: #8a8078 }
-code span.cn { color: #986801; font-weight: bold }
-code span.cf { color: #a626a4; font-weight: bold }
-code span.dt { color: #8b5e3c }
-code span.dv { color: #986801 }
-code span.do { color: #8a8078 }
-code span.er { color: #e45649 }
-code span.ex { color: #5a7a3a; font-weight: bold }
-code span.fl { color: #986801 }
-code span.fu { color: #4078f2 }
-code span.im { color: #50a14f }
-code span.in { color: #986801 }
-code span.kw { color: #a626a4; font-weight: bold }
-code span.op { color: #3d3832 }
-code span.ot { color: #50a14f }
-code span.pp { color: #50a14f }
-code span.re { color: #8b5e3c }
-code span.sc { color: #50a14f }
-code span.ss { color: #e45649 }
-code span.st { color: #50a14f }
-code span.va { color: #8b5e3c }
-code span.vs { color: #50a14f }
-code span.wa { color: #e45649 }
+article pre code .comment { color: #8a8078; font-style: italic; }
 
-[data-theme="dark"] code span.kw { color: #c678dd; font-weight: bold }
-[data-theme="dark"] code span.dt { color: #c49a6c }
-[data-theme="dark"] code span.dv { color: #d19a66 }
-[data-theme="dark"] code span.bn { color: #d19a66 }
-[data-theme="dark"] code span.fl { color: #d19a66 }
-[data-theme="dark"] code span.ch { color: #98c379 }
-[data-theme="dark"] code span.st { color: #98c379 }
-[data-theme="dark"] code span.co { color: #7a7068 }
-[data-theme="dark"] code span.ot { color: #e5c07b }
-[data-theme="dark"] code span.fu { color: #61afef }
-[data-theme="dark"] code span.cf { color: #c678dd; font-weight: bold }
-[data-theme="dark"] code span.op { color: #c4b9a8 }
-[data-theme="dark"] code span.va { color: #e06c75 }
-[data-theme="dark"] code span.er { color: #e06c75 }
-[data-theme="dark"] code span.al { color: #e06c75; font-weight: bold }
+article pre code .string { color: #5a7a3a; }
+
+article pre code .keyword { color: #a626a4; font-weight: 600; }
+article pre code .keyword.operator { color: #3d3832; font-weight: normal; }
+article pre code .storage { color: #a626a4; font-weight: 600; }
+
+article pre code .constant.numeric { color: #986801; }
+article pre code .constant.language { color: #986801; font-weight: 600; }
+article pre code .constant.character { color: #5a7a3a; }
+article pre code .constant.other { color: #986801; }
+
+article pre code .entity.name.function { color: #4078f2; }
+article pre code .entity.name.type { color: #c18401; }
+article pre code .entity.name.class { color: #c18401; }
+article pre code .entity.name.tag { color: #4078f2; }
+article pre code .entity.other.attribute-name { color: #986801; }
+
+article pre code .support.function { color: #4078f2; }
+article pre code .support.macro { color: #4078f2; }
+article pre code .support.constant { color: #986801; }
+article pre code .support.type { color: #c18401; }
+article pre code .support.class { color: #c18401; }
+
+article pre code .variable.parameter { color: #8b5e3c; }
+article pre code .variable.language { color: #a626a4; font-weight: 600; }
+
+article pre code .invalid { color: #a03030; }
+
+/* Dark theme overrides */
+[data-theme="dark"] article pre code .comment { color: #7a7068; }
+[data-theme="dark"] article pre code .string { color: #98c379; }
+[data-theme="dark"] article pre code .keyword { color: #c678dd; }
+[data-theme="dark"] article pre code .keyword.operator { color: #c4b9a8; }
+[data-theme="dark"] article pre code .storage { color: #c678dd; }
+[data-theme="dark"] article pre code .constant.numeric { color: #d19a66; }
+[data-theme="dark"] article pre code .constant.language { color: #d19a66; }
+[data-theme="dark"] article pre code .constant.character { color: #98c379; }
+[data-theme="dark"] article pre code .constant.other { color: #d19a66; }
+[data-theme="dark"] article pre code .entity.name.function { color: #61afef; }
+[data-theme="dark"] article pre code .entity.name.type { color: #e5c07b; }
+[data-theme="dark"] article pre code .entity.name.class { color: #e5c07b; }
+[data-theme="dark"] article pre code .entity.name.tag { color: #61afef; }
+[data-theme="dark"] article pre code .entity.other.attribute-name { color: #d19a66; }
+[data-theme="dark"] article pre code .support.function { color: #61afef; }
+[data-theme="dark"] article pre code .support.macro { color: #61afef; }
+[data-theme="dark"] article pre code .support.constant { color: #d19a66; }
+[data-theme="dark"] article pre code .support.type { color: #e5c07b; }
+[data-theme="dark"] article pre code .support.class { color: #e5c07b; }
+[data-theme="dark"] article pre code .variable.parameter { color: #c49a6c; }
+[data-theme="dark"] article pre code .variable.language { color: #c678dd; }
+[data-theme="dark"] article pre code .invalid { color: #e06c75; }
