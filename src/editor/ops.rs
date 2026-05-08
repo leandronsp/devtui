@@ -38,14 +38,7 @@ pub fn run_serve(dist_dir: &Path, stop: Arc<AtomicBool>) -> Result<(), String> {
             Err(_) => break,
         };
 
-        let url_path = request.url().trim_start_matches('/');
-        let file_path = if url_path.is_empty() {
-            root.join("index.html")
-        } else {
-            root.join(url_path)
-        };
-
-        if file_path.is_file() {
+        if let Some(file_path) = resolve_request_path(&root, request.url()) {
             if let Ok(data) = std::fs::read(&file_path) {
                 let content_type = match file_path.extension().and_then(|e| e.to_str()) {
                     Some("html") => "text/html; charset=utf-8",
@@ -94,6 +87,59 @@ pub fn format_built_ago(elapsed: std::time::Duration) -> String {
 
 fn content_type_header(value: &str) -> tiny_http::Header {
     tiny_http::Header::from_bytes("Content-Type", value).expect("valid Content-Type header")
+}
+
+/// Resolve an HTTP request URL to a real file under `root`.
+/// Strips the query string, percent-decodes the path so unicode-named files
+/// (e.g. `palíndromo.html`) match the on-disk name, and rejects paths that
+/// canonicalize outside `root` (defense against `..` traversal).
+fn resolve_request_path(root: &Path, url: &str) -> Option<PathBuf> {
+    let path_only = url.split('?').next().unwrap_or(url);
+    let trimmed = path_only.trim_start_matches('/');
+    let decoded = percent_decode(trimmed)?;
+    let candidate = if decoded.is_empty() {
+        root.join("index.html")
+    } else {
+        root.join(&decoded)
+    };
+    let real = candidate.canonicalize().ok()?;
+    if !real.starts_with(root) || !real.is_file() {
+        return None;
+    }
+    Some(real)
+}
+
+/// Decode `%XX` byte sequences in a URL path to their UTF-8 characters.
+/// Returns None if the input contains a malformed escape or the resulting
+/// bytes are not valid UTF-8. Does not treat `+` as space (paths only).
+fn percent_decode(input: &str) -> Option<String> {
+    let bytes = input.as_bytes();
+    let mut out = Vec::with_capacity(bytes.len());
+    let mut idx = 0;
+    while idx < bytes.len() {
+        if bytes[idx] == b'%' {
+            if idx + 2 >= bytes.len() {
+                return None;
+            }
+            let hi = hex_value(bytes[idx + 1])?;
+            let lo = hex_value(bytes[idx + 2])?;
+            out.push((hi << 4) | lo);
+            idx += 3;
+        } else {
+            out.push(bytes[idx]);
+            idx += 1;
+        }
+    }
+    String::from_utf8(out).ok()
+}
+
+fn hex_value(b: u8) -> Option<u8> {
+    match b {
+        b'0'..=b'9' => Some(b - b'0'),
+        b'a'..=b'f' => Some(b - b'a' + 10),
+        b'A'..=b'F' => Some(b - b'A' + 10),
+        _ => None,
+    }
 }
 
 /// Deploy: rsync dist contents to deploy_dir.
@@ -401,6 +447,107 @@ mod tests {
         assert_eq!(report.built, 1);
         assert!(dist_dir.join("hello.html").exists());
         assert!(dist_dir.join("index.html").exists());
+    }
+
+    #[test]
+    fn percent_decode_passes_through_ascii() {
+        assert_eq!(percent_decode("hello").as_deref(), Some("hello"));
+    }
+
+    #[test]
+    fn percent_decode_decodes_utf8_bytes() {
+        // %C3%AD -> í
+        assert_eq!(
+            percent_decode("pal%C3%ADndromo").as_deref(),
+            Some("palíndromo")
+        );
+    }
+
+    #[test]
+    fn percent_decode_handles_lowercase_hex() {
+        assert_eq!(percent_decode("%c3%a7").as_deref(), Some("ç"));
+    }
+
+    #[test]
+    fn percent_decode_returns_none_for_truncated_escape() {
+        assert!(percent_decode("foo%2").is_none());
+    }
+
+    #[test]
+    fn percent_decode_returns_none_for_invalid_hex() {
+        assert!(percent_decode("foo%ZZ").is_none());
+    }
+
+    #[test]
+    fn resolve_request_path_serves_unicode_filename() {
+        let dist = tempdir();
+        let canonical = dist.canonicalize().unwrap();
+        let unicode_name = "palíndromo.html";
+        fs::write(canonical.join(unicode_name), b"<h1>oi</h1>").unwrap();
+
+        let resolved = resolve_request_path(&canonical, "/pal%C3%ADndromo.html").unwrap();
+
+        assert_eq!(resolved, canonical.join(unicode_name));
+    }
+
+    #[test]
+    fn resolve_request_path_strips_query_string() {
+        let dist = tempdir();
+        let canonical = dist.canonicalize().unwrap();
+        fs::write(canonical.join("index.html"), b"hi").unwrap();
+
+        let resolved = resolve_request_path(&canonical, "/index.html?foo=bar").unwrap();
+
+        assert_eq!(resolved, canonical.join("index.html"));
+    }
+
+    #[test]
+    fn resolve_request_path_serves_index_for_root() {
+        let dist = tempdir();
+        let canonical = dist.canonicalize().unwrap();
+        fs::write(canonical.join("index.html"), b"hi").unwrap();
+
+        let resolved = resolve_request_path(&canonical, "/").unwrap();
+
+        assert_eq!(resolved, canonical.join("index.html"));
+    }
+
+    #[test]
+    fn resolve_request_path_rejects_traversal_via_dotdot() {
+        let dist = tempdir();
+        let canonical = dist.canonicalize().unwrap();
+        // A real file outside root that an attacker might try to read.
+        let outside = canonical.parent().unwrap().join("secret.txt");
+        fs::write(&outside, b"secret").unwrap();
+
+        let resolved = resolve_request_path(&canonical, "/../secret.txt");
+
+        assert!(resolved.is_none());
+        let _ = fs::remove_file(&outside);
+    }
+
+    #[test]
+    fn resolve_request_path_rejects_traversal_via_encoded_dotdot() {
+        let dist = tempdir();
+        let canonical = dist.canonicalize().unwrap();
+        let outside = canonical.parent().unwrap().join("secret-encoded.txt");
+        fs::write(&outside, b"secret").unwrap();
+
+        // %2e%2e decodes to ..
+        let resolved = resolve_request_path(&canonical, "/%2e%2e/secret-encoded.txt");
+
+        assert!(resolved.is_none());
+        let _ = fs::remove_file(&outside);
+    }
+
+    #[test]
+    fn resolve_request_path_returns_none_for_missing_file() {
+        let dist = tempdir();
+        let canonical = dist.canonicalize().unwrap();
+
+        let resolved = resolve_request_path(&canonical, "/does-not-exist.html");
+
+        assert!(resolved.is_none());
     }
 
     #[test]
