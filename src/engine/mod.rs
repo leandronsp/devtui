@@ -2,6 +2,7 @@ pub mod analytics;
 pub mod build;
 pub mod config;
 pub mod feed;
+pub mod highlight;
 pub mod index;
 pub mod links;
 pub mod markdown;

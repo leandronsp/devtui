@@ -25,6 +25,7 @@ portable-pty = "0.9"
 toml = "0.8"
 serde = { version = "1", features = ["derive"] }
 gh-emoji = "1.0"
+syntect = { version = "5", default-features = false, features = ["default-fancy"] }
 tiny_http = "0.12"
 rusqlite = { version = "0.31", features = ["bundled"] }
 log = "0.4"

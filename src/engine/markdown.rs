@@ -1,14 +1,165 @@
-use pulldown_cmark::{Event, Options, Parser, Tag, TagEnd};
+use pulldown_cmark::{CodeBlockKind, CowStr, Event, HeadingLevel, Options, Parser, Tag, TagEnd};
+
+use crate::engine::highlight;
 
 /// Convert markdown to HTML using pulldown-cmark.
-/// Pre-processes emoji shortcodes before parsing.
+/// Pre-processes emoji shortcodes, auto-generates heading IDs (Pandoc-style
+/// slugs so manual TOC links like `#first-things-first` resolve), and
+/// syntax-highlights fenced code blocks via syntect.
 pub fn markdown_to_html(markdown: &str) -> String {
     let preprocessed = replace_emoji_shortcodes(markdown);
-    let options = Options::ENABLE_STRIKETHROUGH | Options::ENABLE_TABLES | Options::ENABLE_FOOTNOTES;
+    let options = Options::ENABLE_STRIKETHROUGH
+        | Options::ENABLE_TABLES
+        | Options::ENABLE_FOOTNOTES
+        | Options::ENABLE_HEADING_ATTRIBUTES;
     let parser = Parser::new_ext(&preprocessed, options);
+    let events: Vec<Event> = parser.collect();
+    let transformed = transform_events(events);
     let mut html = String::new();
-    pulldown_cmark::html::push_html(&mut html, parser);
+    pulldown_cmark::html::push_html(&mut html, transformed.into_iter());
     html
+}
+
+fn transform_events(events: Vec<Event<'_>>) -> Vec<Event<'_>> {
+    let mut out = Vec::with_capacity(events.len());
+    let mut idx = 0;
+    while idx < events.len() {
+        match &events[idx] {
+            Event::Start(Tag::Heading { level, id, .. }) => {
+                let close = find_heading_end(&events, idx, *level);
+                let inner = &events[idx + 1..close];
+                let id_str = id
+                    .as_ref()
+                    .map(|cow| cow.to_string())
+                    .filter(|s| !s.is_empty())
+                    .unwrap_or_else(|| slugify(&extract_text(inner)));
+                let level_n = heading_level_num(*level);
+                out.push(html_event(format!(
+                    "<h{level_n} id=\"{}\">",
+                    escape_attr(&id_str)
+                )));
+                out.extend(inner.iter().cloned());
+                out.push(html_event(format!("</h{level_n}>")));
+                idx = close + 1;
+            }
+            Event::Start(Tag::CodeBlock(kind)) => {
+                let lang = match kind {
+                    CodeBlockKind::Fenced(l) => l.to_string(),
+                    CodeBlockKind::Indented => String::new(),
+                };
+                let close = find_codeblock_end(&events, idx);
+                let mut code = String::new();
+                for event in &events[idx + 1..close] {
+                    if let Event::Text(text) = event {
+                        code.push_str(text);
+                    }
+                }
+                let highlighted = highlight::highlight(&code, &lang);
+                let class_attr = if lang.is_empty() {
+                    String::from("sourceCode")
+                } else {
+                    format!("sourceCode language-{}", escape_attr(&lang))
+                };
+                out.push(html_event(format!(
+                    "<pre><code class=\"{class_attr}\">{highlighted}</code></pre>"
+                )));
+                idx = close + 1;
+            }
+            _ => {
+                out.push(events[idx].clone());
+                idx += 1;
+            }
+        }
+    }
+    out
+}
+
+fn find_heading_end(events: &[Event<'_>], start: usize, level: HeadingLevel) -> usize {
+    for (offset, event) in events.iter().enumerate().skip(start + 1) {
+        if let Event::End(TagEnd::Heading(found)) = event {
+            if *found == level {
+                return offset;
+            }
+        }
+    }
+    events.len()
+}
+
+fn find_codeblock_end(events: &[Event<'_>], start: usize) -> usize {
+    for (offset, event) in events.iter().enumerate().skip(start + 1) {
+        if matches!(event, Event::End(TagEnd::CodeBlock)) {
+            return offset;
+        }
+    }
+    events.len()
+}
+
+fn extract_text(events: &[Event<'_>]) -> String {
+    let mut text = String::new();
+    for event in events {
+        match event {
+            Event::Text(t) | Event::Code(t) => text.push_str(t),
+            _ => {}
+        }
+    }
+    text
+}
+
+/// Pandoc-compatible slugify: lowercase, whitespace -> `-`, keep alphanumerics
+/// (Unicode), `-`, `_`, `.`. Strip leading non-letters. Empty -> `section`.
+fn slugify(text: &str) -> String {
+    let mut slug = String::with_capacity(text.len());
+    for ch in text.chars() {
+        if ch.is_alphanumeric() {
+            for lower in ch.to_lowercase() {
+                slug.push(lower);
+            }
+        } else if ch.is_whitespace() {
+            slug.push('-');
+        } else if ch == '-' || ch == '_' || ch == '.' {
+            slug.push(ch);
+        }
+    }
+    while let Some(first) = slug.chars().next() {
+        if first.is_alphabetic() {
+            break;
+        }
+        let len = first.len_utf8();
+        slug.replace_range(0..len, "");
+    }
+    if slug.is_empty() {
+        slug.push_str("section");
+    }
+    slug
+}
+
+fn heading_level_num(level: HeadingLevel) -> u8 {
+    match level {
+        HeadingLevel::H1 => 1,
+        HeadingLevel::H2 => 2,
+        HeadingLevel::H3 => 3,
+        HeadingLevel::H4 => 4,
+        HeadingLevel::H5 => 5,
+        HeadingLevel::H6 => 6,
+    }
+}
+
+fn escape_attr(value: &str) -> String {
+    let mut out = String::with_capacity(value.len());
+    for ch in value.chars() {
+        match ch {
+            '&' => out.push_str("&amp;"),
+            '"' => out.push_str("&quot;"),
+            '<' => out.push_str("&lt;"),
+            '>' => out.push_str("&gt;"),
+            _ => out.push(ch),
+        }
+    }
+    out
+}
+
+fn html_event<'a>(html: String) -> Event<'a> {
+    Event::Html(CowStr::Boxed(html.into_boxed_str()))
 }
 
 /// Extract a plain-text snippet from markdown, truncated at word boundary.
@@ -147,9 +298,51 @@ mod tests {
     // --- markdown_to_html ---
 
     #[test]
-    fn markdown_to_html_renders_heading() {
+    fn markdown_to_html_renders_heading_with_auto_id() {
         let result = markdown_to_html("## Section Title\n");
-        assert!(result.contains("<h2>Section Title</h2>"));
+        assert!(result.contains(r#"<h2 id="section-title">Section Title</h2>"#));
+    }
+
+    #[test]
+    fn markdown_to_html_heading_id_uses_pandoc_slug() {
+        // Manual TOC links like `[First things first](#first-things-first)`
+        // must resolve to the heading "First things first" below.
+        let result = markdown_to_html("## First things first\n");
+        assert!(result.contains(r#"id="first-things-first""#));
+    }
+
+    #[test]
+    fn markdown_to_html_heading_id_preserves_unicode() {
+        let result = markdown_to_html("## Bits não são suficientes\n");
+        assert!(result.contains(r#"id="bits-não-são-suficientes""#));
+    }
+
+    #[test]
+    fn markdown_to_html_heading_id_strips_punctuation() {
+        let result = markdown_to_html("## Hello, World!\n");
+        assert!(result.contains(r#"id="hello-world""#));
+    }
+
+    #[test]
+    fn markdown_to_html_heading_id_uses_explicit_attribute() {
+        let result = markdown_to_html("## My Heading {#custom-id}\n");
+        assert!(result.contains(r#"id="custom-id""#));
+    }
+
+    #[test]
+    fn markdown_to_html_highlights_fenced_code_with_lang() {
+        let result = markdown_to_html("```rust\nfn main() {}\n```\n");
+        assert!(result.contains("language-rust"));
+        // syntect emits scope-class spans
+        assert!(result.contains("<span"));
+        assert!(result.contains("storage"));
+    }
+
+    #[test]
+    fn markdown_to_html_codeblock_without_lang_still_renders() {
+        let result = markdown_to_html("```\nplain text\n```\n");
+        assert!(result.contains("plain text"));
+        assert!(result.contains("<pre>"));
     }
 
     #[test]
@@ -162,14 +355,16 @@ mod tests {
     fn markdown_to_html_renders_code_block() {
         let result = markdown_to_html("```ruby\nputs 'hi'\n```\n");
         assert!(result.contains("<code"));
-        assert!(result.contains("puts 'hi'"));
+        // Highlighter HTML-escapes the apostrophes; check tokens that survive.
+        assert!(result.contains("puts"));
+        assert!(result.contains("hi"));
     }
 
     #[test]
     fn markdown_to_html_renders_hr_before_heading_as_h2() {
         let md = "Some text\n\n---\n\n## Section After Rule\n";
         let result = markdown_to_html(md);
-        assert!(result.contains("<h2>Section After Rule</h2>"));
+        assert!(result.contains(r#"<h2 id="section-after-rule">Section After Rule</h2>"#));
     }
 
     #[test]
